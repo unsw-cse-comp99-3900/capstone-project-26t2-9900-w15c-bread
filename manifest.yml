@@ -1,0 +1,24 @@
+modules:
+  confluence:contentAction:
+    - key: confluence-dynamic-history-hello-world-content-action
+      resource: main
+      resolver:
+        function: resolver
+      viewportSize: large
+      title: Dynamic History
+  function:
+    - key: resolver
+      handler: index.handler
+resources:
+  - key: main
+    path: static/hello-world/build
+permissions:
+  scopes:
+    - read:page:confluence
+    - read:confluence-user
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/2a3947b0-ca60-4cd0-8fda-772e242ff1d0
