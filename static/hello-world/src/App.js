@@ -4,18 +4,17 @@ import ComparisonPanel from './components/ComparisonPanel';
 import { mockData } from './mockData';
 import './styles.css';
 
-// @forge/bridge throws at import time when the app runs outside an Atlassian
-// product (e.g. a plain `npm start` preview). Load it defensively so local
-// preview still works with mock data; inside Confluence the real bridge loads.
-let bridge = {};
-try {
-  // eslint-disable-next-line global-require
-  bridge = require('@forge/bridge');
-} catch (e) {
-  bridge = {};
+function isLocalDevelopment() {
+  return ['localhost', '127.0.0.1'].includes(window.location.hostname);
 }
-const invoke = bridge.invoke || null;
-const view = bridge.view || null;
+
+async function loadForgeBridge() {
+  if (isLocalDevelopment()) {
+    throw new Error('Forge bridge is unavailable in local development.');
+  }
+
+  return import('@forge/bridge');
+}
 
 // Reject if the bridge call takes too long (e.g. running outside Confluence),
 // so we can fall back to mock data during local development.
@@ -35,15 +34,17 @@ function App() {
   useEffect(() => {
     let cancelled = false;
 
-    // No bridge -> running outside Confluence (local preview). Show mock immediately.
-    if (!invoke) {
+    if (isLocalDevelopment()) {
       setData(mockData);
       setUsingMock(true);
       setLoading(false);
-      return undefined;
+      return () => {
+        cancelled = true;
+      };
     }
 
-    withTimeout(Promise.resolve().then(() => invoke('getPageVersions')), 8000)
+    loadForgeBridge()
+      .then(({ invoke }) => withTimeout(invoke('getPageVersions'), 15000))
       .then((result) => {
         if (cancelled) return;
         setData(result);
@@ -64,10 +65,23 @@ function App() {
   }, []);
 
   const handleClose = () => {
-    if (view && typeof view.close === 'function') view.close();
+    if (isLocalDevelopment()) return;
+
+    loadForgeBridge()
+      .then(({ view }) => {
+        if (view && typeof view.close === 'function') view.close();
+      })
+      .catch(() => {});
   };
 
-  const versions = data ? data.versions : [];
+  const versions = data && data.versions ? data.versions : [];
+
+  useEffect(() => {
+    if (!selectedNumber && versions.length > 0) {
+      setSelectedNumber(versions[0].number);
+    }
+  }, [selectedNumber, versions]);
+
   // The newest version (index 0) is always the page's current version.
   const currentVersion = versions[0] || null;
   const selectedVersion = versions.find((v) => v.number === selectedNumber) || null;
@@ -104,6 +118,9 @@ function App() {
         <main className="dh-main">
           <ComparisonPanel
             pageId={data ? data.pageId : null}
+            pageTitle={data ? data.pageTitle : ''}
+            baseUrl={data ? data.baseUrl : ''}
+            attachmentsByFilename={data ? data.attachmentsByFilename : {}}
             currentVersion={currentVersion}
             selectedVersion={selectedVersion}
           />

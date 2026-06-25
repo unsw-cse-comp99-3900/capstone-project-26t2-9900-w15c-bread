@@ -4,18 +4,22 @@ modules:
       resource: main
       resolver:
         function: resolver
-      viewportSize: large
+      viewportSize: max
       title: Dynamic History
   function:
     - key: resolver
       handler: index.handler
+
 resources:
   - key: main
     path: static/hello-world/build
+
 permissions:
   scopes:
     - read:page:confluence
+    - read:attachment:confluence
     - read:confluence-user
+
 app:
   runtime:
     name: nodejs24.x

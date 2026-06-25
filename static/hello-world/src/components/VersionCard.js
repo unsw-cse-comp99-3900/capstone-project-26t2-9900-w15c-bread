@@ -30,7 +30,7 @@ function VersionCard({ version, isLatest, isSelected, onSelect }) {
 
         <div className="dh-card__author">
           <span className="dh-avatar">{initials(authorName)}</span>
-          <span className="dh-author-name">{authorName}</span>
+          <span className="dh-author-name">{authorName || 'Unknown user'}</span>
         </div>
 
         {message ? (
