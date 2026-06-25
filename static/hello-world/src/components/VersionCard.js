@@ -6,7 +6,7 @@ function VersionCard({ version, isLatest, isSelected, onSelect }) {
 
   return (
     <li
-      className={`dh-version-row${isSelected ? ' dh-version-row--selected' : ''}`}
+      className={`dh-card${isSelected ? ' dh-card--selected' : ''}`}
       onClick={onSelect}
       role="button"
       tabIndex={0}
@@ -14,32 +14,30 @@ function VersionCard({ version, isLatest, isSelected, onSelect }) {
         if (e.key === 'Enter' || e.key === ' ') onSelect();
       }}
     >
-      <div className="dh-version-row__number">
-        <span>
-          v{number}
-          <span className="dh-version-date">{formatDateTime(createdAt)}</span>
-        </span>
-        {isLatest && <span className="dh-badge dh-badge--current">Current</span>}
+      <div className="dh-card__rail">
+        <span className={`dh-dot${isLatest ? ' dh-dot--current' : ''}`} />
       </div>
 
-      <div className="dh-version-row__main">
-        <div className="dh-version-row__meta">
-          <span className="dh-author-name">{authorName || 'Unknown user'}</span>
+      <div className="dh-card__content">
+        <div className="dh-card__top">
+          <span className="dh-version">v{number}</span>
+          {isLatest && <span className="dh-badge dh-badge--current">Current</span>}
           {minorEdit && <span className="dh-badge dh-badge--minor">Minor edit</span>}
+          <span className="dh-time" title={formatDateTime(createdAt)}>
+            {formatRelativeTime(createdAt)}
+          </span>
+        </div>
+
+        <div className="dh-card__author">
+          <span className="dh-avatar">{initials(authorName)}</span>
+          <span className="dh-author-name">{authorName || 'Unknown user'}</span>
         </div>
 
         {message ? (
-          <div className="dh-version-row__message">{message}</div>
+          <div className="dh-card__message">{message}</div>
         ) : (
-          <div className="dh-version-row__message dh-version-row__message--empty">
-            No edit summary
-          </div>
+          <div className="dh-card__message dh-card__message--empty">No edit summary</div>
         )}
-      </div>
-
-      <div className="dh-version-row__time">
-        <span title={formatDateTime(createdAt)}>{formatRelativeTime(createdAt)}</span>
-        <span className="dh-avatar">{initials(authorName)}</span>
       </div>
     </li>
   );

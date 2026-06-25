@@ -7,7 +7,7 @@ function Timeline({ versions, selected, onSelect }) {
   }
 
   return (
-    <ol className="dh-version-list">
+    <ol className="dh-timeline">
       {versions.map((v, i) => (
         <VersionCard
           key={v.number}
