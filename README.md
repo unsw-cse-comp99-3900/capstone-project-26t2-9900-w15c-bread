@@ -134,12 +134,14 @@ current content without calculating a diff.
 - `formatDateTime`, `formatRelativeTime`, and `initials` for timeline display.
 - `storageToPlainText` and `countWords` for metadata.
 - `prepareConfluenceHtml` for rendering a safe subset of Confluence storage HTML.
-- `buildRichTextDiffHtml` for block-level and inline rich-text diff rendering.
+- `buildRichTextDiffHtml` for block-level, inline, code block, and table diff
+  rendering.
 - `buildLineDiff` for plain line-based diff segments if a future UI needs it.
 
 `prepareConfluenceHtml` expands some Confluence storage constructs before
-rendering, including links, emoticons, and image attachments. Attachment filenames
-are resolved through `attachmentsByFilename`, which comes from the resolver.
+rendering, including links, emoticons, code macros, and image attachments.
+Attachment filenames are resolved through `attachmentsByFilename`, which comes
+from the resolver.
 
 `buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename)`
 returns:
@@ -147,15 +149,130 @@ returns:
 ```js
 {
   html: string,
+  blocks: [
+    {
+      type: 'same' | 'added' | 'removed' | 'modified',
+      tag: string,
+      nodeType:
+        | 'paragraph'
+        | 'heading'
+        | 'list_item'
+        | 'blockquote'
+        | 'table'
+        | 'table_cell'
+        | 'code_block'
+        | 'image',
+      text?: string,
+      oldText?: string,
+      newText?: string,
+      oldHtml?: string,
+      newHtml?: string,
+      renderedHtml?: string,
+      inline?: [
+        {
+          type: 'same' | 'added' | 'removed',
+          text: string
+        }
+      ],
+      tableDiff?: object,
+      added?: number,
+      removed?: number,
+      limited?: boolean
+    }
+  ],
+  summary: {
+    added: number,
+    removed: number,
+    addedBlocks: number,
+    removedBlocks: number,
+    modifiedBlocks: number,
+    unchangedBlocks: number,
+    limited: boolean
+  },
   added: number,
   removed: number,
   limited: boolean
 }
 ```
 
-The `limited` flag is set when the page is too large for the configured dynamic
-programming diff limit. In that case, the UI avoids an expensive full inline diff
-and shows a safer fallback preview.
+`html` is still returned so the existing comparison panel can render rich
+Confluence content without a UI rewrite. `blocks` and `summary` are the
+frontend-friendly structured diff contract. New UI features, selection behavior,
+filters, and summary chips should use `blocks` and `summary` instead of parsing
+the generated HTML string.
+
+The top-level `added`, `removed`, and `limited` fields are retained for backward
+compatibility with the previous UI contract.
+
+### Diff Algorithm
+
+The current algorithm uses a conservative layered approach:
+
+1. Confluence storage HTML is normalised into safe renderable HTML.
+2. The page is split into comparable blocks.
+3. Blocks are matched first.
+4. Matched blocks are diffed according to their content type.
+5. The result is returned as both renderable HTML and structured data.
+
+For normal text blocks such as paragraphs, headings, list items, blockquotes, and
+table cells, the app uses token-level inline diffing for small and medium text.
+When a text block is too large for safe token-level dynamic programming, it falls
+back to a line/sentence-level comparison first, then applies inline diff only to
+smaller similar line or sentence pairs. This prevents large pages from freezing
+the browser while still showing useful additions and removals.
+
+For code blocks, the app does not use normal paragraph rules. Confluence code
+macros are converted to safe `<pre><code>` HTML, with code content escaped before
+rendering. Code blocks are compared line by line so indentation, whitespace, and
+line boundaries are preserved.
+
+For tables, the app uses table-specific rendering:
+
+- If the old table and current table have the same row and column shape, the UI
+  renders one current-version table and highlights changed cells in place.
+- If the table shape changes, the UI renders a previous table and a current table
+  side by side instead of forcing the structures into one broken table.
+
+The `limited` flag is set when a content section is too large for full inline
+highlighting. In that case, the UI uses the safer line-level or fallback preview
+instead of running an expensive full inline diff.
+
+### Diff Fixes and Recent Enhancements
+
+Recent diff work added and fixed the following behavior:
+
+- Added explicit additions and removals highlighting for inline text.
+- Added a structured `blocks` and `summary` output format for frontend use.
+- Added long-text fallback diffing based on lines and sentences.
+- Added code block handling so Confluence code macros no longer break rendering
+  or produce a blank comparison page.
+- Added code-block line diffing with preserved whitespace and indentation.
+- Added table-aware diffing so unchanged table shape is kept as one table with
+  changed cells highlighted.
+- Added side-by-side previous/current table rendering when table shape changes.
+- Added a defensive render fallback in `ComparisonPanel.js` so unexpected storage
+  formats show an error preview instead of crashing the whole app.
+
+The main implementation locations are:
+
+```text
+static/hello-world/src/utils.js
+  prepareConfluenceHtml              Storage HTML normalisation and safe rendering
+  buildRichTextDiffHtml              Main diff entry point used by the UI
+  buildInlineTextDiff                Token-level inline text diff
+  buildCoarseTextDiff                Line/sentence fallback for large text blocks
+  buildCodeBlockDiff                 Code block line diff
+  buildTableDiff                     Table diff dispatcher
+  buildCellLevelTableDiff            Same-shape table cell diff
+  buildSideBySideTableDiff           Different-shape table rendering
+
+static/hello-world/src/components/ComparisonPanel.js
+  Calls buildRichTextDiffHtml and reads summary data for the comparison chips.
+  Contains the defensive fallback for unexpected diff rendering errors.
+
+static/hello-world/src/styles.css
+  Diff block, inline diff, code diff, and table diff styling.
+```
 
 ## Styling
 
