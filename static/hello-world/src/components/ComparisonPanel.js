@@ -46,22 +46,62 @@ function ComparisonPanel({
   const hasComparisonBase = Boolean(currentVersion && selectedVersion);
   const isCurrent =
     currentVersion && selectedVersion.number === currentVersion.number;
-  const richDiff = hasComparisonBase && !isCurrent
-    ? buildRichTextDiffHtml(
+  const emptyDiff = {
+    html: '',
+    blocks: [],
+    summary: {
+      added: 0,
+      removed: 0,
+      addedBlocks: 0,
+      removedBlocks: 0,
+      modifiedBlocks: 0,
+      unchangedBlocks: 0,
+      limited: false,
+    },
+    added: 0,
+    removed: 0,
+    limited: false,
+  };
+  let richDiff = emptyDiff;
+  let selectedHtml = '';
+
+  try {
+    if (hasComparisonBase && !isCurrent) {
+      richDiff = buildRichTextDiffHtml(
         selectedBodyValue,
         currentBodyValue,
         baseUrl,
         attachmentsByFilename || {}
-      )
-    : { html: '', added: 0, removed: 0, limited: false };
-  const selectedHtml = hasComparisonBase && !isCurrent
-    ? richDiff.html
-    : prepareConfluenceHtml(
+      );
+      selectedHtml = richDiff.html;
+    } else {
+      selectedHtml = prepareConfluenceHtml(
         currentBodyValue || selectedBodyValue,
         baseUrl,
         attachmentsByFilename || {}
       );
-  const totalChanges = richDiff.added + richDiff.removed;
+    }
+  } catch (e) {
+    console.error('[ComparisonPanel] Failed to render diff preview', e);
+    richDiff = {
+      ...emptyDiff,
+      summary: {
+        ...emptyDiff.summary,
+        limited: true,
+      },
+      limited: true,
+    };
+    selectedHtml =
+      '<p>The diff preview could not render this Confluence storage format safely.</p>';
+  }
+
+  const diffSummary = richDiff.summary || {
+    added: richDiff.added || 0,
+    removed: richDiff.removed || 0,
+    modifiedBlocks: 0,
+    limited: richDiff.limited || false,
+  };
+  const totalChanges = diffSummary.added + diffSummary.removed;
 
   return (
     <div className="dh-compare">
@@ -92,11 +132,12 @@ function ComparisonPanel({
               Compared with current v{currentVersion.number}
             </span>
             <span className="dh-change-chip dh-change-chip--added">
-              + {richDiff.added} additions
+              + {diffSummary.added} additions
             </span>
             <span className="dh-change-chip dh-change-chip--removed">
-              - {richDiff.removed} removals
+              - {diffSummary.removed} removals
             </span>
+            <span className="dh-change-chip">{diffSummary.modifiedBlocks} modified blocks</span>
             <span className="dh-change-chip">{totalChanges} total changes</span>
           </>
         ) : (
@@ -107,10 +148,10 @@ function ComparisonPanel({
       </div>
 
       <div className="dh-content-panel">
-        {richDiff.limited && hasComparisonBase ? (
+        {diffSummary.limited && hasComparisonBase ? (
           <div className="dh-diff-warning">
-            This page is large, so the preview shows current content without calculating a full
-            inline diff.
+            Some content is large, so the preview uses a safer line-level comparison where full
+            inline highlighting would be too expensive.
           </div>
         ) : null}
 
