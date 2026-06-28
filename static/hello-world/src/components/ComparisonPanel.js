@@ -35,7 +35,9 @@ function getBlockPreviewHtml(block, selected) {
   }
 
   if (block.type === 'removed') {
-    return selected ? block.oldHtml || block.renderedHtml || fallbackTextHtml(block.text) : '';
+    // The preview starts from the historical version. Applying a removal
+    // therefore omits the old block; leaving it unselected preserves it.
+    return selected ? '' : block.oldHtml || block.renderedHtml || fallbackTextHtml(block.text);
   }
 
   if (block.type === 'modified') {
@@ -49,24 +51,55 @@ function getBlockPreviewHtml(block, selected) {
   return block.renderedHtml || block.html || '';
 }
 
-function buildSelectedPreviewHtml(blocks, selectedBlockKeys) {
+function buildDraftPreviewHtml(blocks, blockChoices) {
   return (blocks || [])
-    .map((block, index) =>
-      getBlockPreviewHtml(block, selectedBlockKeys.has(blockSelectionKey(index)))
-    )
+    .map((block, index) => {
+      // Unresolved changes keep the current version by default. A user choice
+      // only changes the draft when they explicitly restore the old content.
+      const choice = blockChoices.get(blockSelectionKey(index));
+      return getBlockPreviewHtml(block, choice !== 'old');
+    })
     .join('');
 }
 
-function describeBlock(block) {
-  const text = block.newText || block.oldText || block.text || '';
-  if (text) {
-    return text.replace(/\s+/g, ' ').trim().slice(0, 140);
+function getDiffBlockHtml(block) {
+  return (
+    block.renderedHtml ||
+    block.newHtml ||
+    block.oldHtml ||
+    block.html ||
+    fallbackTextHtml(block.newText || block.oldText || block.text)
+  );
+}
+
+function getGitHubStyleDiffParts(block) {
+  if (block.type === 'added') {
+    return [{
+      type: 'added',
+      html: block.newHtml || block.renderedHtml || fallbackTextHtml(block.text),
+    }];
   }
 
-  if (block.nodeType === 'table') return 'Table change';
-  if (block.nodeType === 'code_block') return 'Code block change';
-  if (block.nodeType === 'image') return 'Image change';
-  return `${block.nodeType || block.tag || 'Content'} change`;
+  if (block.type === 'removed') {
+    return [{
+      type: 'removed',
+      html: block.oldHtml || block.renderedHtml || fallbackTextHtml(block.text),
+    }];
+  }
+
+  // Internally the diff engine still identifies a related old/new pair as a
+  // modified block. The UI deliberately presents it as GitHub-style removal
+  // and addition rows so users only need to understand "-" and "+".
+  return [
+    {
+      type: 'removed',
+      html: block.oldHtml || fallbackTextHtml(block.oldText),
+    },
+    {
+      type: 'added',
+      html: block.newHtml || fallbackTextHtml(block.newText),
+    },
+  ];
 }
 
 /**
@@ -119,8 +152,14 @@ function ComparisonPanelContent({
   currentVersion,
   selectedVersion,
 }) {
-  const [selectedBlockKeys, setSelectedBlockKeys] = useState(new Set());
-  const [selectionHistory, setSelectionHistory] = useState([]);
+  const [blockChoices, setBlockChoices] = useState(new Map());
+  const [activeBlockKey, setActiveBlockKey] = useState(null);
+  const [draftPreview, setDraftPreview] = useState(null);
+  const [draftCreation, setDraftCreation] = useState({
+    status: 'idle',
+    error: '',
+    draft: null,
+  });
 
   const currentBodyValue =
     currentVersion && currentVersion.body ? currentVersion.body.value : '';
@@ -199,60 +238,48 @@ function ComparisonPanelContent({
         .filter(({ block }) => CHANGE_BLOCK_TYPES.has(block.type)),
     [richDiff.blocks]
   );
-  const allSelectableKeys = useMemo(
-    () => selectableBlocks.map(({ key }) => key),
-    [selectableBlocks]
-  );
 
   useEffect(() => {
-    setSelectedBlockKeys(new Set(allSelectableKeys));
-    setSelectionHistory([]);
-  }, [allSelectableKeys, selectedVersion.number, currentVersion && currentVersion.number]);
+    setBlockChoices(new Map());
+    setActiveBlockKey(null);
+    setDraftPreview(null);
+    setDraftCreation({ status: 'idle', error: '', draft: null });
+  }, [selectableBlocks, selectedVersion.number, currentVersion && currentVersion.number]);
 
-  const updateSelection = (createNextSelection) => {
-    setSelectedBlockKeys((previous) => {
-      const next = createNextSelection(previous);
-      setSelectionHistory((history) => [...history, new Set(previous)]);
-      return next;
-    });
-  };
+  useEffect(() => {
+    if (!draftPreview) return undefined;
 
-  const handleToggleBlock = (key) => {
-    updateSelection((previous) => {
-      const next = new Set(previous);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && draftCreation.status !== 'loading') {
+        setDraftPreview(null);
       }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [draftCreation.status, draftPreview]);
+
+  const handleChooseBlockVersion = (key, choice) => {
+    setBlockChoices((previous) => {
+      const next = new Map(previous);
+      next.set(key, choice);
       return next;
     });
+    setActiveBlockKey(null);
   };
 
-  const handleSelectAll = () => {
-    updateSelection(() => new Set(allSelectableKeys));
-  };
-
-  const handleDeselectAll = () => {
-    updateSelection(() => new Set());
-  };
-
-  const handleResetSelection = () => {
-    updateSelection(() => new Set(allSelectableKeys));
-  };
-
-  const handleUndoSelection = () => {
-    setSelectionHistory((history) => {
-      const previous = history[history.length - 1];
-      if (!previous) return history;
-      setSelectedBlockKeys(new Set(previous));
-      return history.slice(0, -1);
+  const handleUndoBlockChoice = (key) => {
+    setBlockChoices((previous) => {
+      const next = new Map(previous);
+      next.delete(key);
+      return next;
     });
+    setActiveBlockKey(null);
   };
 
   const previewHtml = useMemo(
-    () => buildSelectedPreviewHtml(richDiff.blocks || [], selectedBlockKeys),
-    [richDiff.blocks, selectedBlockKeys]
+    () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices),
+    [blockChoices, richDiff.blocks]
   );
 
   const diffSummary = richDiff.summary || {
@@ -264,18 +291,52 @@ function ComparisonPanelContent({
   const totalChanges = diffSummary.added + diffSummary.removed;
   const showChangeSelection = hasComparisonBase && !isCurrent && selectableBlocks.length > 0;
 
-  const handleCreateDraft = () => {
+  const handlePreviewDraft = () => {
     const draft = {
       selectedVersionNumber: selectedVersion.number,
       currentVersionNumber: currentVersion ? currentVersion.number : null,
-      selectedBlockIndexes: selectableBlocks
-        .filter(({ key }) => selectedBlockKeys.has(key))
-        .map(({ index }) => index),
+      changeChoices: selectableBlocks.map(({ index, key }) => ({
+        blockIndex: index,
+        choice: blockChoices.get(key) || 'current',
+      })),
       previewHtml,
       createdAt: new Date().toISOString(),
     };
 
-    console.log('[Dynamic History] Draft created', draft);
+    setDraftCreation({ status: 'idle', error: '', draft: null });
+    setDraftPreview(draft);
+  };
+
+  const handleConfirmCreateDraft = async () => {
+    if (!draftPreview || draftCreation.status === 'loading') return;
+
+    setDraftCreation({ status: 'loading', error: '', draft: null });
+
+    try {
+      const { invoke } = await import('@forge/bridge');
+      const createdDraft = await invoke('createDraft', {
+        pageId,
+        bodyValue: draftPreview.previewHtml,
+      });
+
+      if (!createdDraft || !createdDraft.id) {
+        throw new Error('Confluence did not return the created draft details.');
+      }
+
+      setDraftCreation({
+        status: 'success',
+        error: '',
+        draft: createdDraft,
+      });
+    } catch (error) {
+      setDraftCreation({
+        status: 'error',
+        error: error && error.message
+          ? error.message
+          : 'Confluence could not create the draft.',
+        draft: null,
+      });
+    }
   };
 
   return (
@@ -312,7 +373,6 @@ function ComparisonPanelContent({
             <span className="dh-change-chip dh-change-chip--removed">
               - {diffSummary.removed} removals
             </span>
-            <span className="dh-change-chip">{diffSummary.modifiedBlocks} modified blocks</span>
             <span className="dh-change-chip">{totalChanges} total changes</span>
           </>
         ) : (
@@ -323,6 +383,23 @@ function ComparisonPanelContent({
       </div>
 
       <div className="dh-content-panel">
+        {showChangeSelection ? (
+          <div className="dh-inline-selection-toolbar">
+            <div>
+              <h2 className="dh-inline-selection-toolbar__title">Choose content versions</h2>
+              <p className="dh-inline-selection-toolbar__meta">
+                {blockChoices.size} of {selectableBlocks.length} changes decided
+              </p>
+            </div>
+
+            <div className="dh-inline-selection-toolbar__actions">
+              <button className="dh-primary-button" type="button" onClick={handlePreviewDraft}>
+                Preview Draft
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {diffSummary.limited && hasComparisonBase ? (
           <div className="dh-diff-warning">
             Some content is large, so the preview uses a safer line-level comparison where full
@@ -332,10 +409,130 @@ function ComparisonPanelContent({
 
         {selectedHtml ? (
           <article className="dh-rich-page">
-            <section
-              className="dh-rendered-page-body"
-              dangerouslySetInnerHTML={{ __html: selectedHtml }}
-            />
+            {showChangeSelection ? (
+              <section className="dh-rendered-page-body">
+                {(richDiff.blocks || []).map((block, index) => {
+                  const key = blockSelectionKey(index);
+
+                  if (!CHANGE_BLOCK_TYPES.has(block.type)) {
+                    return (
+                      <div
+                        className="dh-rich-diff-unchanged"
+                        key={key}
+                        dangerouslySetInnerHTML={{ __html: getDiffBlockHtml(block) }}
+                      />
+                    );
+                  }
+
+                  const choice = blockChoices.get(key);
+
+                  if (choice) {
+                    const resolvedHtml = getBlockPreviewHtml(block, choice === 'current');
+
+                    return (
+                      <div
+                        className={`dh-resolved-change-block dh-resolved-change-block--${choice}`}
+                        key={key}
+                      >
+                        <div className="dh-resolved-change-block__status">
+                          <span>
+                            {choice === 'current'
+                              ? 'Current version selected'
+                              : 'Old version restored'}
+                          </span>
+                          <button
+                            aria-label="Undo this content choice"
+                            className="dh-resolved-change-block__undo"
+                            onClick={() => handleUndoBlockChoice(key)}
+                            title="Undo this content choice"
+                            type="button"
+                          >
+                            ↶
+                          </button>
+                        </div>
+                        {resolvedHtml ? (
+                          <div
+                            className="dh-resolved-change-block__content"
+                            dangerouslySetInnerHTML={{ __html: resolvedHtml }}
+                          />
+                        ) : (
+                          <div className="dh-resolved-change-block__empty">
+                            This content is not present in the selected version.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  const isActive = activeBlockKey === key;
+                  const diffParts = getGitHubStyleDiffParts(block);
+
+                  return (
+                    <div
+                      aria-expanded={isActive}
+                      className={`dh-choice-diff-module${
+                        isActive ? ' dh-choice-diff-module--active' : ''
+                      }`}
+                      key={key}
+                      onClick={() =>
+                        setActiveBlockKey((previous) => (previous === key ? null : key))
+                      }
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setActiveBlockKey((previous) => (previous === key ? null : key));
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      {diffParts.map((part, partIndex) => (
+                        <div
+                          className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
+                          key={`${key}-${part.type}-${partIndex}`}
+                        >
+                          <span className="dh-github-diff-part__marker">
+                            {part.type === 'added' ? '+' : '-'}
+                          </span>
+                          <div
+                            className="dh-github-diff-part__content"
+                            dangerouslySetInnerHTML={{ __html: part.html }}
+                          />
+                        </div>
+                      ))}
+
+                      {isActive ? (
+                        <div
+                          className="dh-choice-diff-module__actions"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <button
+                            className="dh-choice-action dh-choice-action--current"
+                            onClick={() => handleChooseBlockVersion(key, 'current')}
+                            type="button"
+                          >
+                            Keep current change
+                          </button>
+                          <button
+                            className="dh-choice-action"
+                            onClick={() => handleChooseBlockVersion(key, 'old')}
+                            type="button"
+                          >
+                            Restore old content
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </section>
+            ) : (
+              <section
+                className="dh-rendered-page-body"
+                dangerouslySetInnerHTML={{ __html: selectedHtml }}
+              />
+            )}
           </article>
         ) : (
           <div className="dh-empty-content">
@@ -344,78 +541,114 @@ function ComparisonPanelContent({
         )}
       </div>
 
-      {showChangeSelection ? (
-        <div className="dh-selection-layout">
-          <section className="dh-selection-panel">
-            <div className="dh-selection-panel__header">
+      {draftPreview ? (
+        <div
+          className="dh-draft-modal-backdrop"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              draftCreation.status !== 'loading'
+            ) {
+              setDraftPreview(null);
+            }
+          }}
+        >
+          <section
+            aria-labelledby="dh-draft-preview-title"
+            aria-modal="true"
+            className="dh-draft-modal"
+            role="dialog"
+          >
+            <header className="dh-draft-modal__header">
               <div>
-                <h2 className="dh-selection-panel__title">Change Selection</h2>
-                <p className="dh-selection-panel__meta">
-                  {selectedBlockKeys.size} of {selectableBlocks.length} changes selected
+                <h2 className="dh-draft-modal__title" id="dh-draft-preview-title">
+                  Draft Preview
+                </h2>
+                <p className="dh-draft-modal__meta">
+                  v{draftPreview.selectedVersionNumber} selection to
+                  {' '}v{draftPreview.currentVersionNumber || '?'}
                 </p>
               </div>
-              <button className="dh-primary-button" type="button" onClick={handleCreateDraft}>
-                Create Draft
-              </button>
-            </div>
-
-            <div className="dh-selection-actions">
-              <button type="button" onClick={handleSelectAll}>Select all</button>
-              <button type="button" onClick={handleDeselectAll}>Deselect all</button>
-              <button type="button" onClick={handleResetSelection}>Reset</button>
               <button
+                aria-label="Close draft preview"
+                className="dh-draft-modal__close"
+                disabled={draftCreation.status === 'loading'}
+                onClick={() => setDraftPreview(null)}
                 type="button"
-                onClick={handleUndoSelection}
-                disabled={!selectionHistory.length}
               >
-                Undo
+                ×
               </button>
-            </div>
+            </header>
 
-            <div className="dh-selection-list">
-              {selectableBlocks.map(({ block, index, key }) => (
-                <label
-                  className={`dh-selection-item dh-selection-item--${block.type}`}
-                  key={key}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedBlockKeys.has(key)}
-                    onChange={() => handleToggleBlock(key)}
+            <div className="dh-draft-modal__body">
+              {draftPreview.previewHtml ? (
+                <article className="dh-rich-page dh-rich-page--preview">
+                  <section
+                    className="dh-rendered-page-body"
+                    dangerouslySetInnerHTML={{ __html: draftPreview.previewHtml }}
                   />
-                  <span className="dh-selection-item__body">
-                    <span className="dh-selection-item__topline">
-                      <span className="dh-selection-item__type">{block.type}</span>
-                      <span>Block {index + 1}</span>
-                      <span>{block.nodeType || block.tag || 'content'}</span>
-                    </span>
-                    <span className="dh-selection-item__text">{describeBlock(block)}</span>
+                </article>
+              ) : (
+                <div className="dh-empty-content">
+                  No selected changes are available for the draft preview.
+                </div>
+              )}
+            </div>
+
+            <footer className="dh-draft-modal__footer">
+              <div className="dh-draft-modal__result" aria-live="polite">
+                {draftCreation.status === 'idle'
+                  ? 'Review the result, then create an unpublished Confluence draft.'
+                  : null}
+                {draftCreation.status === 'loading'
+                  ? 'Creating the Confluence draft…'
+                  : null}
+                {draftCreation.status === 'error' ? (
+                  <span className="dh-draft-modal__result--error">
+                    {draftCreation.error}
                   </span>
-                </label>
-              ))}
-            </div>
-          </section>
-
-          <section className="dh-preview-panel">
-            <div className="dh-preview-panel__header">
-              <h2 className="dh-preview-panel__title">Live Preview</h2>
-              <span className="dh-preview-panel__meta">
-                v{selectedVersion.number} selection to v{currentVersion ? currentVersion.number : '?'}
-              </span>
-            </div>
-
-            {previewHtml ? (
-              <article className="dh-rich-page dh-rich-page--preview">
-                <section
-                  className="dh-rendered-page-body"
-                  dangerouslySetInnerHTML={{ __html: previewHtml }}
-                />
-              </article>
-            ) : (
-              <div className="dh-empty-content">
-                No selected changes are available for the preview.
+                ) : null}
+                {draftCreation.status === 'success' ? (
+                  <span className="dh-draft-modal__result--success">
+                    Draft “{draftCreation.draft.title}” was created.
+                  </span>
+                ) : null}
               </div>
-            )}
+
+              <div className="dh-draft-modal__footer-actions">
+                <button
+                  disabled={draftCreation.status === 'loading'}
+                  type="button"
+                  onClick={() => setDraftPreview(null)}
+                >
+                  Back to changes
+                </button>
+
+                {draftCreation.status === 'success' ? (
+                  draftCreation.draft.url ? (
+                    <a
+                      className="dh-primary-button"
+                      href={draftCreation.draft.url}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      Open Confluence draft
+                    </a>
+                  ) : null
+                ) : (
+                  <button
+                    className="dh-primary-button"
+                    disabled={draftCreation.status === 'loading'}
+                    onClick={handleConfirmCreateDraft}
+                    type="button"
+                  >
+                    {draftCreation.status === 'loading'
+                      ? 'Creating…'
+                      : 'Create Confluence Draft'}
+                  </button>
+                )}
+              </div>
+            </footer>
           </section>
         </div>
       ) : null}

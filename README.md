@@ -33,6 +33,7 @@ Current scopes:
 read:page:confluence
 read:attachment:confluence
 read:confluence-user
+write:page:confluence
 ```
 
 The app uses the `nodejs24.x` Forge runtime.
@@ -51,6 +52,11 @@ The resolver currently does four main things:
 2. Fetches all page versions from the Confluence v2 pages API, newest first.
 3. Fetches page attachments so storage-format image macros can be rendered.
 4. Resolves author account ids to display names on a best-effort basis.
+
+The `createDraft` resolver creates a new unpublished page beside the source
+page, using the content confirmed in the Draft Preview modal. It derives the
+space and parent from the source page and performs the write as the invoking
+user.
 
 The frontend expects this shape:
 
@@ -126,6 +132,11 @@ now.
 
 If the selected version is already the current version, the panel renders the
 current content without calculating a diff.
+
+For a historical comparison, users can choose the current or old content for
+each change block. `Preview Draft` opens the combined result without writing to
+Confluence. The confirmation action inside that modal calls `createDraft` and
+creates the actual unpublished Confluence page.
 
 ## Diff and Rendering Helpers
 

@@ -940,6 +940,66 @@ function buildModifiedBlockDiff(oldBlock, currentBlock) {
   };
 }
 
+function canCoalesceReplacementBlocks(removedBlock, addedBlock) {
+  if (!removedBlock || !addedBlock) return false;
+  if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
+
+  // A replacement should occupy the same structural role in the page. This
+  // prevents an adjacent paragraph and image, for example, from becoming one
+  // decision merely because the LCS traversal emitted them next to each other.
+  if (
+    removedBlock.nodeType !== addedBlock.nodeType ||
+    removedBlock.tag !== addedBlock.tag
+  ) {
+    return false;
+  }
+
+  return (
+    isTextDiffableTag(removedBlock.tag) ||
+    removedBlock.nodeType === 'table' ||
+    removedBlock.nodeType === 'code_block'
+  );
+}
+
+function coalesceReplacementBlocks(blocks) {
+  const coalesced = [];
+
+  for (let index = 0; index < blocks.length; index++) {
+    const removedBlock = blocks[index];
+    const addedBlock = blocks[index + 1];
+
+    if (!canCoalesceReplacementBlocks(removedBlock, addedBlock)) {
+      coalesced.push(removedBlock);
+      continue;
+    }
+
+    // The LCS algorithm represents a low-similarity edit, such as changing
+    // "456456" to "123456", as one removal followed by one addition. Rebuild
+    // those two output blocks as a single internal modification so the UI can
+    // present one atomic old-versus-current choice while still displaying only
+    // GitHub-style "-" and "+" rows.
+    const oldComparableBlock = {
+      tag: removedBlock.tag,
+      nodeType: removedBlock.nodeType,
+      text: removedBlock.text,
+      html: removedBlock.oldHtml,
+      canInlineDiff: isTextDiffableTag(removedBlock.tag),
+    };
+    const currentComparableBlock = {
+      tag: addedBlock.tag,
+      nodeType: addedBlock.nodeType,
+      text: addedBlock.text,
+      html: addedBlock.newHtml,
+      canInlineDiff: isTextDiffableTag(addedBlock.tag),
+    };
+
+    coalesced.push(buildModifiedBlockDiff(oldComparableBlock, currentComparableBlock));
+    index++;
+  }
+
+  return coalesced;
+}
+
 export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename = {}) {
   const oldBlocks = extractDiffBlocks(oldHtml, baseUrl, attachmentsByFilename);
   const currentBlocks = extractDiffBlocks(currentHtml, baseUrl, attachmentsByFilename);
@@ -984,7 +1044,14 @@ export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachments
       blocks.push(makeSameBlock(currentBlocks[j]));
       i++;
       j++;
-    } else if (canPairForInlineDiff(oldBlocks[i], currentBlocks[j])) {
+    } else if (
+      canPairForInlineDiff(oldBlocks[i], currentBlocks[j]) &&
+      dp[i + 1][j + 1] >= Math.max(dp[i + 1][j], dp[i][j + 1])
+    ) {
+      // Only substitute the two blocks when moving diagonally does not discard
+      // a better exact match later in either version. Without this guard, an
+      // inserted paragraph that resembles the following unchanged paragraph
+      // can be mistaken for a replacement.
       const modified = buildModifiedBlockDiff(oldBlocks[i], currentBlocks[j]);
       blocks.push(modified);
       limited = limited || modified.limited;
@@ -1009,7 +1076,7 @@ export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachments
     j++;
   }
 
-  return buildDiffResult(blocks, { limited });
+  return buildDiffResult(coalesceReplacementBlocks(blocks), { limited });
 }
 
 export function countWords(text) {

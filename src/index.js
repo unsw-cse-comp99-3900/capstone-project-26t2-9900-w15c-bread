@@ -198,4 +198,86 @@ resolver.define('getPageVersions', async (req) => {
   };
 });
 
+resolver.define('createDraft', async (req) => {
+  const pageId = req.payload && req.payload.pageId;
+  const bodyValue = req.payload && req.payload.bodyValue;
+
+  if (!pageId) {
+    throw new Error('A source page id is required to create a draft.');
+  }
+
+  if (typeof bodyValue !== 'string') {
+    throw new Error('Draft content must be provided as a string.');
+  }
+
+  // Keep unexpectedly large client payloads from consuming the resolver
+  // invocation. Normal Confluence pages are well below this defensive limit.
+  if (bodyValue.length > 2_000_000) {
+    throw new Error('The generated draft is too large to create safely.');
+  }
+
+  // Resolve the space and parent on the server instead of trusting client
+  // supplied location data. asUser() also ensures Confluence applies the
+  // invoking user's own page-view and page-create permissions.
+  const pageRes = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}`,
+    { headers: { Accept: 'application/json' } }
+  );
+
+  if (!pageRes.ok) {
+    throw new Error(`Unable to read the source page (${pageRes.status}): ${await pageRes.text()}`);
+  }
+
+  const sourcePage = await pageRes.json();
+  if (!sourcePage.spaceId) {
+    throw new Error('Unable to determine the source page space.');
+  }
+
+  const sourceTitle = sourcePage.title || 'Untitled page';
+  const titleSuffix = ' — Restored draft';
+  const draftTitle = `${sourceTitle.slice(0, Math.max(1, 255 - titleSuffix.length))}${titleSuffix}`;
+  const createPayload = {
+    spaceId: sourcePage.spaceId,
+    status: 'draft',
+    title: draftTitle,
+    body: {
+      representation: 'storage',
+      value: bodyValue,
+    },
+  };
+
+  // Create the draft beside the source page when it has a parent. Root pages
+  // remain at the root of the same space.
+  if (sourcePage.parentId) {
+    createPayload.parentId = sourcePage.parentId;
+  }
+
+  const createRes = await api.asUser().requestConfluence(route`/wiki/api/v2/pages`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(createPayload),
+  });
+
+  if (!createRes.ok) {
+    throw new Error(`Confluence draft API ${createRes.status}: ${await createRes.text()}`);
+  }
+
+  const draft = await createRes.json();
+  const baseUrl =
+    (draft._links && draft._links.base) ||
+    (sourcePage._links && sourcePage._links.base) ||
+    '';
+  const webUiPath = draft._links && draft._links.webui ? draft._links.webui : '';
+
+  return {
+    id: draft.id,
+    status: draft.status || 'draft',
+    title: draft.title || draftTitle,
+    url: webUiPath && baseUrl ? `${baseUrl}${webUiPath}` : webUiPath,
+  };
+});
+
 export const handler = resolver.getDefinitions();

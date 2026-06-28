@@ -19,6 +19,7 @@ permissions:
     - read:page:confluence
     - read:attachment:confluence
     - read:confluence-user
+    - write:page:confluence
 
 app:
   runtime:
