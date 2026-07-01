@@ -1,31 +1,69 @@
 # Dynamic History
 
-Dynamic History is a Confluence Forge content action app for inspecting a page's
-version history. It opens from the Confluence page actions menu, fetches the
-current page's versions through a Forge resolver, and renders a timeline plus a
-rich comparison between the current page and a selected historical version.
+Dynamic History is a Confluence Forge content action app for viewing page
+version history, comparing a selected historical version with the current
+version, and creating an unpublished Confluence draft from a chosen recovery
+result.
 
-This repository was created from a Forge Custom UI template, so some folder names
-still use the original template naming, especially `static/hello-world`.
+This app was originally created from a Forge Custom UI template, so the frontend
+folder is still named `static/hello-world`.
 
-## Code Map
+## Project Map
+
+Paths below are relative to the `9900` project folder.
 
 ```text
-manifest.yml                         Forge app module, resource, scopes, runtime
-src/index.js                         Backend resolver for Confluence API access
-static/hello-world/                  Custom UI React app
-static/hello-world/src/App.js        Frontend data loading and page-level layout
-static/hello-world/src/components/   Timeline and comparison UI components
-static/hello-world/src/utils.js      Formatting, storage HTML rendering, diff helpers
-static/hello-world/src/mockData.js   Local fallback data for development preview
-static/hello-world/src/styles.css    App layout, timeline, and rich diff styles
+manifest.yml
+  Forge app manifest. Defines the Confluence content action, Custom UI resource,
+  resolver function, scopes, and runtime.
+
+src/index.js
+  Backend Forge resolver. Fetches Confluence page versions, attachments, authors,
+  and creates unpublished draft pages.
+
+static/hello-world/src/App.js
+  Frontend entry point. Loads Forge bridge data in Confluence and mock data in
+  local development.
+
+static/hello-world/src/components/Timeline.js
+static/hello-world/src/components/VersionCard.js
+  Version timeline UI.
+
+static/hello-world/src/components/ComparisonPanel.js
+  Main comparison UI. Calls the rich diff helper, renders selectable change
+  blocks, opens Draft Preview, and sends selected storage HTML to createDraft.
+
+static/hello-world/src/utils.js
+  Core rich-text handling. Converts Confluence storage HTML into safe preview
+  HTML, splits content into semantic blocks, builds type-specific diffs, and
+  keeps raw storage HTML available for draft reconstruction.
+
+static/hello-world/src/styles.css
+  Layout, timeline, rich preview, diff, unsupported fallback, task, panel, and
+  whiteboard card styles.
+
+static/hello-world/src/mockData.js
+  Local mock page versions for development outside Confluence.
+
+static/hello-world/src/utils.test.js
+  Focused tests for rich-text normalization, block-level recovery behavior,
+  type-specific diffs, unsupported content, and preview safety.
 ```
 
 ## Forge Structure
 
-`manifest.yml` defines one `confluence:contentAction` named **Dynamic History**.
-The module uses the Custom UI resource at `static/hello-world/build` and calls the
-backend resolver function in `src/index.js`.
+`manifest.yml` defines one `confluence:contentAction` named `Dynamic History`.
+The module serves the Custom UI bundle from:
+
+```text
+static/hello-world/build
+```
+
+The backend resolver is declared in:
+
+```text
+src/index.js
+```
 
 Current scopes:
 
@@ -36,126 +74,90 @@ read:confluence-user
 write:page:confluence
 ```
 
-The app uses the `nodejs24.x` Forge runtime.
+The resolver uses `api.asUser().requestConfluence(...)` for Confluence REST API
+calls so access follows the invoking user's Confluence permissions.
 
-## Backend Resolver
+## Backend Flow
 
-The main resolver is `getPageVersions` in `src/index.js`.
+`src/index.js` exposes two important resolver actions.
 
-It determines the current Confluence page id from the Forge invocation context,
-then uses `api.asUser().requestConfluence(...)` to fetch data the current user is
-allowed to read.
+### getPageVersions
 
-The resolver currently does four main things:
+Fetches the page data needed by the frontend:
 
-1. Fetches page metadata, mainly the page title.
-2. Fetches all page versions from the Confluence v2 pages API, newest first.
-3. Fetches page attachments so storage-format image macros can be rendered.
-4. Resolves author account ids to display names on a best-effort basis.
+1. Current page metadata and title.
+2. All page versions, newest first.
+3. Storage-format body HTML for each version.
+4. Page attachments, used to resolve image attachment macros.
+5. Author display names where available.
 
-The `createDraft` resolver creates a new unpublished page beside the source
-page, using the content confirmed in the Draft Preview modal. It derives the
-space and parent from the source page and performs the write as the invoking
-user.
-
-The frontend expects this shape:
+The frontend expects each version body as Confluence storage HTML:
 
 ```js
 {
-  pageId: string,
-  pageTitle: string,
-  baseUrl: string,
-  attachmentsByFilename: {
-    [filename: string]: string
-  },
-  versions: [
-    {
-      number: number,
-      authorId: string,
-      authorName: string,
-      createdAt: string,
-      message: string,
-      minorEdit: boolean,
-      title: string,
-      body: {
-        representation: 'storage',
-        value: string
-      }
-    }
-  ]
+  body: {
+    representation: 'storage',
+    value: '<p>...</p>'
+  }
 }
 ```
 
-`body.value` is Confluence storage-format HTML. The frontend sanitises and
-normalises it before rendering.
+### createDraft
+
+Creates an unpublished Confluence page beside the source page. The frontend
+sends a reconstructed storage HTML string based on the user's selected recovery
+choices. Unsupported or complex blocks must remain as their original storage
+markup; they must not be converted into plain text.
 
 ## Frontend Flow
 
-`static/hello-world/src/App.js` is the frontend entry point after `index.js`.
+`static/hello-world/src/App.js`:
 
-It is responsible for:
+1. Loads `@forge/bridge` only inside Confluence.
+2. Calls `invoke('getPageVersions')`.
+3. Falls back to `mockData` during local preview.
+4. Tracks the selected historical version.
+5. Renders the timeline and `ComparisonPanel`.
 
-- loading `@forge/bridge` only when running inside Confluence;
-- calling `invoke('getPageVersions')`;
-- falling back to `mockData` during local development;
-- tracking the selected version number;
-- rendering the header, left timeline, and right comparison panel.
-
-The app selects the newest version by default once version data is loaded.
-
-## Components
-
-`Timeline.js` renders the list of versions and delegates each row to
-`VersionCard.js`.
-
-`VersionCard.js` renders a timeline-style card with:
-
-- version number;
-- current-version badge;
-- minor-edit badge;
-- relative timestamp;
-- author avatar initials;
-- edit summary.
-
-`ComparisonPanel.js` renders the right-hand detail area. It compares the selected
-historical version against the current version:
+`ComparisonPanel.js` compares:
 
 ```text
 selected historical version -> current version
 ```
 
-In diff terms, the selected version is treated as the old content and the current
-version is treated as the new content. This means additions show content that
-exists now but did not exist in the selected historical version, while removals
-show content that existed in the selected historical version but no longer exists
-now.
+So:
 
-If the selected version is already the current version, the panel renders the
-current content without calculating a diff.
+- added content means it exists in the current version but not in the selected
+  historical version;
+- removed content means it existed in the selected historical version but no
+  longer exists in the current version.
 
-For a historical comparison, users can choose the current or old content for
-each change block. `Preview Draft` opens the combined result without writing to
-Confluence. The confirmation action inside that modal calls `createDraft` and
-creates the actual unpublished Confluence page.
+For changed blocks, the user can choose:
 
-## Diff and Rendering Helpers
+```text
+Keep current change
+Restore old content
+```
 
-`utils.js` contains the shared frontend helpers:
+The Draft Preview modal shows the reconstructed result first. The final create
+button calls `createDraft`; previewing alone does not write to Confluence.
 
-- `formatDateTime`, `formatRelativeTime`, and `initials` for timeline display.
-- `storageToPlainText` and `countWords` for metadata.
-- `prepareConfluenceHtml` for rendering a safe subset of Confluence storage HTML.
-- `buildRichTextDiffHtml` for block-level, inline, code block, and table diff
-  rendering.
-- `buildLineDiff` for plain line-based diff segments if a future UI needs it.
+## Rich Text Handling
 
-`prepareConfluenceHtml` expands some Confluence storage constructs before
-rendering, including links, emoticons, code macros, and image attachments.
-Attachment filenames are resolved through `attachmentsByFilename`, which comes
-from the resolver.
+The main entry point is:
 
-`buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename)`
-returns:
+```js
+buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename)
+```
+
+Location:
+
+```text
+static/hello-world/src/utils.js:1601
+  buildRichTextDiffHtml
+```
+
+The function returns renderable preview HTML plus a structured block list:
 
 ```js
 {
@@ -163,29 +165,21 @@ returns:
   blocks: [
     {
       type: 'same' | 'added' | 'removed' | 'modified',
-      tag: string,
-      nodeType:
-        | 'paragraph'
-        | 'heading'
-        | 'list_item'
-        | 'blockquote'
-        | 'table'
-        | 'table_cell'
-        | 'code_block'
-        | 'image',
+      nodeType: string,
+      html?: string,
+      renderedHtml?: string,
+      oldHtml?: string,
+      newHtml?: string,
+      oldRenderedHtml?: string,
+      newRenderedHtml?: string,
       text?: string,
       oldText?: string,
       newText?: string,
-      oldHtml?: string,
-      newHtml?: string,
-      renderedHtml?: string,
-      inline?: [
-        {
-          type: 'same' | 'added' | 'removed',
-          text: string
-        }
-      ],
+      inline?: Array,
       tableDiff?: object,
+      taskDiff?: object,
+      supportLevel?: 'full' | 'raw',
+      rawPreview?: string,
       added?: number,
       removed?: number,
       limited?: boolean
@@ -199,152 +193,536 @@ returns:
     modifiedBlocks: number,
     unchangedBlocks: number,
     limited: boolean
-  },
-  added: number,
-  removed: number,
-  limited: boolean
+  }
 }
 ```
 
-`html` is still returned so the existing comparison panel can render rich
-Confluence content without a UI rewrite. `blocks` and `summary` are the
-frontend-friendly structured diff contract. New UI features, selection behavior,
-filters, and summary chips should use `blocks` and `summary` instead of parsing
-the generated HTML string.
-
-The top-level `added`, `removed`, and `limited` fields are retained for backward
-compatibility with the previous UI contract.
-
-### Diff Algorithm
-
-The current algorithm uses a conservative layered approach:
-
-1. Confluence storage HTML is normalised into safe renderable HTML.
-2. The page is split into comparable blocks.
-3. Blocks are matched first.
-4. Matched blocks are diffed according to their content type.
-5. The result is returned as both renderable HTML and structured data.
-
-For normal text blocks such as paragraphs, headings, list items, blockquotes, and
-table cells, the app uses token-level inline diffing for small and medium text.
-When a text block is too large for safe token-level dynamic programming, it falls
-back to a line/sentence-level comparison first, then applies inline diff only to
-smaller similar line or sentence pairs. This prevents large pages from freezing
-the browser while still showing useful additions and removals.
-
-For code blocks, the app does not use normal paragraph rules. Confluence code
-macros are converted to safe `<pre><code>` HTML, with code content escaped before
-rendering. Code blocks are compared line by line so indentation, whitespace, and
-line boundaries are preserved.
-
-For tables, the app uses table-specific rendering:
-
-- If the old table and current table have the same row and column shape, the UI
-  renders one current-version table and highlights changed cells in place.
-- If the table shape changes, the UI renders a previous table and a current table
-  side by side instead of forcing the structures into one broken table.
-
-The `limited` flag is set when a content section is too large for full inline
-highlighting. In that case, the UI uses the safer line-level or fallback preview
-instead of running an expensive full inline diff.
-
-### Diff Fixes and Recent Enhancements
-
-Recent diff work added and fixed the following behavior:
-
-- Added explicit additions and removals highlighting for inline text.
-- Added a structured `blocks` and `summary` output format for frontend use.
-- Added long-text fallback diffing based on lines and sentences.
-- Added code block handling so Confluence code macros no longer break rendering
-  or produce a blank comparison page.
-- Added code-block line diffing with preserved whitespace and indentation.
-- Added table-aware diffing so unchanged table shape is kept as one table with
-  changed cells highlighted.
-- Added side-by-side previous/current table rendering when table shape changes.
-- Added a defensive render fallback in `ComparisonPanel.js` so unexpected storage
-  formats show an error preview instead of crashing the whole app.
-
-The main implementation locations are:
+Important distinction:
 
 ```text
-static/hello-world/src/utils.js
-  prepareConfluenceHtml              Storage HTML normalisation and safe rendering
-  buildRichTextDiffHtml              Main diff entry point used by the UI
-  buildInlineTextDiff                Token-level inline text diff
-  buildCoarseTextDiff                Line/sentence fallback for large text blocks
-  buildCodeBlockDiff                 Code block line diff
-  buildTableDiff                     Table diff dispatcher
-  buildCellLevelTableDiff            Same-shape table cell diff
-  buildSideBySideTableDiff           Different-shape table rendering
+html / oldHtml / newHtml
+  Storage HTML used for reconstruction and draft creation.
 
-static/hello-world/src/components/ComparisonPanel.js
-  Calls buildRichTextDiffHtml and reads summary data for the comparison chips.
-  Contains the defensive fallback for unexpected diff rendering errors.
-
-static/hello-world/src/styles.css
-  Diff block, inline diff, code diff, and table diff styling.
+renderedHtml / oldRenderedHtml / newRenderedHtml
+  Safe readable preview HTML used only for display.
 ```
 
-## Styling
+This separation is intentional. The app can show a readable fallback card for a
+macro or smart link while still preserving the original Confluence storage markup
+for draft creation.
 
-`styles.css` contains all frontend styling. The main layout is:
+## Current Diff Policy
+
+The diff policy is conservative because Confluence documents are semantic rich
+documents, not plain text files.
+
+### Paragraphs and Headings
+
+Paragraphs and headings are block-level comparison and recovery units.
+
+If a paragraph or heading changes, the app shows the old block and the new block
+as block-level removed/added or modified content. It does not split paragraph or
+heading content into word-level, character-level, or line-level inline diff.
+
+Reason:
 
 ```text
-header
-left timeline sidebar | right comparison panel
+Paragraphs and headings are semantic units in Confluence pages. Keeping them as
+whole recovery units makes draft reconstruction safer, especially for Chinese
+and natural-language content.
 ```
 
-Important class groups:
+Implementation locations:
 
-- `dh-layout`, `dh-sidebar`, `dh-main` for the two-pane shell.
-- `dh-card*`, `dh-dot*`, `dh-badge*` for timeline rows.
-- `dh-compare*`, `dh-change-chip*`, `dh-content-panel` for comparison metadata.
-- `dh-rich-page`, `dh-rich-diff-block*`, `dh-rich-diff-inline*` for rendered rich
-  page content and diff highlights.
+```text
+static/hello-world/src/utils.js:1249
+  canPairForInlineDiff
 
-## Local Mock Data
+static/hello-world/src/utils.js:1451
+  buildModifiedBlockDiff
 
-`mockData.js` is used when the app runs outside Confluence, for example during a
-plain React local preview. Real Confluence data only exists when the app runs in a
-Forge/Confluence context and `@forge/bridge` can call the resolver.
+static/hello-world/src/utils.js:1494
+  buildBlockLevelModifiedDiff
+```
 
-If you add fields to the resolver contract, update `mockData.js` as well so local
-UI development does not drift from production data.
+### Lists and Tasks
 
-## Common Commands
+Lists are split by item when possible. This prevents one small list item change
+from turning the whole list into a large changed block.
+
+Task items preserve both:
+
+```text
+checkbox state
+task text
+```
+
+Task storage HTML is kept for reconstruction. The preview uses readable markers:
+
+```text
+[x] completed task
+[ ] incomplete task
+```
+
+Implementation locations:
+
+```text
+static/hello-world/src/utils.js:310
+  expandConfluenceTaskLists
+
+static/hello-world/src/utils.js:828
+  extractComparableBlocksFromPreparedNode
+
+static/hello-world/src/utils.js:1515
+  buildTaskItemDiff
+
+static/hello-world/src/styles.css:344
+  [data-dh-node-type='task_item']
+
+static/hello-world/src/styles.css:348
+  [data-dh-task-marker='true']
+```
+
+### Code Blocks
+
+Confluence code macros are converted into safe preview HTML:
+
+```html
+<pre data-dh-node-type="code_block"><code>...</code></pre>
+```
+
+Code content is escaped before rendering. Code blocks are compared line by line
+so indentation and whitespace remain meaningful.
+
+Implementation locations:
+
+```text
+static/hello-world/src/utils.js:193
+  expandConfluenceCodeMacros
+
+static/hello-world/src/utils.js:1279
+  buildCodeBlockDiff
+```
+
+### Tables
+
+Tables use table-specific diff logic.
+
+If old and current tables have compatible row and cell structure, the app uses
+cell-level comparison.
+
+If table shape is incompatible, the app uses a safer side-by-side table fallback
+instead of forcing two different structures into one table.
+
+Implementation locations:
+
+```text
+static/hello-world/src/utils.js:1439
+  buildTableDiff
+
+static/hello-world/src/utils.js:1342
+  buildCellLevelTableDiff
+
+static/hello-world/src/utils.js:1403
+  buildSideBySideTableDiff
+```
+
+### Panels and Quotes
+
+Panels and blockquotes are readable block-level diffs. They are not split into
+fragile inline fragments.
+
+Known Confluence panel-like structured macros are rendered into readable preview
+blocks where possible:
+
+```text
+info
+note
+warning
+tip
+success
+error
+panel
+```
+
+Implementation locations:
+
+```text
+static/hello-world/src/utils.js:446
+  expandKnownStructuredMacros
+
+static/hello-world/src/utils.js:1494
+  buildBlockLevelModifiedDiff
+
+static/hello-world/src/styles.css:357
+  [data-dh-node-type='panel']
+```
+
+### Unsupported Content
+
+Unsupported content must never become blank, deleted, or silently converted into
+plain text.
+
+Normal preview shows a readable fallback card:
+
+```text
+Unsupported Confluence block
+Type: ...
+This block cannot be fully rendered by this app. Original data is preserved.
+```
+
+The raw inspector shows the original raw HTML or JSON as escaped plain text. Raw
+content is not rendered with `dangerouslySetInnerHTML`.
+
+Normal preview must not expose internal implementation fields such as:
+
+```text
+UUIDs
+macro IDs
+XML gadget URLs
+extension keys
+localIds
+statusIds
+color values
+```
+
+Implementation locations:
+
+```text
+static/hello-world/src/utils.js:292
+  createRawFallbackHtml
+
+static/hello-world/src/utils.js:242
+  cleanUserFacingName
+
+static/hello-world/src/utils.js:498
+  expandUnsupportedStorageNodes
+
+static/hello-world/src/utils.js:354
+  expandAdfNodes
+
+static/hello-world/src/utils.js:624
+  visibleTextContent
+
+static/hello-world/src/styles.css:465
+  [data-dh-node-type='unsupported']
+
+static/hello-world/src/styles.css:478
+  [data-dh-raw-inspector='true']
+```
+
+## Confluence Storage Normalization
+
+Preview rendering starts with:
+
+```text
+prepareConfluenceHtml
+```
+
+Location:
+
+```text
+static/hello-world/src/utils.js:512
+  prepareConfluenceHtml
+```
+
+It expands a safe subset of Confluence storage HTML into display HTML:
+
+```text
+Confluence links
+image attachments
+code macros
+task lists
+panel-like macros
+ADF status, emoji, mention, date, task, decision, smart link nodes
+unsupported macros/extensions
+whiteboard smart links
+```
+
+After expansion, it sanitizes tags and attributes before returning preview HTML.
+Allowed data attributes are used only for app-specific rendering and diff
+classification.
+
+## Whiteboard Cards
+
+Whiteboard links are rendered as readable Confluence-style cards in preview.
+
+If storage contains a title, the card uses that title, for example:
+
+```text
+Untitled whiteboard 2026-06-30
+```
+
+If storage does not contain a title, the card uses:
+
+```text
+Untitled whiteboard
+```
+
+The preview does not show the raw whiteboard URL as normal text. The original
+link or ADF smart-link storage remains available for reconstruction.
+
+Implementation locations:
+
+```text
+static/hello-world/src/utils.js:125
+  isWhiteboardUrl
+
+static/hello-world/src/utils.js:129
+  cleanWhiteboardTitle
+
+static/hello-world/src/utils.js:133
+  renderWhiteboardCard
+
+static/hello-world/src/utils.js:152
+  expandConfluenceLinks
+
+static/hello-world/src/utils.js:344
+  expandWhiteboardAnchors
+
+static/hello-world/src/utils.js:354
+  expandAdfNodes
+
+static/hello-world/src/styles.css:364
+  [data-dh-node-type='whiteboard_card']
+
+static/hello-world/src/styles.css:378
+  [data-dh-whiteboard-icon='true']
+
+static/hello-world/src/styles.css:430
+  [data-dh-whiteboard-product='true']
+
+static/hello-world/src/styles.css:455
+  [data-dh-whiteboard-open='true']
+```
+
+## Block Extraction and Big Diff Prevention
+
+One issue fixed during this work was Confluence layout or wrapper markup causing
+large page sections to be treated as one giant diff block.
+
+The current logic treats layout wrappers and ordinary containers as transparent
+when they contain semantic child blocks.
+
+Implementation locations:
+
+```text
+static/hello-world/src/utils.js:758
+  hasBlockElementChildren
+
+static/hello-world/src/utils.js:766
+  isTransparentContainer
+
+static/hello-world/src/utils.js:778
+  isRawTransparentContainer
+
+static/hello-world/src/utils.js:790
+  collectRawBlockNodes
+
+static/hello-world/src/utils.js:828
+  extractComparableBlocksFromPreparedNode
+
+static/hello-world/src/utils.js:865
+  extractDiffBlocks
+```
+
+This allows tables, tasks, panels, whiteboard cards, headings, paragraphs, and
+other blocks to be compared separately instead of as one page-sized block.
+
+## Draft Reconstruction Safety
+
+Draft reconstruction is handled in the frontend by `ComparisonPanel.js`.
+
+Important rule:
+
+```text
+The component chooses between oldHtml and newHtml for recovery.
+It should not reconstruct complex Confluence storage from rendered preview HTML.
+```
+
+This protects unsupported macros, extensions, whiteboards, and other complex
+storage nodes from being degraded into plain text.
+
+Implementation location:
+
+```text
+static/hello-world/src/components/ComparisonPanel.js:30
+  getSelectedBlockHtml
+
+static/hello-world/src/components/ComparisonPanel.js:60
+  renderDraftBlock
+
+static/hello-world/src/components/ComparisonPanel.js:197
+  buildRichTextDiffHtml call site
+
+static/hello-world/src/components/ComparisonPanel.js:319
+  createDraft invocation
+```
+
+## Tests
+
+Focused tests live in:
+
+```text
+static/hello-world/src/utils.test.js
+```
+
+Current coverage includes:
+
+```text
+static/hello-world/src/utils.test.js:10
+  low-similarity paragraph replacement stays atomic
+
+static/hello-world/src/utils.test.js:41
+  paragraph remains a block-level recovery unit without inline diff
+
+static/hello-world/src/utils.test.js:59
+  heading remains a block-level recovery unit without inline diff
+
+static/hello-world/src/utils.test.js:75
+  list additions are compared by item
+
+static/hello-world/src/utils.test.js:90
+  task checkbox state and text changes are captured by task item
+
+static/hello-world/src/utils.test.js:113
+  unsupported block renders a readable non-blank fallback
+
+static/hello-world/src/utils.test.js:145
+  unsupported raw content is preserved for reconstruction
+
+static/hello-world/src/utils.test.js:156
+  transparent containers are split into semantic child blocks
+
+static/hello-world/src/utils.test.js:171
+  Confluence layout containers do not become one giant diff block
+
+static/hello-world/src/utils.test.js:199
+  ADF internals are not mixed into normal preview text
+
+static/hello-world/src/utils.test.js:235
+  whiteboard links render as readable cards while preserving raw link storage
+
+static/hello-world/src/utils.test.js:250
+  ADF whiteboard smart links render as readable cards
+```
+
+Run the focused test suite from:
+
+```powershell
+cd C:\Users\28055\Desktop\COMP9900\9900\static\hello-world
+npx.cmd react-scripts test --watchAll=false --runTestsByPath src/utils.test.js
+```
+
+Last verified result:
+
+```text
+Test Suites: 1 passed
+Tests: 14 passed
+```
+
+Jest may print a warning that it did not exit immediately because of open
+handles. The build also prints the existing Create React App warning about
+`babel-preset-react-app`. Those warnings were not introduced by the rich-text
+changes.
+
+## Build and Deploy
 
 Build the Custom UI bundle:
 
 ```powershell
-cd static\hello-world
+cd /d C:\Users\28055\Desktop\COMP9900\9900\static\hello-world
 npm run build
-cd ..\..
 ```
 
-Deploy the Forge development environment:
+Deploy to the `jzm-dev` Forge environment from the Forge app root:
 
 ```powershell
-forge deploy --non-interactive -e development
+cd /d C:\Users\28055\Desktop\COMP9900\9900
+forge deploy --non-interactive -e jzm-dev
 ```
 
-Install or upgrade the development app on a Confluence site:
+`npm install --legacy-peer-deps` is not required every time. Use it only when
+dependencies are missing, `node_modules` was removed, or `package.json` /
+`package-lock.json` dependencies changed.
 
-```powershell
-forge install --non-interactive --upgrade --site <site> --product confluence --environment development
+After the latest build, the generated frontend assets were:
+
+```text
+static/hello-world/build/static/js/main.1a61e3f5.js
+static/hello-world/build/static/css/main.11df5e68.css
 ```
 
-Run Forge lint:
+After deploying, the browser should load those hashes from the Forge iframe. If
+the page still loads an older `main.*.js`, the deployed environment or browser
+cache is not using the latest build.
 
-```powershell
-forge lint
+## Today's Rich Text Changes
+
+The main changes made in this round:
+
+```text
+static/hello-world/src/utils.js:512
+  Added/updated the normalization and dispatch layer.
+
+static/hello-world/src/utils.js:1249
+  Kept paragraph and heading as block-level recovery units.
+
+static/hello-world/src/utils.js:310
+  Added list/task item handling.
+
+static/hello-world/src/utils.js:1279
+  Preserved code block line diff.
+
+static/hello-world/src/utils.js:1342
+  Preserved table row/cell diff when structure is compatible.
+
+static/hello-world/src/utils.js:354
+  Added safer panel, quote, unsupported, ADF, and whiteboard handling.
+
+static/hello-world/src/utils.js:699
+  Separated storage HTML from rendered preview HTML.
+
+static/hello-world/src/utils.js:242
+  Prevented internal IDs, gadget URLs, localIds, extension keys, colors, and
+  status internals from leaking into normal preview text.
+
+static/hello-world/src/components/ComparisonPanel.js:30
+  Kept complex reconstruction logic out of the component.
+
+static/hello-world/src/components/ComparisonPanel.js:197
+  Used structured diff blocks for user recovery choices.
+
+static/hello-world/src/components/ComparisonPanel.js:30
+  Preserved oldHtml/newHtml for draft reconstruction.
+
+static/hello-world/src/components/ComparisonPanel.js:60
+  Used rendered preview HTML only for display.
+
+static/hello-world/src/styles.css:344
+  Added minimal styles for tasks, panels, unsupported fallback cards, raw
+  inspector, and whiteboard cards.
+
+static/hello-world/src/mockData.js:31
+  Added small mock content for list, task, table, code, panel, quote, and
+  unsupported blocks.
+
+static/hello-world/src/utils.test.js:41
+  Added focused tests for block-level paragraph/heading behavior, list/task
+  diffs, unsupported fallback safety, raw preservation, container splitting, ADF
+  cleanup, and whiteboard card rendering.
 ```
 
 ## Development Notes
 
-- Build `static/hello-world` before deploying, because Forge serves the generated
-  `static/hello-world/build` resource.
-- Use `api.asUser()` in resolver calls when reading user-visible Confluence data.
-- Keep the resolver response contract and frontend mock data aligned.
-- Do not commit secrets, Forge tokens, Atlassian cookies, or private credentials.
-- The `static/hello-world` directory name is inherited from the Forge template; it
-  now contains the Dynamic History frontend.
+- Build `static/hello-world` before Forge deploy because Forge serves the
+  generated `static/hello-world/build` resource.
+- Use `api.asUser()` for user-facing Confluence REST API access.
+- Do not use `--no-verify` for deploy unless explicitly requested.
+- If scopes or permissions in `manifest.yml` change, redeploy and then reinstall
+  or upgrade the app.
+- Keep `mockData.js` aligned with the resolver response shape.
+- Do not move draft reconstruction into the visual preview layer.
+- Do not use `dangerouslySetInnerHTML` for raw storage display.
+- Unsupported content must remain recoverable even when preview rendering is
+  incomplete.
