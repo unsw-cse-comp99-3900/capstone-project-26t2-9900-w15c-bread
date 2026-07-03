@@ -65,6 +65,8 @@ function buildDraftPreviewHtml(blocks, blockChoices) {
 function getDiffBlockHtml(block) {
   return (
     block.renderedHtml ||
+    block.newRenderedHtml ||
+    block.oldRenderedHtml ||
     block.newHtml ||
     block.oldHtml ||
     block.html ||
@@ -76,14 +78,14 @@ function getGitHubStyleDiffParts(block) {
   if (block.type === 'added') {
     return [{
       type: 'added',
-      html: block.newHtml || block.renderedHtml || fallbackTextHtml(block.text),
+      html: block.renderedHtml || block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.text),
     }];
   }
 
   if (block.type === 'removed') {
     return [{
       type: 'removed',
-      html: block.oldHtml || block.renderedHtml || fallbackTextHtml(block.text),
+      html: block.renderedHtml || block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.text),
     }];
   }
 
@@ -93,11 +95,11 @@ function getGitHubStyleDiffParts(block) {
   return [
     {
       type: 'removed',
-      html: block.oldHtml || fallbackTextHtml(block.oldText),
+      html: block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.oldText),
     },
     {
       type: 'added',
-      html: block.newHtml || fallbackTextHtml(block.newText),
+      html: block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.newText),
     },
   ];
 }

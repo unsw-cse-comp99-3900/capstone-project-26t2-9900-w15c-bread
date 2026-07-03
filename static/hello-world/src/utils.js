@@ -72,6 +72,24 @@ function normaliseLineEndings(value) {
   return String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
+function getNodeOuterHtml(node) {
+  if (!node) return '';
+  if (node.nodeType === Node.TEXT_NODE) return escapeHtml(node.textContent || '');
+  if (node.nodeType === Node.ELEMENT_NODE) return node.outerHTML || '';
+  return '';
+}
+
+function hashString(value) {
+  let hash = 0;
+  const text = String(value || '');
+
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+
+  return hash.toString(16);
+}
+
 function extractAttr(markup, attrNames) {
   for (const attrName of attrNames) {
     const escapedName = attrName.replace(':', '\\:');
@@ -104,16 +122,48 @@ function confluenceEmoticonToText(name) {
   return map[name] || (name ? `:${name}:` : '');
 }
 
+function isWhiteboardUrl(url) {
+  return /\/wiki\/spaces\/[^/]+\/whiteboard\/[^/?#]+/i.test(String(url || ''));
+}
+
+function cleanWhiteboardTitle(title) {
+  return cleanUserFacingName(title) || 'Untitled whiteboard';
+}
+
+function renderWhiteboardCard(url, title) {
+  const safeUrl = escapeHtml(url || '');
+  const safeTitle = escapeHtml(cleanWhiteboardTitle(title));
+
+  return [
+    `<div data-dh-node-type="whiteboard_card" data-dh-whiteboard-url="${safeUrl}">`,
+    '<div data-dh-whiteboard-icon="true"></div>',
+    '<div data-dh-whiteboard-main="true">',
+    `<a href="${safeUrl}" data-dh-whiteboard-title="true">${safeTitle}</a>`,
+    '<div data-dh-whiteboard-product="true">',
+    '<span data-dh-whiteboard-product-icon="true"></span>',
+    '<span>Confluence Whiteboards</span>',
+    '</div>',
+    '</div>',
+    `<a href="${safeUrl}" data-dh-whiteboard-open="true">Open preview</a>`,
+    '</div>',
+  ].join('');
+}
+
 function expandConfluenceLinks(html, baseUrl) {
   return html.replace(/<ac:link\b[\s\S]*?<\/ac:link>/gi, (match) => {
     const bodyMatch =
       /<ac:plain-text-link-body[^>]*>([\s\S]*?)<\/ac:plain-text-link-body>/i.exec(match) ||
       /<ac:link-body[^>]*>([\s\S]*?)<\/ac:link-body>/i.exec(match);
     const label = bodyMatch ? decodeCdata(bodyMatch[1]).trim() : '';
+    const title = cleanUserFacingName(extractAttr(match, ['ac:title', 'title']));
 
     const urlMatch = /<ri:url\b[^>]*(?:ri:value|value)=["']([^"']+)["'][^>]*\/?>/i.exec(match);
     if (urlMatch) {
       const href = urlMatch[1];
+      if (isWhiteboardUrl(href)) {
+        return renderWhiteboardCard(href, label || title);
+      }
+
       return `<a href="${escapeHtml(href)}">${escapeHtml(label || href)}</a>`;
     }
 
@@ -169,10 +219,308 @@ function expandConfluenceCodeMacros(html) {
   );
 }
 
+function extractMacroParameter(markup, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    `<ac:parameter\\b[^>]*(?:ac:name|name)=["']${escapedName}["'][^>]*>([\\s\\S]*?)<\\/ac:parameter>`,
+    'i'
+  );
+  const match = re.exec(markup);
+  return match ? decodeCdata(match[1]).replace(/<[^>]+>/g, '').trim() : '';
+}
+
+function extractMacroBody(markup) {
+  const richTextBody = /<ac:rich-text-body[^>]*>([\s\S]*?)<\/ac:rich-text-body>/i.exec(markup);
+  const plainTextBody = /<ac:plain-text-body[^>]*>([\s\S]*?)<\/ac:plain-text-body>/i.exec(markup);
+  return richTextBody ? richTextBody[1] : plainTextBody ? escapeHtml(decodeCdata(plainTextBody[1])) : '';
+}
+
+function stripTags(value) {
+  return String(value || '').replace(/<[^>]+>/g, '').trim();
+}
+
+function cleanUserFacingName(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  // Storage nodes often carry internal identifiers that are useful for
+  // reconstruction but noisy or sensitive in normal preview text. Keep those
+  // values available in the raw inspector only.
+  if (/https?:\/\//i.test(text)) return '';
+  if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) return '';
+  if (/\b(ari:|localid|macro[-_]?id|status[-_]?id|extension[-_]?key)\b/i.test(text)) return '';
+  if (text.length > 80) return '';
+
+  return text;
+}
+
+function extractAdfAttribute(markup, names) {
+  const keys = Array.isArray(names) ? names : [names];
+
+  for (const key of keys) {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(
+      `<ac:adf-attribute\\b[^>]*(?:key|ac:key|name|ac:name)=["']${escapedKey}["'][^>]*>([\\s\\S]*?)<\\/ac:adf-attribute>`,
+      'i'
+    );
+    const match = re.exec(markup);
+    if (match) return stripTags(decodeCdata(match[1]));
+  }
+
+  return '';
+}
+
+function removeAdfAttributes(markup) {
+  return String(markup || '').replace(/<ac:adf-attribute\b[\s\S]*?<\/ac:adf-attribute>/gi, '');
+}
+
+function fallbackEmojiText(name) {
+  const cleanedName = cleanUserFacingName(String(name || '').replace(/^:|:$/g, ''));
+  if (!cleanedName) return '[Emoji]';
+  if (cleanedName.toLowerCase() === 'rainbow') return '🌈';
+  return `[Emoji: ${cleanedName}]`;
+}
+
+function titleCaseStorageName(value) {
+  return String(value || '')
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function createRawFallbackHtml(rawMarkup, options = {}) {
+  const type = cleanUserFacingName(options.type) || 'Unsupported Confluence block';
+  const name = cleanUserFacingName(options.name);
+  const label = name ? `${type}: ${name}` : type;
+
+  return [
+    '<div data-dh-node-type="unsupported" data-dh-support-level="raw">',
+    '<p><strong>Unsupported Confluence block</strong></p>',
+    `<p>Type: ${escapeHtml(label)}</p>`,
+    '<p>This block cannot be fully rendered by this app. Original data is preserved.</p>',
+    '<details data-dh-raw-inspector="true">',
+    '<summary>View raw data</summary>',
+    `<pre>${escapeHtml(rawMarkup)}</pre>`,
+    '</details>',
+    '</div>',
+  ].join('');
+}
+
+function expandConfluenceTaskLists(html) {
+  return String(html || '').replace(/<ac:task-list\b[^>]*>[\s\S]*?<\/ac:task-list>/gi, (listMarkup) => {
+    const taskItems = [];
+    const taskRe = /<ac:task\b[^>]*>([\s\S]*?)<\/ac:task>/gi;
+    let match = taskRe.exec(listMarkup);
+
+    while (match) {
+      const taskMarkup = match[1];
+      const statusMatch = /<ac:task-status[^>]*>([\s\S]*?)<\/ac:task-status>/i.exec(taskMarkup);
+      const bodyMatch = /<ac:task-body[^>]*>([\s\S]*?)<\/ac:task-body>/i.exec(taskMarkup);
+      const status = statusMatch ? statusMatch[1].replace(/<[^>]+>/g, '').trim() : 'incomplete';
+      const checked = /^(complete|done|checked)$/i.test(status);
+      const body = bodyMatch ? bodyMatch[1] : '';
+
+      taskItems.push(
+        [
+          `<li data-dh-node-type="task_item" data-dh-task-status="${checked ? 'complete' : 'incomplete'}">`,
+          `<span data-dh-task-marker="true">${checked ? '[x]' : '[ ]'}</span> `,
+          body,
+          '</li>',
+        ].join('')
+      );
+
+      match = taskRe.exec(listMarkup);
+    }
+
+    if (!taskItems.length) {
+      return createRawFallbackHtml(listMarkup, { type: 'Task list' });
+    }
+
+    return `<ul data-dh-node-type="task_list">${taskItems.join('')}</ul>`;
+  });
+}
+
+function expandWhiteboardAnchors(html) {
+  return String(html || '').replace(/<a\b([^>]*)href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi, (match, beforeHref, href, afterHref, labelMarkup) => {
+    if (!isWhiteboardUrl(href)) return match;
+
+    const label = stripTags(labelMarkup).replace(/\s+/g, ' ').trim();
+    const title = cleanUserFacingName(extractAttr(`${beforeHref} ${afterHref}`, ['title', 'aria-label']));
+    return renderWhiteboardCard(href, label || title);
+  });
+}
+
+function expandAdfNodes(html) {
+  let expanded = String(html || '');
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']status["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
+    (match) => {
+      const text =
+        cleanUserFacingName(extractAdfAttribute(match, ['text', 'title', 'localId'])) ||
+        'Status';
+      return `<span data-dh-node-type="status">[Status: ${escapeHtml(text)}]</span>`;
+    }
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']emoji["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
+    (match) => {
+      const name = extractAdfAttribute(match, ['shortName', 'text', 'name']);
+      return `<span data-dh-node-type="emoji">${escapeHtml(fallbackEmojiText(name))}</span>`;
+    }
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']date["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
+    (match) => {
+      const value = cleanUserFacingName(extractAdfAttribute(match, ['timestamp', 'date', 'value']));
+      return value ? `<span data-dh-node-type="date">${escapeHtml(value)}</span>` : '[Date]';
+    }
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']mention["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
+    (match) => {
+      const displayName = cleanUserFacingName(extractAdfAttribute(match, ['text', 'displayName']));
+      return `<span data-dh-node-type="mention">${escapeHtml(displayName ? `@${displayName}` : '[Mention]')}</span>`;
+    }
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:inlineCard|blockCard|embedCard)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
+    (match) => {
+      const title = cleanUserFacingName(
+        extractAdfAttribute(match, ['title', 'text', 'name', 'displayName'])
+      );
+      const url = extractAdfAttribute(match, ['url', 'href']);
+
+      if (isWhiteboardUrl(url)) {
+        return renderWhiteboardCard(url, title);
+      }
+
+      return `<div data-dh-node-type="smart_link">${escapeHtml(title || '[Smart link]')}</div>`;
+    }
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']decisionItem["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
+    (_match, body) => `<div data-dh-node-type="decision">[Decision] ${removeAdfAttributes(body)}</div>`
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']taskItem["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
+    (match, body) => {
+      const state = extractAdfAttribute(match, ['state', 'checked']);
+      const checked = /^(done|complete|checked|true)$/i.test(state);
+      return [
+        `<li data-dh-node-type="task_item" data-dh-task-status="${checked ? 'complete' : 'incomplete'}">`,
+        `<span data-dh-task-marker="true">${checked ? '[x]' : '[ ]'}</span> `,
+        removeAdfAttributes(body),
+        '</li>',
+      ].join('');
+    }
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']taskList["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
+    (_match, body) => `<ul data-dh-node-type="task_list">${body}</ul>`
+  );
+
+  expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:extension|bodiedExtension|multiBodiedExtension)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
+    (match) =>
+      createRawFallbackHtml(match, {
+        type: 'Extension',
+        name: titleCaseStorageName(extractAdfAttribute(match, ['extensionTitle', 'title'])),
+      })
+  );
+
+  // Any remaining ADF attributes are implementation details. Removing them
+  // prevents localIds, colors, gadget URLs, and state fields from becoming
+  // ordinary preview text when their parent node is rendered in simplified form.
+  return removeAdfAttributes(expanded);
+}
+
+function expandKnownStructuredMacros(html) {
+  return String(html || '').replace(
+    /<ac:structured-macro\b[^>]*>[\s\S]*?<\/ac:structured-macro>/gi,
+    (macroMarkup) => {
+      const name = extractAttr(macroMarkup, ['ac:name', 'name']);
+      const normalisedName = String(name || '').toLowerCase();
+
+      if (normalisedName === 'code') {
+        return macroMarkup;
+      }
+
+      if (['info', 'note', 'warning', 'tip', 'success', 'error', 'panel'].includes(normalisedName)) {
+        const title = cleanUserFacingName(extractMacroParameter(macroMarkup, 'title'));
+        const body = extractMacroBody(macroMarkup);
+        const panelType = normalisedName === 'panel' ? 'panel' : normalisedName;
+        const heading = title || `${titleCaseStorageName(panelType)} panel`;
+
+        return [
+          `<div data-dh-node-type="panel" data-dh-panel-type="${escapeHtml(panelType)}">`,
+          `<p><strong>${escapeHtml(heading)}</strong></p>`,
+          body,
+          '</div>',
+        ].join('');
+      }
+
+      if (normalisedName === 'status') {
+        const statusText =
+          cleanUserFacingName(extractMacroParameter(macroMarkup, 'title')) ||
+          cleanUserFacingName(extractMacroParameter(macroMarkup, 'text')) ||
+          'Status';
+        return `<span data-dh-node-type="status">[Status: ${escapeHtml(statusText)}]</span>`;
+      }
+
+      if (normalisedName === 'expand') {
+        const title = cleanUserFacingName(extractMacroParameter(macroMarkup, 'title')) || 'Details';
+        const body = extractMacroBody(macroMarkup);
+        return [
+          '<div data-dh-node-type="expand">',
+          `<p>[Expand: ${escapeHtml(title)}]</p>`,
+          body,
+          '</div>',
+        ].join('');
+      }
+
+      return createRawFallbackHtml(macroMarkup, {
+        type: 'Structured macro',
+        name: titleCaseStorageName(name),
+      });
+    }
+  );
+}
+
+function expandUnsupportedStorageNodes(html) {
+  return String(html || '')
+    .replace(/<ac:(?:adf-extension|bodied-extension|extension)\b[\s\S]*?<\/ac:(?:adf-extension|bodied-extension|extension)>/gi, (match) =>
+      createRawFallbackHtml(match, {
+        type: 'Extension',
+        name: titleCaseStorageName(extractAttr(match, ['ac:name', 'name'])),
+      })
+    )
+    .replace(/<ri:user\b[^>]*\/?>/gi, () => '<span data-dh-node-type="mention">[Mention]</span>')
+    .replace(/<ri:date\b[^>]*(?:ri:value|value)=["']([^"']+)["'][^>]*\/?>/gi, (_match, value) =>
+      `<time datetime="${escapeHtml(value)}">${escapeHtml(value)}</time>`
+    );
+}
+
 export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {}) {
   if (!html) return '';
 
-  const expandedStorage = expandConfluenceLinks(expandConfluenceCodeMacros(html), baseUrl)
+  const expandedStorage = expandWhiteboardAnchors(
+    expandUnsupportedStorageNodes(
+      expandKnownStructuredMacros(
+        expandConfluenceTaskLists(
+          expandAdfNodes(expandConfluenceLinks(expandConfluenceCodeMacros(html), baseUrl))
+        )
+      )
+    )
+  )
     .replace(/<ac:emoticon\b[^>]*(?:ac:name|name)=["']([^"']+)["'][^>]*\/?>/gi, (_match, name) =>
       confluenceEmoticonToText(name)
     )
@@ -202,6 +550,7 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
     'COL',
     'COLGROUP',
     'DEL',
+    'DETAILS',
     'DIV',
     'EM',
     'FIGURE',
@@ -223,6 +572,7 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
     'S',
     'SPAN',
     'STRONG',
+    'SUMMARY',
     'TABLE',
     'TBODY',
     'TD',
@@ -271,6 +621,23 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
   return doc.body.innerHTML;
 }
 
+function visibleTextContent(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+    return node ? node.textContent || '' : '';
+  }
+
+  const clone = node.cloneNode(true);
+
+  // The raw inspector is deliberately visible to a developer on demand, but it
+  // must not affect normal diff text or leak internal identifiers into the
+  // user-facing preview.
+  Array.from(clone.querySelectorAll('[data-dh-raw-inspector], [data-dh-task-marker]')).forEach(
+    (internalNode) => internalNode.remove()
+  );
+
+  return clone.textContent || '';
+}
+
 function normaliseBlockText(node) {
   if (
     node &&
@@ -280,7 +647,7 @@ function normaliseBlockText(node) {
     return normaliseLineEndings(node.textContent || '').trimEnd();
   }
 
-  return (node.textContent || '').replace(/\s+/g, ' ').trim();
+  return visibleTextContent(node).replace(/\s+/g, ' ').trim();
 }
 
 function normaliseComparableText(text) {
@@ -317,7 +684,9 @@ function isTextDiffableTag(tag) {
 
 function getComparableNodeType(node) {
   if (node.nodeType !== Node.ELEMENT_NODE) return 'paragraph';
-  if (node.getAttribute('data-dh-node-type') === 'code_block') return 'code_block';
+
+  const explicitNodeType = node.getAttribute('data-dh-node-type');
+  if (explicitNodeType) return explicitNodeType;
 
   const tag = node.tagName.toLowerCase();
   if (/^h[1-6]$/.test(tag)) return 'heading';
@@ -330,12 +699,15 @@ function getComparableNodeType(node) {
   return 'paragraph';
 }
 
-function extractBlockMeta(node) {
+function extractBlockMeta(node, options = {}) {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = normaliseBlockText(node);
+    const html = options.html || (text ? `<p>${escapeHtml(text)}</p>` : '');
+
     return {
       key: text,
-      html: text ? `<p>${escapeHtml(text)}</p>` : '',
+      html,
+      renderedHtml: options.renderedHtml || html,
       tag: 'p',
       nodeType: 'paragraph',
       text,
@@ -346,27 +718,166 @@ function extractBlockMeta(node) {
   const tag = node.tagName.toLowerCase();
   const nodeType = getComparableNodeType(node);
   const text = normaliseBlockText(node);
+  const html = options.html || node.outerHTML;
+  const renderedHtml = options.renderedHtml || node.outerHTML;
+  const taskStatus = nodeType === 'task_item' ? node.getAttribute('data-dh-task-status') || '' : '';
   const hasNonTextMedia = Boolean(
     node.querySelector && node.querySelector('img, table, hr, iframe, video, audio')
   );
+  const key =
+    nodeType === 'unsupported'
+      ? `unsupported:${hashString(options.rawHtml || html)}`
+      : nodeType === 'task_item'
+        ? `task_item:${taskStatus}:${text}`
+        : stableHtmlSignature(node);
 
   return {
-    key: stableHtmlSignature(node),
-    html: node.outerHTML,
+    key,
+    html,
+    renderedHtml,
+    rawHtml: options.rawHtml || html,
     tag,
     nodeType,
     text,
-    canInlineDiff: nodeType !== 'code_block' && isTextDiffableTag(tag) && text && !hasNonTextMedia,
+    taskStatus,
+    supportLevel: nodeType === 'unsupported' ? 'raw' : 'full',
+    rawPreview: nodeType === 'unsupported' ? options.rawHtml || html : undefined,
+    canInlineDiff:
+      nodeType !== 'code_block' &&
+      nodeType !== 'unsupported' &&
+      isTextDiffableTag(tag) &&
+      text &&
+      !hasNonTextMedia,
   };
 }
 
-function extractDiffBlocks(html, baseUrl, attachmentsByFilename) {
-  const prepared = prepareConfluenceHtml(html, baseUrl, attachmentsByFilename);
-  const doc = new DOMParser().parseFromString(prepared, 'text/html');
+function wrapListItemHtml(listTag, itemHtml) {
+  return `<${listTag}>${itemHtml}</${listTag}>`;
+}
 
-  return Array.from(doc.body.childNodes)
+function hasBlockElementChildren(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+
+  return Array.from(node.children).some((child) =>
+    /^(p|div|section|h[1-6]|ul|ol|li|table|blockquote|pre|figure|hr|ac:layout|ac:layout-section|ac:layout-cell)$/i.test(child.tagName)
+  );
+}
+
+function isTransparentContainer(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+
+  const tag = node.tagName.toLowerCase();
+  if (node.getAttribute('data-dh-node-type')) return false;
+  if (tag === 'div' || tag === 'section' || tag === 'main' || tag === 'article') {
+    return hasBlockElementChildren(node);
+  }
+
+  return false;
+}
+
+function isRawTransparentContainer(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+
+  const tag = node.tagName.toLowerCase();
+
+  if (/^(p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|hr)$/i.test(tag)) return false;
+  if (/^ac:(layout|layout-section|layout-cell)$/i.test(tag)) return true;
+  if (/^(ac|ri):/i.test(tag)) return false;
+
+  return hasBlockElementChildren(node);
+}
+
+function collectRawBlockNodes(node) {
+  if (!node) return [];
+  if (node.nodeType === Node.TEXT_NODE) return normaliseBlockText(node) ? [node] : [];
+  if (node.nodeType !== Node.ELEMENT_NODE) return [];
+
+  if (isRawTransparentContainer(node)) {
+    return Array.from(node.childNodes).flatMap(collectRawBlockNodes);
+  }
+
+  return [node];
+}
+
+function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
+  if (!rawHtml) return [];
+
+  if (/<ac:task-list\b/i.test(rawHtml)) {
+    const taskItems = [];
+    const taskRe = /<ac:task\b[^>]*>[\s\S]*?<\/ac:task>/gi;
+    let match = taskRe.exec(rawHtml);
+
+    while (match) {
+      taskItems.push(`<ac:task-list>${match[0]}</ac:task-list>`);
+      match = taskRe.exec(rawHtml);
+    }
+
+    return taskItems.length === expectedCount ? taskItems : [];
+  }
+
+  const rawDoc = new DOMParser().parseFromString(rawHtml, 'text/html');
+  const list = rawDoc.body.querySelector(listTag);
+  if (!list) return [];
+
+  const items = Array.from(list.children).filter((child) => /^li$/i.test(child.tagName));
+  if (items.length !== expectedCount) return [];
+
+  return items.map((item) => wrapListItemHtml(listTag, item.outerHTML));
+}
+
+function extractComparableBlocksFromPreparedNode(node, rawHtml) {
+  if (isTransparentContainer(node)) {
+    return Array.from(node.childNodes)
+      .filter((child) => child.nodeType === Node.ELEMENT_NODE || normaliseBlockText(child))
+      .flatMap((child) => extractComparableBlocksFromPreparedNode(child, getNodeOuterHtml(child)));
+  }
+
+  if (node.nodeType === Node.ELEMENT_NODE && /^(ul|ol)$/i.test(node.tagName)) {
+    const listTag = node.tagName.toLowerCase();
+    const items = Array.from(node.children).filter((child) => /^li$/i.test(child.tagName));
+
+    if (items.length) {
+      const rawItemHtmls = extractRawListItemHtmls(rawHtml, listTag, items.length);
+
+      return items.map((item) => {
+        const itemHtml = wrapListItemHtml(listTag, item.outerHTML);
+        const reconstructionHtml = rawItemHtmls.length ? rawItemHtmls.shift() : itemHtml;
+
+        return extractBlockMeta(item, {
+          html: reconstructionHtml,
+          renderedHtml: itemHtml,
+          rawHtml: reconstructionHtml,
+        });
+      });
+    }
+  }
+
+  const renderedHtml = getNodeOuterHtml(node);
+  return [
+    extractBlockMeta(node, {
+      html: rawHtml || renderedHtml,
+      renderedHtml,
+      rawHtml: rawHtml || renderedHtml,
+    }),
+  ];
+}
+
+function extractDiffBlocks(html, baseUrl, attachmentsByFilename) {
+  const rawDoc = new DOMParser().parseFromString(html || '', 'text/html');
+  const rawBlocks = Array.from(rawDoc.body.childNodes)
     .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-    .map(extractBlockMeta)
+    .flatMap(collectRawBlockNodes);
+
+  return rawBlocks
+    .flatMap((rawNode) => {
+      const rawHtml = getNodeOuterHtml(rawNode);
+      const prepared = prepareConfluenceHtml(rawHtml, baseUrl, attachmentsByFilename);
+      const preparedDoc = new DOMParser().parseFromString(prepared, 'text/html');
+
+      return Array.from(preparedDoc.body.childNodes)
+        .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
+        .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml));
+    })
     .filter((block) => block.html);
 }
 
@@ -384,9 +895,16 @@ function createDiffSummary(overrides = {}) {
 }
 
 function renderDiffBlock(block) {
-  if (block.type === 'same') return block.html;
+  if (block.type === 'same') return block.renderedHtml || block.html;
 
-  const html = block.renderedHtml || block.newHtml || block.oldHtml || block.html || '';
+  const html =
+    block.renderedHtml ||
+    block.newRenderedHtml ||
+    block.oldRenderedHtml ||
+    block.newHtml ||
+    block.oldHtml ||
+    block.html ||
+    '';
   return `<div class="dh-rich-diff-block dh-rich-diff-block--${block.type}">${html}</div>`;
 }
 
@@ -397,6 +915,10 @@ function makeSameBlock(block) {
     nodeType: block.nodeType,
     text: block.text,
     html: block.html,
+    renderedHtml: block.renderedHtml,
+    taskStatus: block.taskStatus,
+    supportLevel: block.supportLevel,
+    rawPreview: block.rawPreview,
   };
 }
 
@@ -407,7 +929,10 @@ function makeAddedBlock(block) {
     nodeType: block.nodeType,
     text: block.text,
     newHtml: block.html,
-    renderedHtml: block.html,
+    renderedHtml: block.renderedHtml || block.html,
+    taskStatus: block.taskStatus,
+    supportLevel: block.supportLevel,
+    rawPreview: block.rawPreview,
     added: 1,
     removed: 0,
   };
@@ -420,7 +945,10 @@ function makeRemovedBlock(block) {
     nodeType: block.nodeType,
     text: block.text,
     oldHtml: block.html,
-    renderedHtml: block.html,
+    renderedHtml: block.renderedHtml || block.html,
+    taskStatus: block.taskStatus,
+    supportLevel: block.supportLevel,
+    rawPreview: block.rawPreview,
     added: 0,
     removed: 1,
   };
@@ -722,6 +1250,12 @@ function canPairForInlineDiff(oldBlock, currentBlock) {
   if (!oldBlock || !currentBlock) return false;
   if (oldBlock.nodeType === 'table' && currentBlock.nodeType === 'table') return true;
   if (oldBlock.nodeType === 'code_block' && currentBlock.nodeType === 'code_block') return true;
+  if (
+    ['paragraph', 'heading', 'panel', 'blockquote', 'unsupported'].includes(oldBlock.nodeType) ||
+    ['paragraph', 'heading', 'panel', 'blockquote', 'unsupported'].includes(currentBlock.nodeType)
+  ) {
+    return false;
+  }
   if (!oldBlock.canInlineDiff || !currentBlock.canInlineDiff) return false;
   if (oldBlock.tag !== currentBlock.tag) return false;
   return textSimilarity(oldBlock.text, currentBlock.text) >= 0.25;
@@ -923,6 +1457,21 @@ function buildModifiedBlockDiff(oldBlock, currentBlock) {
     return buildCodeBlockDiff(oldBlock, currentBlock);
   }
 
+  if (oldBlock.nodeType === 'task_item' && currentBlock.nodeType === 'task_item') {
+    return buildTaskItemDiff(oldBlock, currentBlock);
+  }
+
+  if (
+    ['paragraph', 'heading', 'list_item', 'panel', 'blockquote', 'unsupported'].includes(
+      oldBlock.nodeType
+    ) ||
+    ['paragraph', 'heading', 'list_item', 'panel', 'blockquote', 'unsupported'].includes(
+      currentBlock.nodeType
+    )
+  ) {
+    return buildBlockLevelModifiedDiff(oldBlock, currentBlock);
+  }
+
   const inlineDiff = buildInlineTextDiff(oldBlock.text, currentBlock.text);
   return {
     type: 'modified',
@@ -932,11 +1481,52 @@ function buildModifiedBlockDiff(oldBlock, currentBlock) {
     newText: currentBlock.text,
     oldHtml: oldBlock.html,
     newHtml: currentBlock.html,
+    oldRenderedHtml: oldBlock.renderedHtml || oldBlock.html,
+    newRenderedHtml: currentBlock.renderedHtml || currentBlock.html,
     renderedHtml: renderBlockWithInlineDiff(currentBlock, inlineDiff.html),
     inline: inlineDiff.parts,
     added: inlineDiff.added,
     removed: inlineDiff.removed,
     limited: inlineDiff.limited,
+  };
+}
+
+function buildBlockLevelModifiedDiff(oldBlock, currentBlock) {
+  return {
+    type: 'modified',
+    tag: currentBlock.tag,
+    nodeType: currentBlock.nodeType,
+    oldText: oldBlock.text,
+    newText: currentBlock.text,
+    oldHtml: oldBlock.html,
+    newHtml: currentBlock.html,
+    oldRenderedHtml: oldBlock.renderedHtml || oldBlock.html,
+    newRenderedHtml: currentBlock.renderedHtml || currentBlock.html,
+    renderedHtml: currentBlock.renderedHtml || currentBlock.html,
+    inline: [],
+    supportLevel: currentBlock.supportLevel || oldBlock.supportLevel,
+    rawPreview: currentBlock.rawPreview || oldBlock.rawPreview,
+    added: oldBlock.text === currentBlock.text ? 0 : 1,
+    removed: oldBlock.text === currentBlock.text ? 0 : 1,
+    limited: false,
+  };
+}
+
+function buildTaskItemDiff(oldBlock, currentBlock) {
+  const textChanged = oldBlock.text !== currentBlock.text;
+  const statusChanged = oldBlock.taskStatus !== currentBlock.taskStatus;
+
+  return {
+    ...buildBlockLevelModifiedDiff(oldBlock, currentBlock),
+    nodeType: 'task_item',
+    taskDiff: {
+      oldStatus: oldBlock.taskStatus || 'incomplete',
+      newStatus: currentBlock.taskStatus || 'incomplete',
+      statusChanged,
+      textChanged,
+    },
+    added: textChanged || statusChanged ? 1 : 0,
+    removed: textChanged || statusChanged ? 1 : 0,
   };
 }
 
@@ -983,6 +1573,10 @@ function coalesceReplacementBlocks(blocks) {
       nodeType: removedBlock.nodeType,
       text: removedBlock.text,
       html: removedBlock.oldHtml,
+      renderedHtml: removedBlock.renderedHtml,
+      taskStatus: removedBlock.taskStatus,
+      supportLevel: removedBlock.supportLevel,
+      rawPreview: removedBlock.rawPreview,
       canInlineDiff: isTextDiffableTag(removedBlock.tag),
     };
     const currentComparableBlock = {
@@ -990,6 +1584,10 @@ function coalesceReplacementBlocks(blocks) {
       nodeType: addedBlock.nodeType,
       text: addedBlock.text,
       html: addedBlock.newHtml,
+      renderedHtml: addedBlock.renderedHtml,
+      taskStatus: addedBlock.taskStatus,
+      supportLevel: addedBlock.supportLevel,
+      rawPreview: addedBlock.rawPreview,
       canInlineDiff: isTextDiffableTag(addedBlock.tag),
     };
 
