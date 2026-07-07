@@ -280,4 +280,116 @@ resolver.define('createDraft', async (req) => {
   };
 });
 
+
+resolver.define('writeRecoveredPage', async (req) => {
+  const pageId = req.payload && req.payload.pageId;
+  const bodyValue = req.payload && req.payload.bodyValue;
+  const expectedVersionNumber = Number(req.payload && req.payload.expectedVersionNumber);
+
+  if (!pageId) {
+    throw new Error('A page id is required to write recovered content.');
+  }
+
+  if (typeof bodyValue !== 'string') {
+    throw new Error('Recovered content must be provided as a string.');
+  }
+
+  if (!bodyValue.trim()) {
+    throw new Error('Recovered content is empty, so the page was not updated.');
+  }
+
+  // Keep unexpectedly large client payloads from consuming the resolver
+  // invocation. Normal Confluence pages are well below this defensive limit.
+  if (bodyValue.length > 2_000_000) {
+    throw new Error('The recovered content is too large to write safely.');
+  }
+
+  // Re-read the page immediately before updating it. This gives us the latest
+  // title, version, and permission check from Confluence instead of trusting
+  // stale client-side data.
+  const pageRes = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}?body-format=storage`,
+    { headers: { Accept: 'application/json' } }
+  );
+
+  if (!pageRes.ok) {
+    throw new Error(`Unable to read the current page (${pageRes.status}): ${await pageRes.text()}`);
+  }
+
+  const currentPage = await pageRes.json();
+  const currentVersionNumber =
+    currentPage.version && Number.isInteger(currentPage.version.number)
+      ? currentPage.version.number
+      : null;
+
+  if (!currentVersionNumber) {
+    throw new Error('Unable to determine the current page version.');
+  }
+
+  if (
+    Number.isInteger(expectedVersionNumber) &&
+    expectedVersionNumber !== currentVersionNumber
+  ) {
+    throw new Error(
+      `The page is now v${currentVersionNumber}, but this recovery was prepared from v${expectedVersionNumber}. Reload before writing back to avoid overwriting newer changes.`
+    );
+  }
+
+  const updatePayload = {
+    id: String(currentPage.id || pageId),
+    status: 'current',
+    title: currentPage.title || 'Untitled page',
+    body: {
+      representation: 'storage',
+      value: bodyValue,
+    },
+    version: {
+      number: currentVersionNumber + 1,
+      message: 'Recovered selected content with Dynamic History',
+    },
+  };
+
+  if (currentPage.spaceId) {
+    updatePayload.spaceId = currentPage.spaceId;
+  }
+
+  if (currentPage.parentId) {
+    updatePayload.parentId = currentPage.parentId;
+  }
+
+  const updateRes = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}`,
+    {
+      method: 'PUT',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updatePayload),
+    }
+  );
+
+  if (!updateRes.ok) {
+    throw new Error(`Confluence update API ${updateRes.status}: ${await updateRes.text()}`);
+  }
+
+  const updatedPage = await updateRes.json();
+  const baseUrl =
+    (updatedPage._links && updatedPage._links.base) ||
+    (currentPage._links && currentPage._links.base) ||
+    '';
+  const webUiPath = updatedPage._links && updatedPage._links.webui ? updatedPage._links.webui : '';
+
+  return {
+    id: updatedPage.id || String(pageId),
+    status: updatedPage.status || 'current',
+    title: updatedPage.title || updatePayload.title,
+    versionNumber:
+      updatedPage.version && updatedPage.version.number
+        ? updatedPage.version.number
+        : currentVersionNumber + 1,
+    url: webUiPath && baseUrl ? `${baseUrl}${webUiPath}` : webUiPath,
+  };
+});
+
 export const handler = resolver.getDefinitions();

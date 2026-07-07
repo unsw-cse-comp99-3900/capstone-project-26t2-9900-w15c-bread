@@ -79,6 +79,47 @@ function getNodeOuterHtml(node) {
   return '';
 }
 
+const CONFLUENCE_EMPTY_STORAGE_TAGS = new Set([
+  'ac:emoticon',
+  'ri:attachment',
+  'ri:blog-post',
+  'ri:comment',
+  'ri:content-entity',
+  'ri:date',
+  'ri:page',
+  'ri:space',
+  'ri:url',
+  'ri:user',
+]);
+
+const HTML_EMPTY_STORAGE_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+function getNodeAttributeHtml(node) {
+  return Array.from(node.attributes || [])
+    .map((attr) => ` ${attr.name}="${escapeHtml(attr.value)}"`)
+    .join('');
+}
+
+export function getStorageNodeOuterHtml(node) {
+  if (!node) return '';
+  if (node.nodeType === Node.TEXT_NODE) return escapeHtml(node.textContent || '');
+  if (node.nodeType === Node.COMMENT_NODE) {
+    const value = node.nodeValue || '';
+    return /^\[CDATA\[[\s\S]*\]\]$/.test(value) ? `<!${value}>` : `<!--${value}-->`;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+  const tag = String(node.tagName || '').toLowerCase();
+  const attributes = getNodeAttributeHtml(node);
+  const children = Array.from(node.childNodes || []).map(getStorageNodeOuterHtml).join('');
+
+  if (CONFLUENCE_EMPTY_STORAGE_TAGS.has(tag) || HTML_EMPTY_STORAGE_TAGS.has(tag)) {
+    return `<${tag}${attributes} />${children}`;
+  }
+
+  return `<${tag}${attributes}>${children}</${tag}>`;
+}
+
 function hashString(value) {
   let hash = 0;
   const text = String(value || '');
@@ -274,6 +315,154 @@ function removeAdfAttributes(markup) {
   return String(markup || '').replace(/<ac:adf-attribute\b[\s\S]*?<\/ac:adf-attribute>/gi, '');
 }
 
+
+function isAdfNodeElement(node) {
+  return (
+    node &&
+    node.nodeType === Node.ELEMENT_NODE &&
+    String(node.tagName || '').toLowerCase() === 'ac:adf-node'
+  );
+}
+
+function isAdfAttributeElement(node) {
+  return (
+    node &&
+    node.nodeType === Node.ELEMENT_NODE &&
+    String(node.tagName || '').toLowerCase() === 'ac:adf-attribute'
+  );
+}
+
+function getAdfNodeTypeFromElement(node) {
+  return String(
+    (node && (node.getAttribute('type') || node.getAttribute('ac:type'))) || ''
+  ).toLowerCase();
+}
+
+function getAdfAttributeFromElement(node, names) {
+  const keys = Array.isArray(names) ? names : [names];
+  const wanted = new Set(keys.map((key) => String(key).toLowerCase()));
+  const attributes = Array.from(node ? node.children : []).filter(isAdfAttributeElement);
+
+  for (const attr of attributes) {
+    const key = String(
+      attr.getAttribute('key') ||
+        attr.getAttribute('ac:key') ||
+        attr.getAttribute('name') ||
+        attr.getAttribute('ac:name') ||
+        ''
+    ).toLowerCase();
+
+    if (wanted.has(key)) {
+      return stripTags(decodeCdata(attr.innerHTML || attr.textContent || '')).trim();
+    }
+  }
+
+  return '';
+}
+
+function removeAdfAttributeElements(root) {
+  if (!root || !root.querySelectorAll) return;
+  Array.from(root.querySelectorAll('*'))
+    .filter(isAdfAttributeElement)
+    .forEach((node) => node.remove());
+}
+
+function htmlToFragmentNodes(doc, html) {
+  const template = doc.createElement('template');
+  template.innerHTML = html;
+  return Array.from(template.content.childNodes);
+}
+
+function getAdfBodyHtml(node) {
+  const clone = node.cloneNode(true);
+  removeAdfAttributeElements(clone);
+  return clone.innerHTML || '';
+}
+
+function renderAdfTaskItemElement(node) {
+  const state = getAdfAttributeFromElement(node, ['state', 'checked']);
+  const checked = /^(done|complete|checked|true)$/i.test(state);
+  const body = expandAdfNodes(getAdfBodyHtml(node));
+
+  return [
+    `<li data-dh-node-type="task_item" data-dh-task-status="${checked ? 'complete' : 'incomplete'}">`,
+    `<span data-dh-task-marker="true">${checked ? '[x]' : '[ ]'}</span> `,
+    body,
+    '</li>',
+  ].join('');
+}
+
+function renderAdfNodeElement(node) {
+  const type = getAdfNodeTypeFromElement(node);
+
+  if (type === 'status') {
+    const text =
+      cleanUserFacingName(getAdfAttributeFromElement(node, ['text', 'title', 'localId'])) ||
+      'Status';
+    return `<span data-dh-node-type="status">[Status: ${escapeHtml(text)}]</span>`;
+  }
+
+  if (type === 'emoji') {
+    const name = getAdfAttributeFromElement(node, ['shortName', 'text', 'name']);
+    return `<span data-dh-node-type="emoji">${escapeHtml(fallbackEmojiText(name))}</span>`;
+  }
+
+  if (type === 'date') {
+    const value = cleanUserFacingName(getAdfAttributeFromElement(node, ['timestamp', 'date', 'value']));
+    return value ? `<span data-dh-node-type="date">${escapeHtml(value)}</span>` : '[Date]';
+  }
+
+  if (type === 'mention') {
+    const displayName = cleanUserFacingName(
+      getAdfAttributeFromElement(node, ['text', 'displayName'])
+    );
+    return `<span data-dh-node-type="mention">${escapeHtml(displayName ? `@${displayName}` : '[Mention]')}</span>`;
+  }
+
+  if (['inlinecard', 'blockcard', 'embedcard'].includes(type)) {
+    const title = cleanUserFacingName(
+      getAdfAttributeFromElement(node, ['title', 'text', 'name', 'displayName'])
+    );
+    const url = getAdfAttributeFromElement(node, ['url', 'href']);
+
+    if (isWhiteboardUrl(url)) {
+      return renderWhiteboardCard(url, title);
+    }
+
+    return `<div data-dh-node-type="smart_link">${escapeHtml(title || '[Smart link]')}</div>`;
+  }
+
+  if (type === 'decisionitem') {
+    return `<div data-dh-node-type="decision">[Decision] ${expandAdfNodes(getAdfBodyHtml(node))}</div>`;
+  }
+
+  if (type === 'taskitem') {
+    return `<ul data-dh-node-type="task_list">${renderAdfTaskItemElement(node)}</ul>`;
+  }
+
+  if (type === 'tasklist') {
+    const taskItems = Array.from(node.children).filter(
+      (child) => isAdfNodeElement(child) && getAdfNodeTypeFromElement(child) === 'taskitem'
+    );
+
+    if (!taskItems.length) {
+      return createRawFallbackHtml(node.outerHTML, { type: 'Task list' });
+    }
+
+    return `<ul data-dh-node-type="task_list">${taskItems
+      .map(renderAdfTaskItemElement)
+      .join('')}</ul>`;
+  }
+
+  if (['extension', 'bodiedextension', 'multibodiedextension'].includes(type)) {
+    return createRawFallbackHtml(node.outerHTML, {
+      type: 'Extension',
+      name: titleCaseStorageName(getAdfAttributeFromElement(node, ['extensionTitle', 'title'])),
+    });
+  }
+
+  return node.outerHTML || '';
+}
 function fallbackEmojiText(name) {
   const cleanedName = cleanUserFacingName(String(name || '').replace(/^:|:$/g, ''));
   if (!cleanedName) return '[Emoji]';
@@ -310,7 +499,7 @@ function createRawFallbackHtml(rawMarkup, options = {}) {
 function expandConfluenceTaskLists(html) {
   return String(html || '').replace(/<ac:task-list\b[^>]*>[\s\S]*?<\/ac:task-list>/gi, (listMarkup) => {
     const taskItems = [];
-    const taskRe = /<ac:task\b[^>]*>([\s\S]*?)<\/ac:task>/gi;
+    const taskRe = /<ac:task(?!-)\b[^>]*>([\s\S]*?)<\/ac:task>/gi;
     let match = taskRe.exec(listMarkup);
 
     while (match) {
@@ -352,95 +541,21 @@ function expandWhiteboardAnchors(html) {
 }
 
 function expandAdfNodes(html) {
-  let expanded = String(html || '');
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']status["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
-    (match) => {
-      const text =
-        cleanUserFacingName(extractAdfAttribute(match, ['text', 'title', 'localId'])) ||
-        'Status';
-      return `<span data-dh-node-type="status">[Status: ${escapeHtml(text)}]</span>`;
-    }
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const adfNodes = Array.from(doc.body.querySelectorAll('*')).filter(
+    (node) =>
+      isAdfNodeElement(node) &&
+      !node.parentElement.closest('ac\\:adf-node')
   );
 
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']emoji["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
-    (match) => {
-      const name = extractAdfAttribute(match, ['shortName', 'text', 'name']);
-      return `<span data-dh-node-type="emoji">${escapeHtml(fallbackEmojiText(name))}</span>`;
-    }
-  );
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']date["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
-    (match) => {
-      const value = cleanUserFacingName(extractAdfAttribute(match, ['timestamp', 'date', 'value']));
-      return value ? `<span data-dh-node-type="date">${escapeHtml(value)}</span>` : '[Date]';
-    }
-  );
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']mention["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
-    (match) => {
-      const displayName = cleanUserFacingName(extractAdfAttribute(match, ['text', 'displayName']));
-      return `<span data-dh-node-type="mention">${escapeHtml(displayName ? `@${displayName}` : '[Mention]')}</span>`;
-    }
-  );
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:inlineCard|blockCard|embedCard)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
-    (match) => {
-      const title = cleanUserFacingName(
-        extractAdfAttribute(match, ['title', 'text', 'name', 'displayName'])
-      );
-      const url = extractAdfAttribute(match, ['url', 'href']);
-
-      if (isWhiteboardUrl(url)) {
-        return renderWhiteboardCard(url, title);
-      }
-
-      return `<div data-dh-node-type="smart_link">${escapeHtml(title || '[Smart link]')}</div>`;
-    }
-  );
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']decisionItem["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
-    (_match, body) => `<div data-dh-node-type="decision">[Decision] ${removeAdfAttributes(body)}</div>`
-  );
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']taskItem["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
-    (match, body) => {
-      const state = extractAdfAttribute(match, ['state', 'checked']);
-      const checked = /^(done|complete|checked|true)$/i.test(state);
-      return [
-        `<li data-dh-node-type="task_item" data-dh-task-status="${checked ? 'complete' : 'incomplete'}">`,
-        `<span data-dh-task-marker="true">${checked ? '[x]' : '[ ]'}</span> `,
-        removeAdfAttributes(body),
-        '</li>',
-      ].join('');
-    }
-  );
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']taskList["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
-    (_match, body) => `<ul data-dh-node-type="task_list">${body}</ul>`
-  );
-
-  expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:extension|bodiedExtension|multiBodiedExtension)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
-    (match) =>
-      createRawFallbackHtml(match, {
-        type: 'Extension',
-        name: titleCaseStorageName(extractAdfAttribute(match, ['extensionTitle', 'title'])),
-      })
-  );
+  adfNodes.forEach((node) => {
+    node.replaceWith(...htmlToFragmentNodes(doc, renderAdfNodeElement(node)));
+  });
 
   // Any remaining ADF attributes are implementation details. Removing them
   // prevents localIds, colors, gadget URLs, and state fields from becoming
   // ordinary preview text when their parent node is rendered in simplified form.
-  return removeAdfAttributes(expanded);
+  return removeAdfAttributes(doc.body.innerHTML);
 }
 
 function expandKnownStructuredMacros(html) {
@@ -740,15 +855,55 @@ function extractBlockMeta(node, options = {}) {
     nodeType,
     text,
     taskStatus,
-    supportLevel: nodeType === 'unsupported' ? 'raw' : 'full',
-    rawPreview: nodeType === 'unsupported' ? options.rawHtml || html : undefined,
+    supportLevel: options.supportLevel || (nodeType === 'unsupported' ? 'raw' : 'full'),
+    rawPreview:
+      options.rawPreview ||
+      (nodeType === 'unsupported' ? options.rawHtml || html : undefined),
+    storageGroupHtml: options.storageGroupHtml,
+
+    storageGroupKey: options.storageGroupKey,
+
+    storageGroupKind: options.storageGroupKind,
+
     canInlineDiff:
       nodeType !== 'code_block' &&
       nodeType !== 'unsupported' &&
+      options.storageGroupKind !== 'raw-block' &&
       isTextDiffableTag(tag) &&
       text &&
       !hasNonTextMedia,
   };
+}
+
+function extractAtomicRawStorageBlock(preparedHtml, rawHtml, storageGroup) {
+  const preparedDoc = new DOMParser().parseFromString(preparedHtml || '', 'text/html');
+  const children = Array.from(preparedDoc.body.childNodes).filter(
+    (node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node)
+  );
+  const renderedHtml = children.map(getNodeOuterHtml).join('');
+  let node =
+    children.length === 1 && children[0].nodeType === Node.ELEMENT_NODE
+      ? children[0]
+      : null;
+
+  if (!node) {
+    node = preparedDoc.createElement('div');
+    node.setAttribute('data-dh-node-type', 'raw_block');
+    node.innerHTML = renderedHtml;
+  }
+
+  return [
+    extractBlockMeta(node, {
+      html: rawHtml || renderedHtml,
+      renderedHtml,
+      rawHtml: rawHtml || renderedHtml,
+      rawPreview: rawHtml || renderedHtml,
+      supportLevel: 'raw',
+      storageGroupHtml: storageGroup.html,
+      storageGroupKey: storageGroup.key,
+      storageGroupKind: storageGroup.kind,
+    }),
+  ];
 }
 
 function wrapListItemHtml(listTag, itemHtml) {
@@ -787,6 +942,19 @@ function isRawTransparentContainer(node) {
   return hasBlockElementChildren(node);
 }
 
+function shouldPreserveRawStorageGroup(rawHtml) {
+  const storage = String(rawHtml || '');
+
+  return (
+    /<ac:structured-macro\b/i.test(storage) ||
+    /<ac:(?:adf-extension|bodied-extension|extension)\b/i.test(storage) ||
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:panel|expand|nestedExpand|status|decisionItem|inlineCard|blockCard|embedCard|extension|bodiedExtension|multiBodiedExtension|emoji|date|mention)["']/i.test(storage) ||
+    /<ac:link\b/i.test(storage) ||
+    /<a\b[^>]*href=["'][^"']+\/whiteboard\/[^"']+["']/i.test(storage) ||
+    /<ac:image\b/i.test(storage)
+  );
+}
+
 function collectRawBlockNodes(node) {
   if (!node) return [];
   if (node.nodeType === Node.TEXT_NODE) return normaliseBlockText(node) ? [node] : [];
@@ -802,9 +970,25 @@ function collectRawBlockNodes(node) {
 function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
   if (!rawHtml) return [];
 
+  if (/<ac:adf-node\b[^>]*(?:type|ac:type)=["']taskList["']/i.test(rawHtml)) {
+    const rawDoc = new DOMParser().parseFromString(rawHtml, 'text/html');
+    const taskList = Array.from(rawDoc.body.querySelectorAll('*')).find(
+      (node) => isAdfNodeElement(node) && getAdfNodeTypeFromElement(node) === 'tasklist'
+    );
+    const taskItems = taskList
+      ? Array.from(taskList.children).filter(
+          (child) => isAdfNodeElement(child) && getAdfNodeTypeFromElement(child) === 'taskitem'
+        )
+      : [];
+
+    return taskItems.length === expectedCount
+      ? taskItems.map((item) => `<ac:adf-node type="taskList">${getStorageNodeOuterHtml(item)}</ac:adf-node>`)
+      : [];
+  }
+
   if (/<ac:task-list\b/i.test(rawHtml)) {
     const taskItems = [];
-    const taskRe = /<ac:task\b[^>]*>[\s\S]*?<\/ac:task>/gi;
+    const taskRe = /<ac:task(?!-)\b[^>]*>[\s\S]*?<\/ac:task>/gi;
     let match = taskRe.exec(rawHtml);
 
     while (match) {
@@ -822,14 +1006,20 @@ function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
   const items = Array.from(list.children).filter((child) => /^li$/i.test(child.tagName));
   if (items.length !== expectedCount) return [];
 
-  return items.map((item) => wrapListItemHtml(listTag, item.outerHTML));
+  return items.map((item) => wrapListItemHtml(listTag, getStorageNodeOuterHtml(item)));
 }
 
-function extractComparableBlocksFromPreparedNode(node, rawHtml) {
+function extractComparableBlocksFromPreparedNode(node, rawHtml, storageGroup = null) {
   if (isTransparentContainer(node)) {
     return Array.from(node.childNodes)
       .filter((child) => child.nodeType === Node.ELEMENT_NODE || normaliseBlockText(child))
-      .flatMap((child) => extractComparableBlocksFromPreparedNode(child, getNodeOuterHtml(child)));
+      .flatMap((child) =>
+        extractComparableBlocksFromPreparedNode(
+          child,
+          storageGroup ? rawHtml : getNodeOuterHtml(child),
+          storageGroup
+        )
+      );
   }
 
   if (node.nodeType === Node.ELEMENT_NODE && /^(ul|ol)$/i.test(node.tagName)) {
@@ -847,6 +1037,9 @@ function extractComparableBlocksFromPreparedNode(node, rawHtml) {
           html: reconstructionHtml,
           renderedHtml: itemHtml,
           rawHtml: reconstructionHtml,
+          storageGroupHtml: rawHtml,
+          storageGroupKey: `${listTag}:${hashString(rawHtml)}`,
+          storageGroupKind: listTag,
         });
       });
     }
@@ -858,6 +1051,9 @@ function extractComparableBlocksFromPreparedNode(node, rawHtml) {
       html: rawHtml || renderedHtml,
       renderedHtml,
       rawHtml: rawHtml || renderedHtml,
+      storageGroupHtml: storageGroup ? storageGroup.html : undefined,
+      storageGroupKey: storageGroup ? storageGroup.key : undefined,
+      storageGroupKind: storageGroup ? storageGroup.kind : undefined,
     }),
   ];
 }
@@ -869,14 +1065,26 @@ function extractDiffBlocks(html, baseUrl, attachmentsByFilename) {
     .flatMap(collectRawBlockNodes);
 
   return rawBlocks
-    .flatMap((rawNode) => {
-      const rawHtml = getNodeOuterHtml(rawNode);
+    .flatMap((rawNode, rawIndex) => {
+      const rawHtml = getStorageNodeOuterHtml(rawNode);
+      const rawStorageGroup = shouldPreserveRawStorageGroup(rawHtml)
+        ? {
+            html: rawHtml,
+            key: `raw-block:${rawIndex}:${hashString(rawHtml)}`,
+            kind: 'raw-block',
+          }
+        : null;
       const prepared = prepareConfluenceHtml(rawHtml, baseUrl, attachmentsByFilename);
+
+      if (rawStorageGroup) {
+        return extractAtomicRawStorageBlock(prepared, rawHtml, rawStorageGroup);
+      }
+
       const preparedDoc = new DOMParser().parseFromString(prepared, 'text/html');
 
       return Array.from(preparedDoc.body.childNodes)
         .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-        .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml));
+        .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml, rawStorageGroup));
     })
     .filter((block) => block.html);
 }
@@ -908,17 +1116,28 @@ function renderDiffBlock(block) {
   return `<div class="dh-rich-diff-block dh-rich-diff-block--${block.type}">${html}</div>`;
 }
 
-function makeSameBlock(block) {
+function makeSameBlock(currentBlock, oldBlock = currentBlock) {
   return {
     type: 'same',
-    tag: block.tag,
-    nodeType: block.nodeType,
-    text: block.text,
-    html: block.html,
-    renderedHtml: block.renderedHtml,
-    taskStatus: block.taskStatus,
-    supportLevel: block.supportLevel,
-    rawPreview: block.rawPreview,
+    tag: currentBlock.tag,
+    nodeType: currentBlock.nodeType,
+    text: currentBlock.text,
+    html: oldBlock.html || currentBlock.html,
+    renderedHtml: oldBlock.renderedHtml || currentBlock.renderedHtml,
+    oldRawHtml: oldBlock.rawHtml || oldBlock.html,
+    newRawHtml: currentBlock.rawHtml || currentBlock.html,
+    taskStatus: currentBlock.taskStatus,
+    supportLevel: currentBlock.supportLevel || oldBlock.supportLevel,
+    rawPreview: currentBlock.rawPreview || oldBlock.rawPreview,
+    oldStorageGroupHtml: oldBlock.storageGroupHtml,
+    oldStorageGroupKey: oldBlock.storageGroupKey,
+    oldStorageGroupKind: oldBlock.storageGroupKind,
+    newStorageGroupHtml: currentBlock.storageGroupHtml,
+    newStorageGroupKey: currentBlock.storageGroupKey,
+    newStorageGroupKind: currentBlock.storageGroupKind,
+    storageGroupHtml: oldBlock.storageGroupHtml || currentBlock.storageGroupHtml,
+    storageGroupKey: oldBlock.storageGroupKey || currentBlock.storageGroupKey,
+    storageGroupKind: oldBlock.storageGroupKind || currentBlock.storageGroupKind,
   };
 }
 
@@ -929,10 +1148,14 @@ function makeAddedBlock(block) {
     nodeType: block.nodeType,
     text: block.text,
     newHtml: block.html,
+    newRawHtml: block.rawHtml || block.html,
     renderedHtml: block.renderedHtml || block.html,
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    newStorageGroupHtml: block.storageGroupHtml,
+    newStorageGroupKey: block.storageGroupKey,
+    newStorageGroupKind: block.storageGroupKind,
     added: 1,
     removed: 0,
   };
@@ -945,10 +1168,14 @@ function makeRemovedBlock(block) {
     nodeType: block.nodeType,
     text: block.text,
     oldHtml: block.html,
+    oldRawHtml: block.rawHtml || block.html,
     renderedHtml: block.renderedHtml || block.html,
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    oldStorageGroupHtml: block.storageGroupHtml,
+    oldStorageGroupKey: block.storageGroupKey,
+    oldStorageGroupKind: block.storageGroupKind,
     added: 0,
     removed: 1,
   };
@@ -1251,8 +1478,8 @@ function canPairForInlineDiff(oldBlock, currentBlock) {
   if (oldBlock.nodeType === 'table' && currentBlock.nodeType === 'table') return true;
   if (oldBlock.nodeType === 'code_block' && currentBlock.nodeType === 'code_block') return true;
   if (
-    ['paragraph', 'heading', 'panel', 'blockquote', 'unsupported'].includes(oldBlock.nodeType) ||
-    ['paragraph', 'heading', 'panel', 'blockquote', 'unsupported'].includes(currentBlock.nodeType)
+    ['paragraph', 'heading', 'panel', 'blockquote', 'unsupported', 'raw_block'].includes(oldBlock.nodeType) ||
+    ['paragraph', 'heading', 'panel', 'blockquote', 'unsupported', 'raw_block'].includes(currentBlock.nodeType)
   ) {
     return false;
   }
@@ -1462,10 +1689,10 @@ function buildModifiedBlockDiff(oldBlock, currentBlock) {
   }
 
   if (
-    ['paragraph', 'heading', 'list_item', 'panel', 'blockquote', 'unsupported'].includes(
+    ['paragraph', 'heading', 'list_item', 'panel', 'blockquote', 'unsupported', 'raw_block'].includes(
       oldBlock.nodeType
     ) ||
-    ['paragraph', 'heading', 'list_item', 'panel', 'blockquote', 'unsupported'].includes(
+    ['paragraph', 'heading', 'list_item', 'panel', 'blockquote', 'unsupported', 'raw_block'].includes(
       currentBlock.nodeType
     )
   ) {
@@ -1500,12 +1727,20 @@ function buildBlockLevelModifiedDiff(oldBlock, currentBlock) {
     newText: currentBlock.text,
     oldHtml: oldBlock.html,
     newHtml: currentBlock.html,
+    oldRawHtml: oldBlock.rawHtml || oldBlock.html,
+    newRawHtml: currentBlock.rawHtml || currentBlock.html,
     oldRenderedHtml: oldBlock.renderedHtml || oldBlock.html,
     newRenderedHtml: currentBlock.renderedHtml || currentBlock.html,
     renderedHtml: currentBlock.renderedHtml || currentBlock.html,
     inline: [],
     supportLevel: currentBlock.supportLevel || oldBlock.supportLevel,
     rawPreview: currentBlock.rawPreview || oldBlock.rawPreview,
+    oldStorageGroupHtml: oldBlock.storageGroupHtml,
+    oldStorageGroupKey: oldBlock.storageGroupKey,
+    oldStorageGroupKind: oldBlock.storageGroupKind,
+    newStorageGroupHtml: currentBlock.storageGroupHtml,
+    newStorageGroupKey: currentBlock.storageGroupKey,
+    newStorageGroupKind: currentBlock.storageGroupKind,
     added: oldBlock.text === currentBlock.text ? 0 : 1,
     removed: oldBlock.text === currentBlock.text ? 0 : 1,
     limited: false,
@@ -1573,10 +1808,14 @@ function coalesceReplacementBlocks(blocks) {
       nodeType: removedBlock.nodeType,
       text: removedBlock.text,
       html: removedBlock.oldHtml,
+      rawHtml: removedBlock.oldRawHtml || removedBlock.oldHtml,
       renderedHtml: removedBlock.renderedHtml,
       taskStatus: removedBlock.taskStatus,
       supportLevel: removedBlock.supportLevel,
       rawPreview: removedBlock.rawPreview,
+      storageGroupHtml: removedBlock.oldStorageGroupHtml,
+      storageGroupKey: removedBlock.oldStorageGroupKey,
+      storageGroupKind: removedBlock.oldStorageGroupKind,
       canInlineDiff: isTextDiffableTag(removedBlock.tag),
     };
     const currentComparableBlock = {
@@ -1584,10 +1823,14 @@ function coalesceReplacementBlocks(blocks) {
       nodeType: addedBlock.nodeType,
       text: addedBlock.text,
       html: addedBlock.newHtml,
+      rawHtml: addedBlock.newRawHtml || addedBlock.newHtml,
       renderedHtml: addedBlock.renderedHtml,
       taskStatus: addedBlock.taskStatus,
       supportLevel: addedBlock.supportLevel,
       rawPreview: addedBlock.rawPreview,
+      storageGroupHtml: addedBlock.newStorageGroupHtml,
+      storageGroupKey: addedBlock.newStorageGroupKey,
+      storageGroupKind: addedBlock.newStorageGroupKind,
       canInlineDiff: isTextDiffableTag(addedBlock.tag),
     };
 
@@ -1639,7 +1882,7 @@ export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachments
 
   while (i < oldCount && j < currentCount) {
     if (oldBlocks[i].key === currentBlocks[j].key) {
-      blocks.push(makeSameBlock(currentBlocks[j]));
+      blocks.push(makeSameBlock(currentBlocks[j], oldBlocks[i]));
       i++;
       j++;
     } else if (
