@@ -196,6 +196,42 @@ describe('type-specific diff safety', () => {
     });
   });
 
+  test('ADF task list state changes are one task diff without empty non-text rows', () => {
+    const oldTask = [
+      '<ac:adf-node type="taskList"><ac:adf-node type="taskItem">',
+      '<ac:adf-attribute key="localId">ea33bf50-33cd-405f-926a-8815d1d72ff7</ac:adf-attribute>',
+      '<ac:adf-attribute key="state">DONE</ac:adf-attribute>',
+      '<p>guess what</p>',
+      '</ac:adf-node></ac:adf-node>',
+    ].join('');
+    const currentTask = [
+      '<ac:adf-node type="taskList"><ac:adf-node type="taskItem">',
+      '<ac:adf-attribute key="localId">ea33bf50-33cd-405f-926a-8815d1d72ff7</ac:adf-attribute>',
+      '<ac:adf-attribute key="state">TODO</ac:adf-attribute>',
+      '<p>guess what</p>',
+      '</ac:adf-node></ac:adf-node>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldTask, currentTask, '', {});
+
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0]).toMatchObject({
+      type: 'modified',
+      nodeType: 'task_item',
+      oldText: 'guess what',
+      newText: 'guess what',
+      taskDiff: {
+        oldStatus: 'complete',
+        newStatus: 'incomplete',
+        statusChanged: true,
+        textChanged: false,
+      },
+    });
+    expect(result.blocks[0].oldHtml).toContain('<ac:adf-node');
+    expect(result.blocks[0].newHtml).toContain('<ac:adf-node');
+    expect(visiblePreviewText(result.html)).toContain('guess what');
+    expect(result.blocks.some((block) => block.type !== 'modified' && !block.text && block.nodeType !== 'unsupported')).toBe(false);
+  });
+
   test('adf internals are not mixed into normal preview text', () => {
     const result = buildRichTextDiffHtml(
       '',
@@ -247,6 +283,26 @@ describe('type-specific diff safety', () => {
     expect(result.blocks[0].newHtml).toContain('<ac:link>');
   });
 
+  test('plain whiteboard anchors are preserved as one raw recovery block', () => {
+    const raw = [
+      '<p>',
+      '<a href="https://bread-test.atlassian.net/wiki/spaces/~712020782f510e89df4a65a9d622ebe3b5af1c/whiteboard/7438339">',
+      'Untitled whiteboard 2026-06-30',
+      '</a>',
+      '</p>',
+    ].join('');
+    const result = buildRichTextDiffHtml('', raw, '', {});
+
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0]).toMatchObject({
+      type: 'added',
+      supportLevel: 'raw',
+      newStorageGroupKind: 'raw-block',
+    });
+    expect(result.blocks[0].renderedHtml).toContain('data-dh-node-type="whiteboard_card"');
+    expect(result.blocks[0].newHtml).toContain('/whiteboard/7438339');
+  });
+
   test('adf whiteboard smart links render as readable cards', () => {
     const result = buildRichTextDiffHtml(
       '',
@@ -267,5 +323,23 @@ describe('type-specific diff safety', () => {
     expect(visiblePreviewText(result.blocks[0].renderedHtml)).not.toContain(
       'bread-test.atlassian.net/wiki/spaces'
     );
+  });
+
+  test('adf expand nodes are preserved as raw recovery blocks', () => {
+    const raw = [
+      '<ac:adf-node type="expand">',
+      '<ac:adf-attribute key="title">Details</ac:adf-attribute>',
+      '<p>inside expand</p>',
+      '</ac:adf-node>',
+    ].join('');
+    const result = buildRichTextDiffHtml('', raw, '', {});
+
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0]).toMatchObject({
+      type: 'added',
+      supportLevel: 'raw',
+      newStorageGroupKind: 'raw-block',
+    });
+    expect(result.blocks[0].newHtml).toContain('<ac:adf-node type="expand">');
   });
 });

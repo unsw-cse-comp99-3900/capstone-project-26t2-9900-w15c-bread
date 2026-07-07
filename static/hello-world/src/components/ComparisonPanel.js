@@ -3,11 +3,17 @@ import {
   buildRichTextDiffHtml,
   countWords,
   formatDateTime,
+  getStorageNodeOuterHtml,
   prepareConfluenceHtml,
   storageToPlainText,
 } from '../utils';
 
 const CHANGE_BLOCK_TYPES = new Set(['added', 'removed', 'modified']);
+const UNSUPPORTED_MISSING_RAW_ERROR =
+  'This page contains unsupported blocks without raw data, so write-back is disabled to avoid data loss.';
+const MISSING_STORAGE_ERROR =
+  'Recovered content is missing raw Confluence storage for one or more blocks, so write-back is disabled to avoid data loss.';
+const UNSUPPORTED_PLACEHOLDER_STORAGE_RE = /data-dh-node-type=["']unsupported["']|Unsupported Confluence block/i;
 
 function blockSelectionKey(index) {
   // Sprint 1 uses the diff block index as the selection id. Keep this isolated
@@ -23,43 +29,520 @@ function fallbackTextHtml(text) {
   return paragraph.outerHTML;
 }
 
-function getBlockPreviewHtml(block, selected) {
+function getSelectedBlockPreviewHtml(block, selected) {
   if (!block) return '';
 
   if (block.type === 'same') {
-    return block.html || block.renderedHtml || '';
+    return block.renderedHtml || block.html || '';
   }
 
   if (block.type === 'added') {
-    return selected ? block.newHtml || block.renderedHtml || fallbackTextHtml(block.text) : '';
+    return selected
+      ? block.newRenderedHtml || block.renderedHtml || block.newHtml || fallbackTextHtml(block.text)
+      : '';
   }
 
   if (block.type === 'removed') {
     // The preview starts from the historical version. Applying a removal
     // therefore omits the old block; leaving it unselected preserves it.
-    return selected ? '' : block.oldHtml || block.renderedHtml || fallbackTextHtml(block.text);
+    return selected
+      ? ''
+      : block.oldRenderedHtml || block.renderedHtml || block.oldHtml || fallbackTextHtml(block.text);
   }
 
   if (block.type === 'modified') {
     if (selected) {
-      return block.newHtml || block.renderedHtml || fallbackTextHtml(block.newText);
+      return (
+        block.newRenderedHtml || block.renderedHtml || block.newHtml || fallbackTextHtml(block.newText)
+      );
     }
 
-    return block.oldHtml || fallbackTextHtml(block.oldText);
+    return block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.oldText);
   }
 
   return block.renderedHtml || block.html || '';
 }
 
-function buildDraftPreviewHtml(blocks, blockChoices) {
-  return (blocks || [])
-    .map((block, index) => {
-      // Unresolved changes keep the current version by default. A user choice
-      // only changes the draft when they explicitly restore the old content.
-      const choice = blockChoices.get(blockSelectionKey(index));
-      return getBlockPreviewHtml(block, choice !== 'old');
-    })
-    .join('');
+export function buildRecoveryPreviewHtml(blocks, blockChoices, renderStorageHtml = (html) => html) {
+  const previewParts = [];
+  const rawGroupRuns = collectRawStorageGroupRuns(blocks, blockChoices);
+  const taskGroupRuns = collectTaskGroupRuns(blocks, blockChoices);
+  const emittedTaskGroupKeys = new Set();
+
+  for (let index = 0; index < (blocks || []).length; index++) {
+    const rawRun = findStorageGroupRun(rawGroupRuns, index);
+
+    if (rawRun) {
+      if (rawRun.start === index) {
+        previewParts.push(renderStorageHtml(rawRun.html));
+      }
+      continue;
+    }
+
+    const taskRun = findTaskGroupRun(taskGroupRuns, index);
+
+    if (taskRun) {
+      if (taskRun.start === index && shouldEmitStorageGroupRun(taskRun, emittedTaskGroupKeys)) {
+        previewParts.push(renderStorageHtml(taskRun.html));
+      }
+      continue;
+    }
+
+    const block = blocks[index];
+    // Unresolved changes restore the selected historical version by default.
+    // A user choice only keeps current content when explicitly requested.
+    const choice = blockChoices.get(blockSelectionKey(index));
+    const selected = choice === 'current';
+
+    if (blockIsOmittedFromRecovery(block, selected)) {
+      continue;
+    }
+
+    previewParts.push(getSelectedBlockPreviewHtml(block, selected));
+  }
+
+  return previewParts.join('');
+}
+
+function getSelectedBlockStorageHtml(block, selected) {
+  if (!block) return '';
+
+  if (block.type === 'same') {
+    return selected
+      ? block.newRawHtml || block.newHtml || block.html || ''
+      : block.oldRawHtml || block.oldHtml || block.html || '';
+  }
+
+  if (block.type === 'added') {
+    return selected ? block.newRawHtml || block.newHtml || '' : '';
+  }
+
+  if (block.type === 'removed') {
+    return selected ? '' : block.oldRawHtml || block.oldHtml || '';
+  }
+
+  if (block.type === 'modified') {
+    return selected
+      ? block.newRawHtml || block.newHtml || ''
+      : block.oldRawHtml || block.oldHtml || '';
+  }
+
+  return block.html || '';
+}
+
+function blockIsOmittedFromRecovery(block, selected) {
+  return (
+    (block && block.type === 'added' && !selected) ||
+    (block && block.type === 'removed' && selected)
+  );
+}
+
+function isUnsupportedBlock(block) {
+  return Boolean(block && (block.nodeType === 'unsupported' || block.supportLevel === 'raw'));
+}
+
+
+function isAdfNodeElement(node) {
+  return (
+    node &&
+    node.nodeType === Node.ELEMENT_NODE &&
+    String(node.tagName || '').toLowerCase() === 'ac:adf-node'
+  );
+}
+
+function getAdfNodeType(node) {
+  return String(
+    (node && (node.getAttribute('type') || node.getAttribute('ac:type'))) || ''
+  ).toLowerCase();
+}
+
+function findFirstElement(root, predicate) {
+  return Array.from(root.querySelectorAll('*')).find(predicate) || null;
+}
+
+function getStorageOpeningTagAttributes(node) {
+  const html = getStorageNodeOuterHtml(node);
+  const match = /^<[^>\s]+([^>]*)>/.exec(html);
+  return match ? match[1] : '';
+}
+
+function extractTaskItemStorage(storageHtml) {
+  if (!storageHtml || !storageHtml.trim()) return null;
+
+  const doc = new DOMParser().parseFromString(storageHtml, 'text/html');
+  const adfTaskList = findFirstElement(
+    doc.body,
+    (node) => isAdfNodeElement(node) && getAdfNodeType(node) === 'tasklist'
+  );
+
+  if (adfTaskList) {
+    const items = Array.from(adfTaskList.children).filter(
+      (node) => isAdfNodeElement(node) && getAdfNodeType(node) === 'taskitem'
+    );
+
+    return items.length === 1
+      ? {
+          kind: 'adf-task-list',
+          itemHtml: getStorageNodeOuterHtml(items[0]),
+          wrapperAttrs: getStorageOpeningTagAttributes(adfTaskList),
+        }
+      : null;
+  }
+
+  const legacyTaskList = findFirstElement(
+    doc.body,
+    (node) => String(node.tagName || '').toLowerCase() === 'ac:task-list'
+  );
+
+  if (legacyTaskList) {
+    const items = Array.from(legacyTaskList.children).filter(
+      (node) => String(node.tagName || '').toLowerCase() === 'ac:task'
+    );
+
+    return items.length === 1
+      ? {
+          kind: 'confluence-task-list',
+          itemHtml: getStorageNodeOuterHtml(items[0]),
+          wrapperAttrs: getStorageOpeningTagAttributes(legacyTaskList),
+        }
+      : null;
+  }
+
+  const htmlList = findFirstElement(doc.body, (node) => /^(ul|ol)$/i.test(node.tagName || ''));
+
+  if (htmlList) {
+    const items = Array.from(htmlList.children).filter((node) => /^li$/i.test(node.tagName || ''));
+
+    return items.length === 1
+      ? {
+          kind: htmlList.tagName.toLowerCase(),
+          itemHtml: getStorageNodeOuterHtml(items[0]),
+          wrapperAttrs: getStorageOpeningTagAttributes(htmlList),
+        }
+      : null;
+  }
+
+  return null;
+}
+
+function getSelectedTaskItemStorage(block, selected) {
+  if (!block || block.nodeType !== 'task_item' || blockIsOmittedFromRecovery(block, selected)) {
+    return null;
+  }
+
+  const storageHtml = getSelectedBlockStorageHtml(block, selected);
+  return extractTaskItemStorage(storageHtml);
+}
+
+function getSelectedTaskStorageGroup(block, selected) {
+  if (!block || block.nodeType !== 'task_item' || blockIsOmittedFromRecovery(block, selected)) {
+    return null;
+  }
+
+  if (block.type === 'same') {
+    const html = selected
+      ? block.newStorageGroupHtml || block.storageGroupHtml
+      : block.oldStorageGroupHtml || block.storageGroupHtml;
+    const key = selected
+      ? block.newStorageGroupKey || block.storageGroupKey
+      : block.oldStorageGroupKey || block.storageGroupKey;
+
+    return html && key ? { html, key: String(key).replace(/^[^:]+:/, '') } : null;
+  }
+
+  const html = selected ? block.newStorageGroupHtml : block.oldStorageGroupHtml;
+  const key = selected ? block.newStorageGroupKey : block.oldStorageGroupKey;
+
+  return html && key ? { html, key: String(key).replace(/^[^:]+:/, '') } : null;
+}
+
+function getTaskGroupKeySet(block) {
+  if (!block || block.nodeType !== 'task_item') return new Set();
+
+  return new Set(
+    [
+      block.oldStorageGroupKey,
+      block.newStorageGroupKey,
+      block.storageGroupKey,
+    ]
+      .filter(Boolean)
+      .map((key) => String(key).replace(/^[^:]+:/, ''))
+  );
+}
+
+function keySetsOverlap(first, second) {
+  if (!first.size || !second.size) return false;
+  return Array.from(first).some((key) => second.has(key));
+}
+
+function mergeKeySets(target, source) {
+  source.forEach((key) => target.add(key));
+}
+
+function getStorageGroupRunIdentity(run) {
+  return run && run.keys && run.keys.size
+    ? Array.from(run.keys).sort().join('\n')
+    : '';
+}
+
+function shouldEmitStorageGroupRun(run, emittedGroupKeys) {
+  const identity = getStorageGroupRunIdentity(run);
+
+  if (!identity) return true;
+  if (emittedGroupKeys.has(identity)) return false;
+
+  emittedGroupKeys.add(identity);
+  return true;
+}
+
+function getRawStorageGroupKeySet(block) {
+  if (!block || block.nodeType === 'task_item') return new Set();
+
+  return new Set(
+    [
+      block.oldStorageGroupKey,
+      block.newStorageGroupKey,
+      block.storageGroupKey,
+    ]
+      .filter((key) => key && String(key).startsWith('raw-block:'))
+      .map(String)
+  );
+}
+
+function getSelectedRawStorageGroup(block, selected) {
+  if (!block || block.nodeType === 'task_item' || blockIsOmittedFromRecovery(block, selected)) {
+    return null;
+  }
+
+  if (block.type === 'same') {
+    const html = selected
+      ? block.newStorageGroupHtml || block.storageGroupHtml
+      : block.oldStorageGroupHtml || block.storageGroupHtml;
+    const key = selected
+      ? block.newStorageGroupKey || block.storageGroupKey
+      : block.oldStorageGroupKey || block.storageGroupKey;
+
+    return html && key && String(key).startsWith('raw-block:')
+      ? { html, key: String(key), selected }
+      : null;
+  }
+
+  const html = selected ? block.newStorageGroupHtml : block.oldStorageGroupHtml;
+  const key = selected ? block.newStorageGroupKey : block.oldStorageGroupKey;
+
+  return html && key && String(key).startsWith('raw-block:')
+    ? { html, key: String(key), selected }
+    : null;
+}
+
+function collectRawStorageGroupRuns(blocks, blockChoices) {
+  const runs = [];
+
+  for (let index = 0; index < (blocks || []).length; index++) {
+    const block = blocks[index];
+    const runKeys = getRawStorageGroupKeySet(block);
+
+    if (!runKeys.size) continue;
+
+    let fallbackGroup = null;
+    let selectedCurrentGroup = null;
+    let endIndex = index;
+
+    for (let cursor = index; cursor < (blocks || []).length; cursor++) {
+      const candidate = blocks[cursor];
+      const candidateKeys = getRawStorageGroupKeySet(candidate);
+
+      if (!keySetsOverlap(runKeys, candidateKeys)) break;
+
+      mergeKeySets(runKeys, candidateKeys);
+
+      const choice = blockChoices.get(blockSelectionKey(cursor));
+      const selected = choice === 'current';
+      const group = getSelectedRawStorageGroup(candidate, selected);
+
+      if (group) {
+        fallbackGroup = fallbackGroup || group;
+        if (group.selected) {
+          selectedCurrentGroup = group;
+        }
+      }
+
+      endIndex = cursor;
+    }
+
+    const group = selectedCurrentGroup || fallbackGroup;
+
+    if (group) {
+      runs.push({
+        start: index,
+        end: endIndex,
+        keys: new Set(runKeys),
+        html: group.html,
+      });
+    }
+
+    index = endIndex;
+  }
+
+  return runs;
+}
+
+function renderTaskItemStorageGroup(kind, items, wrapperAttrs = '') {
+  if (!items.length) return '';
+
+  if (kind === 'adf-task-list') {
+    return `<ac:adf-node${wrapperAttrs || ' type="taskList"'}>${items.join('')}</ac:adf-node>`;
+  }
+
+  if (kind === 'confluence-task-list') {
+    return `<ac:task-list${wrapperAttrs}>${items.join('')}</ac:task-list>`;
+  }
+
+  if (kind === 'ul' || kind === 'ol') {
+    return `<${kind}${wrapperAttrs}>${items.join('')}</${kind}>`;
+  }
+
+  return items.join('');
+}
+
+function collectTaskGroupRuns(blocks, blockChoices) {
+  const runs = [];
+
+  for (let index = 0; index < (blocks || []).length; index++) {
+    const block = blocks[index];
+    const runKeys = getTaskGroupKeySet(block);
+
+    if (!runKeys.size) continue;
+
+    const items = [];
+    const selectedGroups = new Map();
+    let kind = '';
+    let wrapperAttrs = '';
+    let endIndex = index;
+
+    for (let cursor = index; cursor < (blocks || []).length; cursor++) {
+      const candidate = blocks[cursor];
+      const candidateKeys = getTaskGroupKeySet(candidate);
+
+      if (!keySetsOverlap(runKeys, candidateKeys)) break;
+
+      mergeKeySets(runKeys, candidateKeys);
+
+      const choice = blockChoices.get(blockSelectionKey(cursor));
+      const selected = choice === 'current';
+      const selectedGroup = getSelectedTaskStorageGroup(candidate, selected);
+      const item = getSelectedTaskItemStorage(candidate, selected);
+
+      if (selectedGroup) {
+        selectedGroups.set(`${selectedGroup.key}\n${selectedGroup.html}`, selectedGroup.html);
+      }
+
+      if (item) {
+        kind = kind || item.kind;
+        if (item.kind === kind) {
+          wrapperAttrs = wrapperAttrs || item.wrapperAttrs || '';
+          items.push(item.itemHtml);
+        }
+      }
+
+      endIndex = cursor;
+    }
+
+    if (items.length) {
+      const rawGroupHtml = selectedGroups.size === 1
+        ? Array.from(selectedGroups.values())[0]
+        : '';
+
+      runs.push({
+        start: index,
+        end: endIndex,
+        keys: new Set(runKeys),
+        html: rawGroupHtml || renderTaskItemStorageGroup(kind, items, wrapperAttrs),
+      });
+    }
+
+    index = endIndex;
+  }
+
+  return runs;
+}
+
+function findTaskGroupRun(runs, index) {
+  return runs.find((run) => run.start <= index && index <= run.end) || null;
+}
+
+function findStorageGroupRun(runs, index) {
+  return runs.find((run) => run.start <= index && index <= run.end) || null;
+}
+
+function validateRecoveryStorageBlock(block, selected) {
+  if (!block || blockIsOmittedFromRecovery(block, selected)) {
+    return '';
+  }
+
+  const storageHtml = getSelectedBlockStorageHtml(block, selected);
+
+  if (isUnsupportedBlock(block)) {
+    if (!storageHtml || !storageHtml.trim()) {
+      return UNSUPPORTED_MISSING_RAW_ERROR;
+    }
+
+    if (UNSUPPORTED_PLACEHOLDER_STORAGE_RE.test(storageHtml)) {
+      return UNSUPPORTED_MISSING_RAW_ERROR;
+    }
+
+    return '';
+  }
+
+  if (!storageHtml || !storageHtml.trim()) {
+    return MISSING_STORAGE_ERROR;
+  }
+
+  return '';
+}
+
+export function buildRecoveryStorageHtml(blocks, blockChoices) {
+  const storageParts = [];
+  const rawGroupRuns = collectRawStorageGroupRuns(blocks, blockChoices);
+  const taskGroupRuns = collectTaskGroupRuns(blocks, blockChoices);
+  const emittedTaskGroupKeys = new Set();
+
+  for (let index = 0; index < (blocks || []).length; index++) {
+    const block = blocks[index];
+    const choice = blockChoices.get(blockSelectionKey(index));
+    const selected = choice === 'current';
+    const error = validateRecoveryStorageBlock(block, selected);
+
+    if (error) {
+      return { html: '', error };
+    }
+
+    const rawRun = findStorageGroupRun(rawGroupRuns, index);
+
+    if (rawRun) {
+      if (rawRun.start === index) {
+        storageParts.push(rawRun.html);
+      }
+      continue;
+    }
+
+    const taskRun = findTaskGroupRun(taskGroupRuns, index);
+
+    if (taskRun) {
+      if (taskRun.start === index && shouldEmitStorageGroupRun(taskRun, emittedTaskGroupKeys)) {
+        storageParts.push(taskRun.html);
+      }
+      continue;
+    }
+
+    if (blockIsOmittedFromRecovery(block, selected)) {
+      continue;
+    }
+
+    storageParts.push(getSelectedBlockStorageHtml(block, selected));
+  }
+
+  return { html: storageParts.join(''), error: '' };
 }
 
 function getDiffBlockHtml(block) {
@@ -156,11 +639,11 @@ function ComparisonPanelContent({
 }) {
   const [blockChoices, setBlockChoices] = useState(new Map());
   const [activeBlockKey, setActiveBlockKey] = useState(null);
-  const [draftPreview, setDraftPreview] = useState(null);
-  const [draftCreation, setDraftCreation] = useState({
+  const [recoveryPreview, setRecoveryPreview] = useState(null);
+  const [writeBack, setWriteBack] = useState({
     status: 'idle',
     error: '',
-    draft: null,
+    page: null,
   });
 
   const currentBodyValue =
@@ -244,22 +727,22 @@ function ComparisonPanelContent({
   useEffect(() => {
     setBlockChoices(new Map());
     setActiveBlockKey(null);
-    setDraftPreview(null);
-    setDraftCreation({ status: 'idle', error: '', draft: null });
+    setRecoveryPreview(null);
+    setWriteBack({ status: 'idle', error: '', page: null });
   }, [selectableBlocks, selectedVersion.number, currentVersion && currentVersion.number]);
 
   useEffect(() => {
-    if (!draftPreview) return undefined;
+    if (!recoveryPreview) return undefined;
 
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape' && draftCreation.status !== 'loading') {
-        setDraftPreview(null);
+      if (event.key === 'Escape' && writeBack.status !== 'loading') {
+        setRecoveryPreview(null);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [draftCreation.status, draftPreview]);
+  }, [writeBack.status, recoveryPreview]);
 
   const handleChooseBlockVersion = (key, choice) => {
     setBlockChoices((previous) => {
@@ -280,7 +763,16 @@ function ComparisonPanelContent({
   };
 
   const previewHtml = useMemo(
-    () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices),
+    () =>
+      buildRecoveryPreviewHtml(
+        richDiff.blocks || [],
+        blockChoices,
+        (html) => prepareConfluenceHtml(html, baseUrl, attachmentsByFilename || {})
+      ),
+    [attachmentsByFilename, baseUrl, blockChoices, richDiff.blocks]
+  );
+  const recoveryStorage = useMemo(
+    () => buildRecoveryStorageHtml(richDiff.blocks || [], blockChoices),
     [blockChoices, richDiff.blocks]
   );
 
@@ -293,50 +785,63 @@ function ComparisonPanelContent({
   const totalChanges = diffSummary.added + diffSummary.removed;
   const showChangeSelection = hasComparisonBase && !isCurrent && selectableBlocks.length > 0;
 
-  const handlePreviewDraft = () => {
-    const draft = {
+  const handlePreviewRecovery = () => {
+    const recovery = {
       selectedVersionNumber: selectedVersion.number,
       currentVersionNumber: currentVersion ? currentVersion.number : null,
       changeChoices: selectableBlocks.map(({ index, key }) => ({
         blockIndex: index,
-        choice: blockChoices.get(key) || 'current',
+        choice: blockChoices.get(key) || 'old',
       })),
       previewHtml,
+      storageHtml: recoveryStorage.html,
+      writeBackDisabledReason: recoveryStorage.error,
       createdAt: new Date().toISOString(),
     };
 
-    setDraftCreation({ status: 'idle', error: '', draft: null });
-    setDraftPreview(draft);
+    setWriteBack({
+      status: recoveryStorage.error ? 'error' : 'idle',
+      error: recoveryStorage.error,
+      page: null,
+    });
+    setRecoveryPreview(recovery);
   };
 
-  const handleConfirmCreateDraft = async () => {
-    if (!draftPreview || draftCreation.status === 'loading') return;
+  const handleConfirmWriteBack = async () => {
+    if (
+      !recoveryPreview ||
+      recoveryPreview.writeBackDisabledReason ||
+      writeBack.status === 'loading'
+    ) {
+      return;
+    }
 
-    setDraftCreation({ status: 'loading', error: '', draft: null });
+    setWriteBack({ status: 'loading', error: '', page: null });
 
     try {
       const { invoke } = await import('@forge/bridge');
-      const createdDraft = await invoke('createDraft', {
+      const updatedPage = await invoke('writeRecoveredPage', {
         pageId,
-        bodyValue: draftPreview.previewHtml,
+        bodyValue: recoveryPreview.storageHtml,
+        expectedVersionNumber: recoveryPreview.currentVersionNumber,
       });
 
-      if (!createdDraft || !createdDraft.id) {
-        throw new Error('Confluence did not return the created draft details.');
+      if (!updatedPage || !updatedPage.id) {
+        throw new Error('Confluence did not return the updated page details.');
       }
 
-      setDraftCreation({
+      setWriteBack({
         status: 'success',
         error: '',
-        draft: createdDraft,
+        page: updatedPage,
       });
     } catch (error) {
-      setDraftCreation({
+      setWriteBack({
         status: 'error',
         error: error && error.message
           ? error.message
-          : 'Confluence could not create the draft.',
-        draft: null,
+          : 'Confluence could not write the recovered content.',
+        page: null,
       });
     }
   };
@@ -395,8 +900,8 @@ function ComparisonPanelContent({
             </div>
 
             <div className="dh-inline-selection-toolbar__actions">
-              <button className="dh-primary-button" type="button" onClick={handlePreviewDraft}>
-                Preview Draft
+              <button className="dh-primary-button" type="button" onClick={handlePreviewRecovery}>
+                Preview Recovery
               </button>
             </div>
           </div>
@@ -429,7 +934,7 @@ function ComparisonPanelContent({
                   const choice = blockChoices.get(key);
 
                   if (choice) {
-                    const resolvedHtml = getBlockPreviewHtml(block, choice === 'current');
+                    const resolvedHtml = getSelectedBlockPreviewHtml(block, choice === 'current');
 
                     return (
                       <div
@@ -543,15 +1048,15 @@ function ComparisonPanelContent({
         )}
       </div>
 
-      {draftPreview ? (
+      {recoveryPreview ? (
         <div
           className="dh-draft-modal-backdrop"
           onMouseDown={(event) => {
             if (
               event.target === event.currentTarget &&
-              draftCreation.status !== 'loading'
+              writeBack.status !== 'loading'
             ) {
-              setDraftPreview(null);
+              setRecoveryPreview(null);
             }
           }}
         >
@@ -564,18 +1069,18 @@ function ComparisonPanelContent({
             <header className="dh-draft-modal__header">
               <div>
                 <h2 className="dh-draft-modal__title" id="dh-draft-preview-title">
-                  Draft Preview
+                  Recovery Preview
                 </h2>
                 <p className="dh-draft-modal__meta">
-                  v{draftPreview.selectedVersionNumber} selection to
-                  {' '}v{draftPreview.currentVersionNumber || '?'}
+                  v{recoveryPreview.selectedVersionNumber} selection to
+                  {' '}v{recoveryPreview.currentVersionNumber || '?'}
                 </p>
               </div>
               <button
-                aria-label="Close draft preview"
+                aria-label="Close recovery preview"
                 className="dh-draft-modal__close"
-                disabled={draftCreation.status === 'loading'}
-                onClick={() => setDraftPreview(null)}
+                disabled={writeBack.status === 'loading'}
+                onClick={() => setRecoveryPreview(null)}
                 type="button"
               >
                 ×
@@ -583,72 +1088,59 @@ function ComparisonPanelContent({
             </header>
 
             <div className="dh-draft-modal__body">
-              {draftPreview.previewHtml ? (
+              {recoveryPreview.previewHtml ? (
                 <article className="dh-rich-page dh-rich-page--preview">
                   <section
                     className="dh-rendered-page-body"
-                    dangerouslySetInnerHTML={{ __html: draftPreview.previewHtml }}
+                    dangerouslySetInnerHTML={{ __html: recoveryPreview.previewHtml }}
                   />
                 </article>
               ) : (
                 <div className="dh-empty-content">
-                  No selected changes are available for the draft preview.
+                  No selected changes are available for the recovery preview.
                 </div>
               )}
             </div>
 
             <footer className="dh-draft-modal__footer">
               <div className="dh-draft-modal__result" aria-live="polite">
-                {draftCreation.status === 'idle'
-                  ? 'Review the result, then create an unpublished Confluence draft.'
+                {writeBack.status === 'idle'
+                  ? 'Review the result, then write the recovered storage back to the current Confluence page.'
                   : null}
-                {draftCreation.status === 'loading'
-                  ? 'Creating the Confluence draft…'
+                {writeBack.status === 'loading'
+                  ? 'Writing recovered content to Confluence...'
                   : null}
-                {draftCreation.status === 'error' ? (
+                {writeBack.status === 'error' ? (
                   <span className="dh-draft-modal__result--error">
-                    {draftCreation.error}
+                    {writeBack.error}
                   </span>
                 ) : null}
-                {draftCreation.status === 'success' ? (
+                {writeBack.status === 'success' ? (
                   <span className="dh-draft-modal__result--success">
-                    Draft “{draftCreation.draft.title}” was created.
+                    Page was updated to v{writeBack.page.versionNumber || '?'}.
                   </span>
                 ) : null}
               </div>
 
               <div className="dh-draft-modal__footer-actions">
                 <button
-                  disabled={draftCreation.status === 'loading'}
+                  disabled={writeBack.status === 'loading'}
                   type="button"
-                  onClick={() => setDraftPreview(null)}
+                  onClick={() => setRecoveryPreview(null)}
                 >
                   Back to changes
                 </button>
 
-                {draftCreation.status === 'success' ? (
-                  draftCreation.draft.url ? (
-                    <a
-                      className="dh-primary-button"
-                      href={draftCreation.draft.url}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Open Confluence draft
-                    </a>
-                  ) : null
-                ) : (
+                {writeBack.status !== 'success' ? (
                   <button
                     className="dh-primary-button"
-                    disabled={draftCreation.status === 'loading'}
-                    onClick={handleConfirmCreateDraft}
+                    disabled={writeBack.status === 'loading' || Boolean(recoveryPreview.writeBackDisabledReason)}
+                    onClick={handleConfirmWriteBack}
                     type="button"
                   >
-                    {draftCreation.status === 'loading'
-                      ? 'Creating…'
-                      : 'Create Confluence Draft'}
+                    {writeBack.status === 'loading' ? 'Writing...' : 'Write Back to Current Page'}
                   </button>
-                )}
+                ) : null}
               </div>
             </footer>
           </section>
