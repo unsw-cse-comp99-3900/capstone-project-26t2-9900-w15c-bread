@@ -999,6 +999,17 @@ function renderDecisionList(markup) {
     itemMatch = itemPattern.exec(markup);
   }
 
+  if (!items.length) {
+    const renderedDecisionPattern =
+      /<div\b[^>]*data-dh-node-type=["']decision["'][^>]*>[\s\S]*?<\/div>/gi;
+    let renderedDecisionMatch = renderedDecisionPattern.exec(markup);
+
+    while (renderedDecisionMatch) {
+      items.push(renderedDecisionMatch[0]);
+      renderedDecisionMatch = renderedDecisionPattern.exec(markup);
+    }
+  }
+
   if (!items.length) return '';
 
   return `<div data-dh-node-type="decision_list">${items.join('')}</div>`;
@@ -1961,8 +1972,8 @@ function expandAdfNodes(html) {
   );
 
   expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']decisionItem["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
-    (_match, body) => renderDecision(body)
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:decision-item|decisionItem)["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
+    (match, body) => renderDecision(body, extractAdfAttribute(match, ['state']))
   );
 
   expanded = expanded.replace(
@@ -2134,7 +2145,7 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
           });
           return renderedImage;
         }
-        return `<figure><div data-image-placeholder="true">Image attachment: ${escapeHtml(
+        return `<figure data-dh-node-type="image"><div data-image-placeholder="true">Image attachment: ${escapeHtml(
           filename
         )}</div></figure>`;
       }
@@ -2420,6 +2431,164 @@ function normaliseComparableText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function normaliseSignatureText(text) {
+  return String(text || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normaliseSignatureStyle(style) {
+  return String(style || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separatorIndex = part.indexOf(':');
+      if (separatorIndex === -1) return part.toLowerCase();
+      const name = part.slice(0, separatorIndex).trim().toLowerCase();
+      const value = part.slice(separatorIndex + 1).trim().replace(/\s+/g, ' ');
+      return `${name}:${value}`;
+    })
+    .sort()
+    .join(';');
+}
+
+function canonicalTagName(tagName) {
+  const tag = String(tagName || '').toLowerCase();
+  if (tag === 'b') return 'strong';
+  if (tag === 'i') return 'em';
+  return tag;
+}
+
+function canonicalAttributeValue(name, value) {
+  if (name === 'style') return normaliseSignatureStyle(value);
+  return normaliseSignatureText(value);
+}
+
+function shouldIncludeSignatureAttribute(name) {
+  if (!name) return false;
+  if (name === 'class') return false;
+  if (name === 'aria-hidden') return false;
+  if (name.startsWith('data-dh-raw')) return false;
+  if (name.startsWith('data-dh-task-marker')) return false;
+
+  return (
+    name === 'href' ||
+    name === 'src' ||
+    name === 'alt' ||
+    name === 'title' ||
+    name === 'datetime' ||
+    name === 'width' ||
+    name === 'height' ||
+    name === 'start' ||
+    name === 'type' ||
+    name === 'colspan' ||
+    name === 'rowspan' ||
+    name === 'style' ||
+    name.startsWith('data-dh-')
+  );
+}
+
+function canonicalDomSignature(node) {
+  if (!node) return '';
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    return normaliseSignatureText(node.textContent || '');
+  }
+
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+  const element = node;
+  if (element.matches && element.matches('[data-dh-raw-inspector], [data-dh-task-marker]')) {
+    return '';
+  }
+
+  const tag = canonicalTagName(element.tagName);
+  const attrs = Array.from(element.attributes || [])
+    .map((attr) => ({
+      name: attr.name.toLowerCase(),
+      value: attr.value,
+    }))
+    .filter((attr) => shouldIncludeSignatureAttribute(attr.name))
+    .map((attr) => `${attr.name}=${canonicalAttributeValue(attr.name, attr.value)}`)
+    .filter((attr) => !attr.endsWith('='))
+    .sort();
+
+  const childParts = [];
+  let previousWasBreak = false;
+
+  Array.from(element.childNodes || []).forEach((child) => {
+    if (child.nodeType === Node.ELEMENT_NODE && /^br$/i.test(child.tagName)) {
+      if (!previousWasBreak) childParts.push('br');
+      previousWasBreak = true;
+      return;
+    }
+
+    const signature = canonicalDomSignature(child);
+    if (!signature) return;
+    childParts.push(signature);
+    previousWasBreak = false;
+  });
+
+  return `${tag}[${attrs.join('|')}](${childParts.join('|')})`;
+}
+
+function imageRawSignature(rawHtml) {
+  if (!rawHtml || !/<(?:ac:image|img)\b/i.test(rawHtml)) return '';
+
+  const imageAttrs = [
+    'ac:width',
+    'width',
+    'ac:height',
+    'height',
+    'ac:align',
+    'align',
+    'ac:layout',
+    'layout',
+    'ac:custom-width',
+    'custom-width',
+    'ac:border',
+    'border',
+    'ac:alt',
+    'alt',
+    'ac:title',
+    'title',
+    'ac:rotation',
+    'rotation',
+  ];
+  const referenceAttrs = [
+    'ri:filename',
+    'filename',
+    'ri:attachment-id',
+    'attachment-id',
+    'ri:content-id',
+    'content-id',
+    'ri:value',
+    'value',
+    'src',
+  ];
+  const values = [];
+
+  imageAttrs.forEach((name) => {
+    const value = extractExactAttr(rawHtml, [name]);
+    if (value) values.push(`${name.toLowerCase()}=${normaliseSignatureText(value)}`);
+  });
+
+  referenceAttrs.forEach((name) => {
+    const value = extractAttr(rawHtml, [name]);
+    if (value) values.push(`${name.toLowerCase()}=${normaliseSignatureText(value)}`);
+  });
+
+  const borderMark = /<ac:adf-mark\b[^>]*(?:key|type)=["']border["'][^>]*>/i.exec(rawHtml);
+  if (borderMark) values.push(`border-mark=${normaliseSignatureText(borderMark[0])}`);
+
+  const caption = extractImageCaption(rawHtml);
+  if (caption) values.push(`caption=${normaliseSignatureText(caption)}`);
+
+  return values.sort().join('|');
+}
+
 function stableHtmlSignature(node) {
   if (node.nodeType === Node.TEXT_NODE) return normaliseBlockText(node);
   if (node.nodeType !== Node.ELEMENT_NODE) return '';
@@ -2427,21 +2596,17 @@ function stableHtmlSignature(node) {
   const element = node;
   const tag = element.tagName.toLowerCase();
   const text = normaliseBlockText(element);
-  if (text) return `${tag}:${text}`;
-
-  if (tag === 'img') {
-    return `img:${element.getAttribute('src') || element.getAttribute('alt') || element.outerHTML}`;
-  }
-
-  const img = element.querySelector && element.querySelector('img');
-  if (img) {
-    return `image-block:${img.getAttribute('src') || img.getAttribute('alt') || element.outerHTML}`;
+  if (
+    element.getAttribute('data-dh-node-type') === 'code_block' ||
+    /^pre|code$/i.test(element.tagName)
+  ) {
+    return `${canonicalTagName(tag)}:code=${text}`;
   }
 
   if (tag === 'hr') return 'hr';
   if (tag === 'br') return 'br';
 
-  return `${tag}:${element.outerHTML.replace(/\s+/g, ' ').trim()}`;
+  return `${canonicalTagName(tag)}:dom=${canonicalDomSignature(element)}`;
 }
 
 function isTextDiffableTag(tag) {
@@ -2456,6 +2621,7 @@ function getComparableNodeType(node) {
 
   const tag = node.tagName.toLowerCase();
   if (/^h[1-6]$/.test(tag)) return 'heading';
+  if (tag === 'ul' || tag === 'ol') return 'list';
   if (tag === 'li') return 'list_item';
   if (tag === 'blockquote') return 'blockquote';
   if (tag === 'td' || tag === 'th') return 'table_cell';
@@ -2490,12 +2656,15 @@ function extractBlockMeta(node, options = {}) {
   const hasNonTextMedia = Boolean(
     node.querySelector && node.querySelector('img, table, hr, iframe, video, audio')
   );
+  const rawImageSignature = nodeType === 'image' ? imageRawSignature(options.rawHtml || html) : '';
   const key =
     nodeType === 'unsupported'
       ? `unsupported:${hashString(options.rawHtml || html)}`
       : nodeType === 'task_item'
         ? `task_item:${taskStatus}:${text}`
-        : stableHtmlSignature(node);
+        : rawImageSignature
+          ? `${stableHtmlSignature(node)}:raw-image=${rawImageSignature}`
+          : stableHtmlSignature(node);
 
   return {
     key,
@@ -2619,7 +2788,7 @@ function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
 
   if (/<ac:task-list\b/i.test(rawHtml)) {
     const taskItems = [];
-    const taskRe = /<ac:task\b[^>]*>[\s\S]*?<\/ac:task>/gi;
+    const taskRe = /<ac:task(?=[\s>])[^>]*>[\s\S]*?<\/ac:task>/gi;
     let match = taskRe.exec(rawHtml);
 
     while (match) {
@@ -2640,6 +2809,22 @@ function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
   return items.map((item) => wrapListItemHtml(listTag, item.outerHTML));
 }
 
+function extractRawDecisionItemHtmls(rawHtml, expectedCount) {
+  if (!rawHtml) return [];
+
+  const decisionItems = [];
+  const decisionRe =
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:decision-item|decisionItem)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi;
+  let match = decisionRe.exec(rawHtml);
+
+  while (match) {
+    decisionItems.push(`<ac:adf-node type="decision-list">${match[0]}</ac:adf-node>`);
+    match = decisionRe.exec(rawHtml);
+  }
+
+  return decisionItems.length === expectedCount ? decisionItems : [];
+}
+
 function extractComparableBlocksFromPreparedNode(node, rawHtml) {
   if (isTransparentContainer(node)) {
     return Array.from(node.childNodes)
@@ -2647,7 +2832,34 @@ function extractComparableBlocksFromPreparedNode(node, rawHtml) {
       .flatMap((child) => extractComparableBlocksFromPreparedNode(child, getNodeOuterHtml(child)));
   }
 
-  if (node.nodeType === Node.ELEMENT_NODE && /^(ul|ol)$/i.test(node.tagName)) {
+  if (
+    node.nodeType === Node.ELEMENT_NODE &&
+    node.getAttribute('data-dh-node-type') === 'decision_list'
+  ) {
+    const decisions = Array.from(node.children).filter(
+      (child) => child.getAttribute('data-dh-node-type') === 'decision'
+    );
+    const rawDecisionHtmls = extractRawDecisionItemHtmls(rawHtml, decisions.length);
+
+    if (decisions.length) {
+      return decisions.map((decision) => {
+        const renderedHtml = getNodeOuterHtml(decision);
+        const reconstructionHtml = rawDecisionHtmls.length ? rawDecisionHtmls.shift() : renderedHtml;
+
+        return extractBlockMeta(decision, {
+          html: reconstructionHtml,
+          renderedHtml,
+          rawHtml: reconstructionHtml,
+        });
+      });
+    }
+  }
+
+  if (
+    node.nodeType === Node.ELEMENT_NODE &&
+    /^(ul|ol)$/i.test(node.tagName) &&
+    node.getAttribute('data-dh-node-type') === 'task_list'
+  ) {
     const listTag = node.tagName.toLowerCase();
     const items = Array.from(node.children).filter((child) => /^li$/i.test(child.tagName));
 
@@ -3128,29 +3340,71 @@ function extractTableRows(html) {
   const doc = new DOMParser().parseFromString(html || '', 'text/html');
   const table = doc.body.querySelector('table');
   if (!table) return [];
+  const occupied = [];
+  let effectiveColumnCount = 0;
 
-  return Array.from(table.querySelectorAll('tr')).map((row, rowIndex) => {
+  const rows = Array.from(table.querySelectorAll('tr')).map((row, rowIndex) => {
+    let effectiveColIndex = 0;
+    occupied[rowIndex] = occupied[rowIndex] || [];
+
     const cells = Array.from(row.children)
       .filter((cell) => /^(td|th)$/i.test(cell.tagName))
-      .map((cell, colIndex) => ({
-        rowIndex,
-        colIndex,
-        tag: cell.tagName.toLowerCase(),
-        text: normaliseBlockText(cell),
-        html: cell.innerHTML,
-      }));
+      .map((cell, cellIndex) => {
+        while (occupied[rowIndex][effectiveColIndex]) effectiveColIndex++;
+
+        const rowspan = Math.max(1, Number.parseInt(cell.getAttribute('rowspan') || '1', 10) || 1);
+        const colspan = Math.max(1, Number.parseInt(cell.getAttribute('colspan') || '1', 10) || 1);
+        const colIndex = effectiveColIndex;
+
+        for (let r = rowIndex; r < rowIndex + rowspan; r++) {
+          occupied[r] = occupied[r] || [];
+          for (let c = colIndex; c < colIndex + colspan; c++) {
+            occupied[r][c] = true;
+          }
+        }
+
+        effectiveColIndex += colspan;
+        effectiveColumnCount = Math.max(effectiveColumnCount, colIndex + colspan);
+
+        return {
+          rowIndex,
+          cellIndex,
+          colIndex,
+          tag: cell.tagName.toLowerCase(),
+          rowspan,
+          colspan,
+          text: normaliseBlockText(cell),
+          html: cell.innerHTML,
+          signature: canonicalDomSignature(cell),
+        };
+      });
 
     return { rowIndex, cells };
   });
+
+  rows.effectiveColumnCount = effectiveColumnCount;
+  return rows;
 }
 
 function haveSameTableShape(oldRows, currentRows) {
   if (!oldRows.length || !currentRows.length) return false;
   if (oldRows.length !== currentRows.length) return false;
+  if (oldRows.effectiveColumnCount !== currentRows.effectiveColumnCount) return false;
 
   return oldRows.every((oldRow, rowIndex) => {
     const currentRow = currentRows[rowIndex];
-    return currentRow && oldRow.cells.length === currentRow.cells.length;
+    if (!currentRow || oldRow.cells.length !== currentRow.cells.length) return false;
+
+    return oldRow.cells.every((oldCell, cellIndex) => {
+      const currentCell = currentRow.cells[cellIndex];
+      return (
+        currentCell &&
+        oldCell.tag === currentCell.tag &&
+        oldCell.colIndex === currentCell.colIndex &&
+        oldCell.rowspan === currentCell.rowspan &&
+        oldCell.colspan === currentCell.colspan
+      );
+    });
   });
 }
 
@@ -3220,6 +3474,87 @@ function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
     removed,
     limited,
   };
+}
+
+function getChangedCompatibleTableCells(oldRows, currentRows) {
+  const changedCells = [];
+
+  oldRows.forEach((oldRow, rowIndex) => {
+    const currentRow = currentRows[rowIndex];
+    if (!currentRow) return;
+
+    oldRow.cells.forEach((oldCell, cellIndex) => {
+      const currentCell = currentRow.cells[cellIndex];
+      if (!currentCell || oldCell.signature === currentCell.signature) return;
+
+      changedCells.push({
+        rowIndex,
+        cellIndex,
+        colIndex: oldCell.colIndex,
+        oldText: oldCell.text,
+        newText: currentCell.text,
+      });
+    });
+  });
+
+  return changedCells;
+}
+
+function renderTableWithChangedCells(block, changedCells, changeType) {
+  const doc = new DOMParser().parseFromString(block.renderedHtml || block.html || '', 'text/html');
+  const table = doc.body.querySelector('table');
+  if (!table) return block.renderedHtml || block.html || '';
+
+  table.classList.add('dh-table-diff', 'dh-table-diff--cell-level');
+  changedCells.forEach((changedCell) => {
+    const row = table.querySelectorAll('tr')[changedCell.rowIndex];
+    if (!row) return;
+
+    const cell = Array.from(row.children).filter((child) => /^(td|th)$/i.test(child.tagName))[
+      changedCell.cellIndex
+    ];
+    if (!cell) return;
+
+    cell.classList.add('dh-table-cell-diff', `dh-table-cell-diff--${changeType}`);
+  });
+
+  return table.outerHTML;
+}
+
+function buildTableReplacementBlocks(oldBlock, currentBlock) {
+  const oldRows = extractTableRows(oldBlock.renderedHtml || oldBlock.html);
+  const currentRows = extractTableRows(currentBlock.renderedHtml || currentBlock.html);
+  const removedBlock = makeRemovedBlock(oldBlock);
+  const addedBlock = makeAddedBlock(currentBlock);
+
+  if (haveSameTableShape(oldRows, currentRows)) {
+    const changedCells = getChangedCompatibleTableCells(oldRows, currentRows);
+
+    if (changedCells.length) {
+      removedBlock.renderedHtml = renderTableWithChangedCells(oldBlock, changedCells, 'removed');
+      addedBlock.renderedHtml = renderTableWithChangedCells(currentBlock, changedCells, 'added');
+    }
+
+    removedBlock.tableDiff = {
+      mode: 'cell_level',
+      changedCells,
+      rows: currentRows.length,
+      cells: countTableCells(currentRows),
+    };
+    addedBlock.tableDiff = removedBlock.tableDiff;
+    return [removedBlock, addedBlock];
+  }
+
+  removedBlock.tableDiff = {
+    mode: 'structure',
+    reason: 'table shape changed',
+    oldRows: oldRows.length,
+    currentRows: currentRows.length,
+    oldCells: countTableCells(oldRows),
+    currentCells: countTableCells(currentRows),
+  };
+  addedBlock.tableDiff = removedBlock.tableDiff;
+  return [removedBlock, addedBlock];
 }
 
 function buildSideBySideTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
@@ -3352,44 +3687,24 @@ function buildTaskItemDiff(oldBlock, currentBlock) {
   };
 }
 
-function canCoalesceReplacementBlocks(removedBlock, addedBlock) {
+function canDecorateTableReplacement(removedBlock, addedBlock) {
   if (!removedBlock || !addedBlock) return false;
   if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
-
-  // A replacement should occupy the same structural role in the page. This
-  // prevents an adjacent paragraph and image, for example, from becoming one
-  // decision merely because the LCS traversal emitted them next to each other.
-  if (
-    removedBlock.nodeType !== addedBlock.nodeType ||
-    removedBlock.tag !== addedBlock.tag
-  ) {
-    return false;
-  }
-
-  return (
-    isTextDiffableTag(removedBlock.tag) ||
-    removedBlock.nodeType === 'table' ||
-    removedBlock.nodeType === 'code_block'
-  );
+  return removedBlock.nodeType === 'table' && addedBlock.nodeType === 'table';
 }
 
-function coalesceReplacementBlocks(blocks) {
-  const coalesced = [];
+function decorateTableReplacementBlocks(blocks) {
+  const decorated = [];
 
   for (let index = 0; index < blocks.length; index++) {
     const removedBlock = blocks[index];
     const addedBlock = blocks[index + 1];
 
-    if (!canCoalesceReplacementBlocks(removedBlock, addedBlock)) {
-      coalesced.push(removedBlock);
+    if (!canDecorateTableReplacement(removedBlock, addedBlock)) {
+      decorated.push(removedBlock);
       continue;
     }
 
-    // The LCS algorithm represents a low-similarity edit, such as changing
-    // "456456" to "123456", as one removal followed by one addition. Rebuild
-    // those two output blocks as a single internal modification so the UI can
-    // present one atomic old-versus-current choice while still displaying only
-    // GitHub-style "-" and "+" rows.
     const oldComparableBlock = {
       tag: removedBlock.tag,
       nodeType: removedBlock.nodeType,
@@ -3413,11 +3728,11 @@ function coalesceReplacementBlocks(blocks) {
       canInlineDiff: isTextDiffableTag(addedBlock.tag),
     };
 
-    coalesced.push(buildModifiedBlockDiff(oldComparableBlock, currentComparableBlock));
+    decorated.push(...buildTableReplacementBlocks(oldComparableBlock, currentComparableBlock));
     index++;
   }
 
-  return coalesced;
+  return decorated;
 }
 
 export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename = {}) {
@@ -3464,19 +3779,6 @@ export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachments
       blocks.push(makeSameBlock(currentBlocks[j]));
       i++;
       j++;
-    } else if (
-      canPairForInlineDiff(oldBlocks[i], currentBlocks[j]) &&
-      dp[i + 1][j + 1] >= Math.max(dp[i + 1][j], dp[i][j + 1])
-    ) {
-      // Only substitute the two blocks when moving diagonally does not discard
-      // a better exact match later in either version. Without this guard, an
-      // inserted paragraph that resembles the following unchanged paragraph
-      // can be mistaken for a replacement.
-      const modified = buildModifiedBlockDiff(oldBlocks[i], currentBlocks[j]);
-      blocks.push(modified);
-      limited = limited || modified.limited;
-      i++;
-      j++;
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
       blocks.push(makeRemovedBlock(oldBlocks[i]));
       i++;
@@ -3496,7 +3798,7 @@ export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachments
     j++;
   }
 
-  return buildDiffResult(coalesceReplacementBlocks(blocks), { limited });
+  return buildDiffResult(decorateTableReplacementBlocks(blocks), { limited });
 }
 
 export function countWords(text) {

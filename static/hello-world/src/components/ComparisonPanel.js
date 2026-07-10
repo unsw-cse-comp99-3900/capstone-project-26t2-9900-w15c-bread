@@ -15,6 +15,114 @@ function blockSelectionKey(index) {
   return String(index);
 }
 
+function blockGroupSelectionKey(indices) {
+  return indices.map((index) => blockSelectionKey(index)).join(':');
+}
+
+function canShareChoice(removedBlock, addedBlock) {
+  if (!removedBlock || !addedBlock) return false;
+  if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
+
+  // The diff engine intentionally emits changed content as two simple result
+  // blocks: the old block is removed and the new block is added. When those two
+  // adjacent blocks occupy the same semantic role, the UI should treat them as
+  // one recovery decision while still preserving the underlying result model.
+  return (
+    removedBlock.nodeType === addedBlock.nodeType &&
+    removedBlock.tag === addedBlock.tag
+  );
+}
+
+function createChangeDisplayRow(items, blockChoiceKeys) {
+  const indices = items.map(({ index }) => index);
+  const key = blockGroupSelectionKey(indices);
+
+  indices.forEach((blockIndex) => blockChoiceKeys.set(blockIndex, key));
+
+  return {
+    type: 'change',
+    key,
+    blocks: items,
+  };
+}
+
+function buildChangeRunRows(items, blockChoiceKeys) {
+  const removedItems = items.filter(({ block }) => block.type === 'removed');
+  const addedItems = items.filter(({ block }) => block.type === 'added');
+
+  // LCS-based diff output can represent one changed region as all removed
+  // blocks followed by all added blocks. Pair compatible old and new blocks
+  // within that region so each logical replacement has one recovery choice.
+  const unusedAddedItems = new Set(addedItems);
+  const groupedItems = removedItems.map((removedItem) => {
+    const addedItem = addedItems.find(
+      (candidate) =>
+        unusedAddedItems.has(candidate) &&
+        canShareChoice(removedItem.block, candidate.block)
+    );
+
+    if (!addedItem) return [removedItem];
+
+    unusedAddedItems.delete(addedItem);
+    return [removedItem, addedItem];
+  });
+
+  const usedItems = new Set(groupedItems.flat());
+  const displayGroups = [
+    ...groupedItems,
+    ...items.filter((item) => !usedItems.has(item)).map((item) => [item]),
+  ];
+
+  // Sort groups by their first source position. Inside a paired group, the
+  // removed block deliberately remains before the added block.
+  return displayGroups
+    .sort((left, right) => {
+      const leftIndex = Math.min(...left.map(({ index }) => index));
+      const rightIndex = Math.min(...right.map(({ index }) => index));
+      return leftIndex - rightIndex;
+    })
+    .map((group) => createChangeDisplayRow(group, blockChoiceKeys));
+}
+
+function buildDiffDisplayRows(blocks) {
+  const rows = [];
+  const blockChoiceKeys = new Map();
+
+  for (let index = 0; index < (blocks || []).length; index++) {
+    const block = blocks[index];
+
+    if (!CHANGE_BLOCK_TYPES.has(block.type)) {
+      rows.push({
+        type: 'same',
+        key: blockSelectionKey(index),
+        block,
+        index,
+      });
+      continue;
+    }
+
+    const changeRun = [];
+    let runIndex = index;
+
+    while (
+      runIndex < blocks.length &&
+      CHANGE_BLOCK_TYPES.has(blocks[runIndex].type)
+    ) {
+      changeRun.push({ block: blocks[runIndex], index: runIndex });
+      runIndex++;
+    }
+
+    rows.push(...buildChangeRunRows(changeRun, blockChoiceKeys));
+    index = runIndex - 1;
+  }
+
+  return {
+    rows,
+    selectableRows: rows.filter((row) => row.type === 'change'),
+    blockChoiceKeys,
+  };
+}
+
 function fallbackTextHtml(text) {
   if (!text) return '';
   const doc = new DOMParser().parseFromString('', 'text/html');
@@ -51,12 +159,13 @@ function getBlockPreviewHtml(block, selected) {
   return block.renderedHtml || block.html || '';
 }
 
-function buildDraftPreviewHtml(blocks, blockChoices) {
+function buildDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()) {
   return (blocks || [])
     .map((block, index) => {
       // Unresolved changes keep the current version by default. A user choice
       // only changes the draft when they explicitly restore the old content.
-      const choice = blockChoices.get(blockSelectionKey(index));
+      const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
+      const choice = blockChoices.get(choiceKey);
       return getBlockPreviewHtml(block, choice !== 'old');
     })
     .join('');
@@ -74,7 +183,13 @@ function getDiffBlockHtml(block) {
   );
 }
 
-function getGitHubStyleDiffParts(block) {
+function getGitHubStyleDiffParts(blockOrBlocks) {
+  if (Array.isArray(blockOrBlocks)) {
+    return blockOrBlocks.flatMap(({ block }) => getGitHubStyleDiffParts(block));
+  }
+
+  const block = blockOrBlocks;
+
   if (block.type === 'added') {
     return [{
       type: 'added',
@@ -247,13 +362,11 @@ function ComparisonPanelContent({
     selectedBodyValue,
   ]);
 
-  const selectableBlocks = useMemo(
-    () =>
-      (richDiff.blocks || [])
-        .map((block, index) => ({ block, index, key: blockSelectionKey(index) }))
-        .filter(({ block }) => CHANGE_BLOCK_TYPES.has(block.type)),
+  const diffDisplay = useMemo(
+    () => buildDiffDisplayRows(richDiff.blocks || []),
     [richDiff.blocks]
   );
+  const selectableBlocks = diffDisplay.selectableRows;
 
   useEffect(() => {
     setBlockChoices(new Map());
@@ -294,8 +407,8 @@ function ComparisonPanelContent({
   };
 
   const previewHtml = useMemo(
-    () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices),
-    [blockChoices, richDiff.blocks]
+    () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices, diffDisplay.blockChoiceKeys),
+    [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
   );
 
   const diffSummary = richDiff.summary || {
@@ -311,9 +424,9 @@ function ComparisonPanelContent({
     const draft = {
       selectedVersionNumber: selectedVersion.number,
       currentVersionNumber: currentVersion ? currentVersion.number : null,
-      changeChoices: selectableBlocks.map(({ index, key }) => ({
-        blockIndex: index,
-        choice: blockChoices.get(key) || 'current',
+      changeChoices: selectableBlocks.map((row) => ({
+        blockIndices: row.blocks.map(({ index }) => index),
+        choice: blockChoices.get(row.key) || 'current',
       })),
       previewHtml,
       createdAt: new Date().toISOString(),
@@ -427,15 +540,15 @@ function ComparisonPanelContent({
           <article className="dh-rich-page">
             {showChangeSelection ? (
               <section className="dh-rendered-page-body">
-                {(richDiff.blocks || []).map((block, index) => {
-                  const key = blockSelectionKey(index);
+                {diffDisplay.rows.map((row) => {
+                  const key = row.key;
 
-                  if (!CHANGE_BLOCK_TYPES.has(block.type)) {
+                  if (row.type === 'same') {
                     return (
                       <div
                         className="dh-rich-diff-unchanged"
                         key={key}
-                        dangerouslySetInnerHTML={{ __html: getDiffBlockHtml(block) }}
+                        dangerouslySetInnerHTML={{ __html: getDiffBlockHtml(row.block) }}
                       />
                     );
                   }
@@ -443,7 +556,9 @@ function ComparisonPanelContent({
                   const choice = blockChoices.get(key);
 
                   if (choice) {
-                    const resolvedHtml = getBlockPreviewHtml(block, choice === 'current');
+                    const resolvedHtml = row.blocks
+                      .map(({ block }) => getBlockPreviewHtml(block, choice === 'current'))
+                      .join('');
 
                     return (
                       <div
@@ -481,7 +596,7 @@ function ComparisonPanelContent({
                   }
 
                   const isActive = activeBlockKey === key;
-                  const diffParts = getGitHubStyleDiffParts(block);
+                  const diffParts = getGitHubStyleDiffParts(row.blocks);
 
                   return (
                     <div

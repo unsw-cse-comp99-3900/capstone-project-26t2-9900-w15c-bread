@@ -7,7 +7,7 @@ function visiblePreviewText(html) {
 }
 
 describe('buildRichTextDiffHtml replacement grouping', () => {
-  test('groups a low-similarity paragraph replacement into one atomic block', () => {
+  test('represents a low-similarity paragraph replacement as removed then added blocks', () => {
     const result = buildRichTextDiffHtml(
       '<p>456456</p>',
       '<p>123456</p>',
@@ -15,14 +15,12 @@ describe('buildRichTextDiffHtml replacement grouping', () => {
       {}
     );
 
-    expect(result.blocks).toHaveLength(1);
-    expect(result.blocks[0]).toMatchObject({
-      type: 'modified',
-      nodeType: 'paragraph',
-      oldText: '456456',
-      newText: '123456',
-    });
-    expect(result.blocks[0].inline).toEqual([]);
+    expect(result.blocks).toHaveLength(2);
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks.map((block) => block.nodeType)).toEqual(['paragraph', 'paragraph']);
+    expect(result.blocks.some((block) => block.type === 'modified')).toBe(false);
+    expect(result.blocks[0].oldHtml).toBe('<p>456456</p>');
+    expect(result.blocks[1].newHtml).toBe('<p>123456</p>');
   });
 
   test('keeps a standalone insertion separate from unchanged following content', () => {
@@ -38,7 +36,7 @@ describe('buildRichTextDiffHtml replacement grouping', () => {
 });
 
 describe('type-specific diff safety', () => {
-  test('paragraph remains a block-level recovery unit without inline diff', () => {
+  test('paragraph changes are represented as block-level removal and addition', () => {
     const result = buildRichTextDiffHtml(
       '<p>Old paragraph text.</p>',
       '<p>New paragraph text.</p>',
@@ -46,17 +44,20 @@ describe('type-specific diff safety', () => {
       {}
     );
 
-    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks).toHaveLength(2);
     expect(result.blocks[0]).toMatchObject({
-      type: 'modified',
+      type: 'removed',
       nodeType: 'paragraph',
       oldHtml: '<p>Old paragraph text.</p>',
+    });
+    expect(result.blocks[1]).toMatchObject({
+      type: 'added',
+      nodeType: 'paragraph',
       newHtml: '<p>New paragraph text.</p>',
-      inline: [],
     });
   });
 
-  test('heading remains a block-level recovery unit without inline diff', () => {
+  test('heading changes are represented as block-level removal and addition', () => {
     const result = buildRichTextDiffHtml(
       '<h2>Old heading</h2>',
       '<h2>New heading</h2>',
@@ -64,15 +65,12 @@ describe('type-specific diff safety', () => {
       {}
     );
 
-    expect(result.blocks).toHaveLength(1);
-    expect(result.blocks[0]).toMatchObject({
-      type: 'modified',
-      nodeType: 'heading',
-      inline: [],
-    });
+    expect(result.blocks).toHaveLength(2);
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks.map((block) => block.nodeType)).toEqual(['heading', 'heading']);
   });
 
-  test('list additions are compared by item', () => {
+  test('ordinary list additions are compared as whole-list blocks', () => {
     const result = buildRichTextDiffHtml(
       '<ul><li>Open a page</li><li>Select Dynamic History</li></ul>',
       '<ul><li>Open a page</li><li>Select Dynamic History</li><li>Preview a draft</li></ul>',
@@ -80,11 +78,10 @@ describe('type-specific diff safety', () => {
       {}
     );
 
-    expect(result.blocks.map((block) => block.type)).toEqual(['same', 'same', 'added']);
-    expect(result.blocks[2]).toMatchObject({
-      nodeType: 'list_item',
-      text: 'Preview a draft',
-    });
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks.map((block) => block.nodeType)).toEqual(['list', 'list']);
+    expect(result.blocks[0].oldHtml).toContain('<li>Open a page</li>');
+    expect(result.blocks[1].newHtml).toContain('<li>Preview a draft</li>');
   });
 
   test('nested unordered lists preserve an empty parent bullet on its own line', () => {
@@ -108,19 +105,14 @@ describe('type-specific diff safety', () => {
       {}
     );
 
-    expect(result.blocks).toHaveLength(1);
-    expect(result.blocks[0]).toMatchObject({
-      type: 'modified',
-      nodeType: 'task_item',
-      taskDiff: {
-        oldStatus: 'incomplete',
-        newStatus: 'complete',
-        statusChanged: true,
-        textChanged: true,
-      },
-    });
+    expect(result.blocks).toHaveLength(2);
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks.map((block) => block.nodeType)).toEqual(['task_item', 'task_item']);
+    expect(result.blocks[0].taskStatus).toBe('incomplete');
+    expect(result.blocks[1].taskStatus).toBe('complete');
     expect(result.blocks[0].oldHtml).toContain('<ac:task-list>');
-    expect(result.blocks[0].newHtml).toContain('<ac:task-list>');
+    expect(result.blocks[1].newHtml).toContain('<ac:task-list>');
+    expect(result.blocks[0].oldHtml).not.toContain('<ac:task-list><ac:task-list>');
   });
 
   test('unsupported block renders a readable non-blank fallback', () => {
@@ -177,6 +169,7 @@ describe('type-specific diff safety', () => {
     expect(result.blocks.map((block) => block.nodeType)).toEqual([
       'paragraph',
       'table',
+      'table',
       'paragraph',
     ]);
   });
@@ -201,10 +194,15 @@ describe('type-specific diff safety', () => {
     expect(result.blocks.map((block) => block.nodeType)).toEqual([
       'paragraph',
       'table',
+      'table',
       'paragraph',
     ]);
     expect(result.blocks[1]).toMatchObject({
-      type: 'modified',
+      type: 'removed',
+      nodeType: 'table',
+    });
+    expect(result.blocks[2]).toMatchObject({
+      type: 'added',
       nodeType: 'table',
     });
   });
@@ -330,6 +328,227 @@ describe('type-specific diff safety', () => {
     expect(text).toContain('Nested panel text');
     expect(text).toContain('Content that appears after the complex table must still render.');
     expect(text).toContain('Final section');
+  });
+});
+
+describe('Sprint 2 diff classification and display requirements', () => {
+  test('old-only, new-only, and changed paragraphs use only same removed added result types', () => {
+    expect(buildRichTextDiffHtml('<p>Old only</p>', '', '', {}).blocks).toMatchObject([
+      { type: 'removed', nodeType: 'paragraph' },
+    ]);
+    expect(buildRichTextDiffHtml('', '<p>New only</p>', '', {}).blocks).toMatchObject([
+      { type: 'added', nodeType: 'paragraph' },
+    ]);
+
+    const changed = buildRichTextDiffHtml('<p>Old paragraph</p>', '<p>New paragraph</p>', '', {});
+    expect(changed.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(changed.blocks.some((block) => block.type === 'modified')).toBe(false);
+    expect(changed.summary.modifiedBlocks).toBe(0);
+  });
+
+  test.each([
+    ['bold', '<p>Text</p>', '<p><strong>Text</strong></p>'],
+    ['italic', '<p>Text</p>', '<p><em>Text</em></p>'],
+    ['text colour', '<p><span style="color: #172b4d">Text</span></p>', '<p><span style="color: #0052cc">Text</span></p>'],
+    ['text highlight', '<p><mark data-dh-bg-color="yellow">Text</mark></p>', '<p><mark data-dh-bg-color="green">Text</mark></p>'],
+    ['link href', '<p><a href="https://example.com/a">Text</a></p>', '<p><a href="https://example.com/b">Text</a></p>'],
+  ])('paragraph %s changes produce a block diff', (_name, oldHtml, newHtml) => {
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks.map((block) => block.nodeType)).toEqual(['paragraph', 'paragraph']);
+  });
+
+  test('equivalent inline tags and attribute ordering do not create false diffs', () => {
+    const strongResult = buildRichTextDiffHtml('<p><strong>Text</strong></p>', '<p><b>Text</b></p>', '', {});
+    const imageResult = buildRichTextDiffHtml(
+      '<img width="300" height="200" alt="Diagram" src="https://example.com/a.png">',
+      '<img src="https://example.com/a.png" alt="Diagram" height="200" width="300">',
+      '',
+      {}
+    );
+
+    expect(strongResult.blocks.map((block) => block.type)).toEqual(['same']);
+    expect(imageResult.blocks.map((block) => block.type)).toEqual(['same']);
+  });
+
+  test('visible line breaks collapse only when at least one break exists on both sides', () => {
+    const repeatedBreaks = buildRichTextDiffHtml(
+      '<p>Line one<br>Line two</p>',
+      '<p>Line one<br><br><br>Line two</p>',
+      '',
+      {}
+    );
+    const noBreak = buildRichTextDiffHtml(
+      '<p>Line one Line two</p>',
+      '<p>Line one<br>Line two</p>',
+      '',
+      {}
+    );
+    const serializationWhitespace = buildRichTextDiffHtml(
+      '<p><strong>Line one</strong>\n<em>Line two</em></p>',
+      '<p><strong>Line one</strong><em>Line two</em></p>',
+      '',
+      {}
+    );
+
+    expect(repeatedBreaks.blocks.map((block) => block.type)).toEqual(['same']);
+    expect(noBreak.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(serializationWhitespace.blocks.map((block) => block.type)).toEqual(['same']);
+  });
+
+  test('paragraph split and heading type changes are not grouped', () => {
+    const split = buildRichTextDiffHtml(
+      '<p>First sentence. Second sentence.</p>',
+      '<p>First sentence.</p><p>Second sentence.</p>',
+      '',
+      {}
+    );
+    const headingLevel = buildRichTextDiffHtml('<h2>Project Scope</h2>', '<h3>Project Scope</h3>', '', {});
+    const headingToParagraph = buildRichTextDiffHtml('<h2>Project Scope</h2>', '<p>Project Scope</p>', '', {});
+
+    expect(split.blocks.map((block) => block.type)).toEqual(['removed', 'added', 'added']);
+    expect(headingLevel.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(headingToParagraph.blocks.map((block) => block.nodeType)).toEqual(['heading', 'paragraph']);
+  });
+
+  test('ordinary ordered and unordered lists are compared as whole-list blocks', () => {
+    const itemOrder = buildRichTextDiffHtml(
+      '<ul><li>A</li><li>B</li></ul>',
+      '<ul><li>B</li><li>A</li></ul>',
+      '',
+      {}
+    );
+    const listType = buildRichTextDiffHtml('<ul><li>A</li></ul>', '<ol><li>A</li></ol>', '', {});
+    const adjacent = buildRichTextDiffHtml(
+      '<ul><li>A</li></ul><ul><li>B</li></ul>',
+      '<ul><li>A</li></ul><ul><li>C</li></ul>',
+      '',
+      {}
+    );
+
+    expect(itemOrder.blocks.map((block) => block.nodeType)).toEqual(['list', 'list']);
+    expect(itemOrder.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(listType.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(adjacent.blocks.map((block) => block.type)).toEqual(['same', 'removed', 'added']);
+  });
+
+  test('blockquotes are complete diff blocks even with multiple paragraphs', () => {
+    const result = buildRichTextDiffHtml(
+      '<blockquote><p>First</p><p>Second</p></blockquote>',
+      '<blockquote><p>First</p><p>Changed</p></blockquote>',
+      '',
+      {}
+    );
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks.map((block) => block.nodeType)).toEqual(['blockquote', 'blockquote']);
+    expect(result.blocks[0].oldHtml).toContain('<p>Second</p>');
+  });
+
+  test('compatible table changes mark only changed old and new cells', () => {
+    const result = buildRichTextDiffHtml(
+      '<table><tbody><tr><th>Field</th><th>Value</th></tr><tr><td data-highlight-colour="LIGHT_GREEN">Status</td><td>Old</td></tr></tbody></table>',
+      '<table><tbody><tr><th>Field</th><th>Value</th></tr><tr><td data-highlight-colour="LIGHT_GREEN">Status</td><td>New</td></tr></tbody></table>',
+      '',
+      {}
+    );
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks[0].tableDiff.mode).toBe('cell_level');
+    expect(result.blocks[0].renderedHtml).toContain('dh-table-cell-diff--removed');
+    expect(result.blocks[1].renderedHtml).toContain('dh-table-cell-diff--added');
+    expect(result.blocks[1].renderedHtml).toContain('data-dh-bg-color="light-green"');
+  });
+
+  test.each([
+    ['added row', '<table><tbody><tr><td>A</td></tr></tbody></table>', '<table><tbody><tr><td>A</td></tr><tr><td>B</td></tr></tbody></table>'],
+    ['removed column', '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>', '<table><tbody><tr><td>A</td></tr></tbody></table>'],
+    ['rowspan change', '<table><tbody><tr><td rowspan="2">A</td><td>B</td></tr><tr><td>C</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td></tr></tbody></table>'],
+    ['colspan change', '<table><tbody><tr><td colspan="2">A</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>'],
+  ])('incompatible table structure falls back to whole-table rows for %s', (_name, oldHtml, newHtml) => {
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks[0].tableDiff.mode).toBe('structure');
+    expect(result.blocks[0].renderedHtml).not.toContain('dh-table-cell-diff--removed');
+    expect(result.blocks[1].renderedHtml).not.toContain('dh-table-cell-diff--added');
+  });
+
+  test('panels and decisions are independent blocks with original styling preserved', () => {
+    const panels = buildRichTextDiffHtml(
+      '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Stable</p></ac:rich-text-body></ac:structured-macro><ac:structured-macro ac:name="note"><ac:rich-text-body><p>Old panel</p></ac:rich-text-body></ac:structured-macro>',
+      '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Stable</p></ac:rich-text-body></ac:structured-macro><ac:structured-macro ac:name="warning"><ac:rich-text-body><p>New panel</p></ac:rich-text-body></ac:structured-macro>',
+      '',
+      {}
+    );
+    const decisions = buildRichTextDiffHtml(
+      '<ac:adf-node type="decisionItem"><ac:adf-attribute key="state">DECIDED</ac:adf-attribute><p>Keep</p></ac:adf-node><ac:adf-node type="decisionItem"><ac:adf-attribute key="state">UNDECIDED</ac:adf-attribute><p>Old decision</p></ac:adf-node>',
+      '<ac:adf-node type="decisionItem"><ac:adf-attribute key="state">DECIDED</ac:adf-attribute><p>Keep</p></ac:adf-node><ac:adf-node type="decisionItem"><ac:adf-attribute key="state">DECIDED</ac:adf-attribute><p>New decision</p></ac:adf-node>',
+      '',
+      {}
+    );
+
+    expect(panels.blocks.map((block) => block.type)).toEqual(['same', 'removed', 'added']);
+    expect(panels.blocks[1].renderedHtml).toContain('data-dh-node-type="panel"');
+    expect(panels.blocks[1].renderedHtml).toContain('Old panel');
+    expect(panels.blocks[2].renderedHtml).toContain('data-dh-node-type="panel"');
+    expect(panels.blocks[2].renderedHtml).toContain('New panel');
+    expect(decisions.blocks.map((block) => block.type)).toEqual(['same', 'removed', 'added']);
+    expect(decisions.blocks.map((block) => block.nodeType)).toEqual(['decision', 'decision', 'decision']);
+    expect(decisions.blocks[2].renderedHtml).toContain('data-dh-decision-state="decided"');
+  });
+
+  test('dates compare by semantic date and changed dates diff the whole paragraph', () => {
+    const same = buildRichTextDiffHtml('<p>Due <ri:date ri:value="2026-07-05" /></p>', '<p>Due <time datetime="2026-07-05">5 Jul 2026</time></p>', '', {});
+    const changed = buildRichTextDiffHtml('<p>Due <ri:date ri:value="2026-07-05" /></p>', '<p>Due <ri:date ri:value="2026-07-06" /></p>', '', {});
+
+    expect(same.blocks.map((block) => block.type)).toEqual(['same']);
+    expect(changed.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(changed.blocks[1].renderedHtml).toContain('data-dh-node-type="date"');
+  });
+
+  test('images are independent blocks and compare persistent image metadata', () => {
+    const attachments = { 'diagram.png': 'https://example.com/diagram.png' };
+    const differentAttachmentId = buildRichTextDiffHtml(
+      '<ac:image ac:width="300"><ri:attachment ri:filename="diagram.png" ri:attachment-id="old-id" /></ac:image>',
+      '<ac:image ac:width="300"><ri:attachment ri:filename="diagram.png" ri:attachment-id="new-id" /></ac:image>',
+      '',
+      attachments
+    );
+    const paragraphBelow = buildRichTextDiffHtml(
+      '<ac:image ac:width="300"><ri:attachment ri:filename="diagram.png" ri:attachment-id="same-id" /></ac:image><p>Old caption typed manually</p>',
+      '<ac:image ac:width="320"><ri:attachment ri:filename="diagram.png" ri:attachment-id="same-id" /></ac:image><p>New caption typed manually</p>',
+      '',
+      attachments
+    );
+
+    expect(differentAttachmentId.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(differentAttachmentId.blocks.map((block) => block.nodeType)).toEqual(['image', 'image']);
+    expect(paragraphBelow.blocks.map((block) => block.nodeType)).toEqual([
+      'image',
+      'paragraph',
+      'image',
+      'paragraph',
+    ]);
+    expect(paragraphBelow.blocks.map((block) => block.type)).toEqual([
+      'removed',
+      'removed',
+      'added',
+      'added',
+    ]);
+  });
+
+  test('diff row CSS uses outer borders without red or green row backgrounds', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+
+    expect(css).toMatch(/\.dh-github-diff-part--removed\s*{[^}]*border:\s*2px solid var\(--dh-red\)/);
+    expect(css).toMatch(/\.dh-github-diff-part--added\s*{[^}]*border:\s*2px solid #36b37e/);
+    expect(css).toMatch(/\.dh-github-diff-part\s*{[^}]*background:\s*transparent/);
+    expect(css).not.toMatch(/\.dh-github-diff-part--removed\s*{[^}]*background:\s*var\(--dh-red-soft\)/);
+    expect(css).not.toMatch(/\.dh-github-diff-part--added\s*{[^}]*background:\s*var\(--dh-green-soft\)/);
   });
 });
 
