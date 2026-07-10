@@ -201,6 +201,20 @@ function ComparisonPanelContent({
           attachmentsByFilename || {}
         );
         nextHtml = nextDiff.html;
+      } else if (hasComparisonBase && isCurrent) {
+        const currentPreviewBody = currentBodyValue || selectedBodyValue;
+
+        // Render current-vs-current through the same block pipeline as a real
+        // comparison. Complex Confluence storage can contain macros and nested
+        // media that are safer to prepare block-by-block than as one large HTML
+        // fragment, and the resulting diff still has zero additions/removals.
+        nextDiff = buildRichTextDiffHtml(
+          currentPreviewBody,
+          currentPreviewBody,
+          baseUrl,
+          attachmentsByFilename || {}
+        );
+        nextHtml = nextDiff.html;
       } else {
         nextHtml = prepareConfluenceHtml(
           currentBodyValue || selectedBodyValue,
