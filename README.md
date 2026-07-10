@@ -86,10 +86,16 @@ calls so access follows the invoking user's Confluence permissions.
 Fetches the page data needed by the frontend:
 
 1. Current page metadata and title.
-2. All page versions, newest first.
-3. Storage-format body HTML for each version.
-4. Page attachments, used to resolve image attachment macros.
-5. Author display names where available.
+2. The live current-page storage body from the page-by-id endpoint.
+3. All page versions, newest first.
+4. Storage-format body HTML for each historical version.
+5. Page attachments, used to resolve image attachment macros.
+6. Author display names where available.
+
+The newest version uses the live current-page body when it is available. This
+avoids incomplete current-vs-current previews when the versions response omits
+or truncates complex storage content. Historical versions continue to use the
+versions endpoint.
 
 The frontend expects each version body as Confluence storage HTML:
 
@@ -153,7 +159,7 @@ buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename)
 Location:
 
 ```text
-static/hello-world/src/utils.js:1601
+static/hello-world/src/utils.js
   buildRichTextDiffHtml
 ```
 
@@ -235,13 +241,13 @@ and natural-language content.
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:1249
+static/hello-world/src/utils.js
   canPairForInlineDiff
 
-static/hello-world/src/utils.js:1451
+static/hello-world/src/utils.js
   buildModifiedBlockDiff
 
-static/hello-world/src/utils.js:1494
+static/hello-world/src/utils.js
   buildBlockLevelModifiedDiff
 ```
 
@@ -267,19 +273,19 @@ Task storage HTML is kept for reconstruction. The preview uses readable markers:
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:310
+static/hello-world/src/utils.js
   expandConfluenceTaskLists
 
-static/hello-world/src/utils.js:828
+static/hello-world/src/utils.js
   extractComparableBlocksFromPreparedNode
 
-static/hello-world/src/utils.js:1515
+static/hello-world/src/utils.js
   buildTaskItemDiff
 
-static/hello-world/src/styles.css:344
+static/hello-world/src/styles.css
   [data-dh-node-type='task_item']
 
-static/hello-world/src/styles.css:348
+static/hello-world/src/styles.css
   [data-dh-task-marker='true']
 ```
 
@@ -297,10 +303,10 @@ so indentation and whitespace remain meaningful.
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:193
+static/hello-world/src/utils.js
   expandConfluenceCodeMacros
 
-static/hello-world/src/utils.js:1279
+static/hello-world/src/utils.js
   buildCodeBlockDiff
 ```
 
@@ -317,13 +323,13 @@ instead of forcing two different structures into one table.
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:1439
+static/hello-world/src/utils.js
   buildTableDiff
 
-static/hello-world/src/utils.js:1342
+static/hello-world/src/utils.js
   buildCellLevelTableDiff
 
-static/hello-world/src/utils.js:1403
+static/hello-world/src/utils.js
   buildSideBySideTableDiff
 ```
 
@@ -348,13 +354,13 @@ panel
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:446
+static/hello-world/src/utils.js
   expandKnownStructuredMacros
 
-static/hello-world/src/utils.js:1494
+static/hello-world/src/utils.js
   buildBlockLevelModifiedDiff
 
-static/hello-world/src/styles.css:357
+static/hello-world/src/styles.css
   [data-dh-node-type='panel']
 ```
 
@@ -389,25 +395,25 @@ color values
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:292
+static/hello-world/src/utils.js
   createRawFallbackHtml
 
-static/hello-world/src/utils.js:242
+static/hello-world/src/utils.js
   cleanUserFacingName
 
-static/hello-world/src/utils.js:498
+static/hello-world/src/utils.js
   expandUnsupportedStorageNodes
 
-static/hello-world/src/utils.js:354
+static/hello-world/src/utils.js
   expandAdfNodes
 
-static/hello-world/src/utils.js:624
+static/hello-world/src/utils.js
   visibleTextContent
 
-static/hello-world/src/styles.css:465
+static/hello-world/src/styles.css
   [data-dh-node-type='unsupported']
 
-static/hello-world/src/styles.css:478
+static/hello-world/src/styles.css
   [data-dh-raw-inspector='true']
 ```
 
@@ -422,7 +428,7 @@ prepareConfluenceHtml
 Location:
 
 ```text
-static/hello-world/src/utils.js:512
+static/hello-world/src/utils.js
   prepareConfluenceHtml
 ```
 
@@ -430,10 +436,11 @@ It expands a safe subset of Confluence storage HTML into display HTML:
 
 ```text
 Confluence links
-image attachments
-code macros
+image attachments, dimensions, alignment, captions, and borders
+code macros and line numbers
 task lists
 panel-like macros
+ADF marks for formatting, colour, alignment, and indentation
 ADF status, emoji, mention, date, task, decision, smart link nodes
 unsupported macros/extensions
 whiteboard smart links
@@ -442,6 +449,49 @@ whiteboard smart links
 After expansion, it sanitizes tags and attributes before returning preview HTML.
 Allowed data attributes are used only for app-specific rendering and diff
 classification.
+
+## Manual Renderer Coverage
+
+The comparison page and Draft Preview use the app's manual storage-format
+renderer. They do not depend on the Confluence Content Body Conversion API.
+Storage HTML and display HTML remain separate so the renderer can improve the
+preview without changing the content used for recovery or draft creation.
+
+The current manual renderer covers the team's required insert elements:
+
+- text marks, including bold, italic, underline, strike-through, subscript,
+  superscript, text colour, and highlight colour;
+- headings H1-H6, paragraphs, blockquotes, horizontal rules, hard breaks, and
+  links;
+- ordered and unordered lists, including nested lists and empty parent bullets;
+- tables, including headers, `rowspan`, `colspan`, cell alignment, and cell
+  background colours such as `data-highlight-colour="#b3bac5"`;
+- Confluence information panels represented as structured macros or ADF panel
+  extensions, with type and colour derived from storage metadata rather than
+  visible text;
+- decision lists and their decided/undecided state;
+- Confluence dates from storage macros, ADF nodes, links, and `<time>` elements;
+- attached images with resolved URLs, width, height, alignment, wrapping,
+  captions, and ADF border marks.
+
+The renderer also includes the following enhanced support:
+
+- Expand/Collapse macros using native `<details>` and `<summary>` preview
+  markup;
+- text alignment and level-based indentation without cumulative nested ADF
+  offsets;
+- code blocks with language metadata, compact numbered lines, CDATA cleanup,
+  and repairs for malformed HTML code-block wrappers;
+- status labels with their stored label and colour;
+- safe readable cards for unsupported content while preserving the original
+  storage markup for reconstruction.
+
+Known limitation: Confluence `ac:layout`, `ac:layout-section`, and
+`ac:layout-cell` wrappers are currently treated as transparent containers so
+their child content can be diffed independently. As a result, multi-column page
+layouts are displayed vertically. Restoring columns requires preserving layout
+group metadata through block extraction and reassembling the rendered blocks;
+this has not yet been implemented.
 
 ## Whiteboard Cards
 
@@ -465,34 +515,34 @@ link or ADF smart-link storage remains available for reconstruction.
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:125
+static/hello-world/src/utils.js
   isWhiteboardUrl
 
-static/hello-world/src/utils.js:129
+static/hello-world/src/utils.js
   cleanWhiteboardTitle
 
-static/hello-world/src/utils.js:133
+static/hello-world/src/utils.js
   renderWhiteboardCard
 
-static/hello-world/src/utils.js:152
+static/hello-world/src/utils.js
   expandConfluenceLinks
 
-static/hello-world/src/utils.js:344
+static/hello-world/src/utils.js
   expandWhiteboardAnchors
 
-static/hello-world/src/utils.js:354
+static/hello-world/src/utils.js
   expandAdfNodes
 
-static/hello-world/src/styles.css:364
+static/hello-world/src/styles.css
   [data-dh-node-type='whiteboard_card']
 
-static/hello-world/src/styles.css:378
+static/hello-world/src/styles.css
   [data-dh-whiteboard-icon='true']
 
-static/hello-world/src/styles.css:430
+static/hello-world/src/styles.css
   [data-dh-whiteboard-product='true']
 
-static/hello-world/src/styles.css:455
+static/hello-world/src/styles.css
   [data-dh-whiteboard-open='true']
 ```
 
@@ -507,22 +557,22 @@ when they contain semantic child blocks.
 Implementation locations:
 
 ```text
-static/hello-world/src/utils.js:758
+static/hello-world/src/utils.js
   hasBlockElementChildren
 
-static/hello-world/src/utils.js:766
+static/hello-world/src/utils.js
   isTransparentContainer
 
-static/hello-world/src/utils.js:778
+static/hello-world/src/utils.js
   isRawTransparentContainer
 
-static/hello-world/src/utils.js:790
+static/hello-world/src/utils.js
   collectRawBlockNodes
 
-static/hello-world/src/utils.js:828
+static/hello-world/src/utils.js
   extractComparableBlocksFromPreparedNode
 
-static/hello-world/src/utils.js:865
+static/hello-world/src/utils.js
   extractDiffBlocks
 ```
 
@@ -546,16 +596,16 @@ storage nodes from being degraded into plain text.
 Implementation location:
 
 ```text
-static/hello-world/src/components/ComparisonPanel.js:30
+static/hello-world/src/components/ComparisonPanel.js
   getSelectedBlockHtml
 
-static/hello-world/src/components/ComparisonPanel.js:60
+static/hello-world/src/components/ComparisonPanel.js
   renderDraftBlock
 
-static/hello-world/src/components/ComparisonPanel.js:197
+static/hello-world/src/components/ComparisonPanel.js
   buildRichTextDiffHtml call site
 
-static/hello-world/src/components/ComparisonPanel.js:319
+static/hello-world/src/components/ComparisonPanel.js
   createDraft invocation
 ```
 
@@ -567,58 +617,33 @@ Focused tests live in:
 static/hello-world/src/utils.test.js
 ```
 
-Current coverage includes:
+Current coverage includes 36 focused tests for:
 
-```text
-static/hello-world/src/utils.test.js:10
-  low-similarity paragraph replacement stays atomic
-
-static/hello-world/src/utils.test.js:41
-  paragraph remains a block-level recovery unit without inline diff
-
-static/hello-world/src/utils.test.js:59
-  heading remains a block-level recovery unit without inline diff
-
-static/hello-world/src/utils.test.js:75
-  list additions are compared by item
-
-static/hello-world/src/utils.test.js:90
-  task checkbox state and text changes are captured by task item
-
-static/hello-world/src/utils.test.js:113
-  unsupported block renders a readable non-blank fallback
-
-static/hello-world/src/utils.test.js:145
-  unsupported raw content is preserved for reconstruction
-
-static/hello-world/src/utils.test.js:156
-  transparent containers are split into semantic child blocks
-
-static/hello-world/src/utils.test.js:171
-  Confluence layout containers do not become one giant diff block
-
-static/hello-world/src/utils.test.js:199
-  ADF internals are not mixed into normal preview text
-
-static/hello-world/src/utils.test.js:235
-  whiteboard links render as readable cards while preserving raw link storage
-
-static/hello-world/src/utils.test.js:250
-  ADF whiteboard smart links render as readable cards
-```
+- paragraph, heading, list-item, task-item, code-line, and table-cell diff
+  behavior;
+- same-version rendering after complex macros and media;
+- nested unordered-list markers;
+- text formatting, colours, highlights, alignment, and indentation;
+- merged table cells and storage-format cell background colours;
+- Confluence dates, panel metadata mapping, status labels, and decisions;
+- code CDATA cleanup and malformed HTML code-block repair;
+- image captions, dimensions, alignment, and ADF border metadata;
+- unsupported-content fallbacks, raw storage preservation, and internal-field
+  filtering;
+- whiteboard smart-link cards and transparent container splitting.
 
 Run the focused test suite from:
 
 ```powershell
-cd C:\Users\28055\Desktop\COMP9900\9900\static\hello-world
-npx.cmd react-scripts test --watchAll=false --runTestsByPath src/utils.test.js
+cd static/hello-world
+npx.cmd react-scripts test src/utils.test.js --watchAll=false --runInBand
 ```
 
 Last verified result:
 
 ```text
 Test Suites: 1 passed
-Tests: 14 passed
+Tests: 36 passed
 ```
 
 Jest may print a warning that it did not exit immediately because of open
@@ -631,14 +656,13 @@ changes.
 Build the Custom UI bundle:
 
 ```powershell
-cd /d C:\Users\28055\Desktop\COMP9900\9900\static\hello-world
+cd static/hello-world
 npm run build
 ```
 
 Deploy to the `jzm-dev` Forge environment from the Forge app root:
 
 ```powershell
-cd /d C:\Users\28055\Desktop\COMP9900\9900
 forge deploy --non-interactive -e jzm-dev
 ```
 
@@ -646,72 +670,56 @@ forge deploy --non-interactive -e jzm-dev
 dependencies are missing, `node_modules` was removed, or `package.json` /
 `package-lock.json` dependencies changed.
 
-After the latest build, the generated frontend assets were:
+The generated asset hashes change after each build. After deploying, verify that
+the Forge iframe loads the current files from
+`static/hello-world/build/static/`. If it still loads older `main.*.js` or
+`main.*.css` files, the deployed environment or browser cache is not using the
+latest build.
 
-```text
-static/hello-world/build/static/js/main.1a61e3f5.js
-static/hello-world/build/static/css/main.11df5e68.css
-```
+## Recent Manual Renderer Changes
 
-After deploying, the browser should load those hashes from the Forge iframe. If
-the page still loads an older `main.*.js`, the deployed environment or browser
-cache is not using the latest build.
+This iteration replaced the earlier limited preview behavior with a broader
+manual renderer for the Confluence storage formats used by the team's Sprint 2
+test page.
 
-## Today's Rich Text Changes
+### Current-page completeness
 
-The main changes made in this round:
+- `src/index.js` now requests the live page with `body-format=storage` and uses
+  that body for the newest version when available.
+- `ComparisonPanel.js` sends current-vs-current previews through the same
+  semantic block renderer as normal comparisons. This prevents complex content
+  near the end of a page from disappearing while keeping a zero-change summary.
 
-```text
-static/hello-world/src/utils.js:512
-  Added/updated the normalization and dispatch layer.
+### Storage normalization and rendering
 
-static/hello-world/src/utils.js:1249
-  Kept paragraph and heading as block-level recovery units.
+- `utils.js` now normalizes safe text colours, highlights, table backgrounds,
+  status colours, alignment, indentation, dates, and CSS lengths into explicit
+  `data-dh-*` rendering metadata.
+- Nested list structure and empty parent bullets are retained instead of being
+  collapsed onto the first child item.
+- Panel type is selected from ADF attributes or structured-macro names, not from
+  the visible panel text. The preview uses a bold textual type label in place of
+  the original icon and preserves the complete panel body.
+- ADF decision lists render as readable decided/undecided rows instead of an
+  unsupported-content card.
+- Code macros remove CDATA wrappers, retain whitespace and line numbers, and
+  repair the malformed opening/closing markup observed in HTML code blocks.
+- Image rendering reads exact width and height attributes without confusing
+  them with `original-width` or `original-height`. It also handles attachment
+  captions, alignment, wrapping, native image dimensions, and ADF border marks.
+- The sanitizer explicitly permits only the tags, attributes, URLs, styles, and
+  app metadata needed by these renderers.
 
-static/hello-world/src/utils.js:310
-  Added list/task item handling.
+### Styling and verification
 
-static/hello-world/src/utils.js:1279
-  Preserved code block line diff.
-
-static/hello-world/src/utils.js:1342
-  Preserved table row/cell diff when structure is compatible.
-
-static/hello-world/src/utils.js:354
-  Added safer panel, quote, unsupported, ADF, and whiteboard handling.
-
-static/hello-world/src/utils.js:699
-  Separated storage HTML from rendered preview HTML.
-
-static/hello-world/src/utils.js:242
-  Prevented internal IDs, gadget URLs, localIds, extension keys, colors, and
-  status internals from leaking into normal preview text.
-
-static/hello-world/src/components/ComparisonPanel.js:30
-  Kept complex reconstruction logic out of the component.
-
-static/hello-world/src/components/ComparisonPanel.js:197
-  Used structured diff blocks for user recovery choices.
-
-static/hello-world/src/components/ComparisonPanel.js:30
-  Preserved oldHtml/newHtml for draft reconstruction.
-
-static/hello-world/src/components/ComparisonPanel.js:60
-  Used rendered preview HTML only for display.
-
-static/hello-world/src/styles.css:344
-  Added minimal styles for tasks, panels, unsupported fallback cards, raw
-  inspector, and whiteboard cards.
-
-static/hello-world/src/mockData.js:31
-  Added small mock content for list, task, table, code, panel, quote, and
-  unsupported blocks.
-
-static/hello-world/src/utils.test.js:41
-  Added focused tests for block-level paragraph/heading behavior, list/task
-  diffs, unsupported fallback safety, raw preservation, container splitting, ADF
-  cleanup, and whiteboard card rendering.
-```
+- `styles.css` adds Confluence-like presentation for headings, nested lists,
+  tables, panels, decisions, dates, statuses, expands, code blocks, colours,
+  indentation, and image figures.
+- `utils.test.js` contains regression cases based on the actual storage markup
+  observed during testing, including malformed CDATA, ADF panels and decisions,
+  `data-highlight-colour`, image border marks, and exact image dimensions.
+- No npm dependencies, Forge scopes, or manifest permissions were added for
+  this renderer work.
 
 ## Development Notes
 

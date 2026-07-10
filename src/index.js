@@ -118,6 +118,25 @@ function extractStorageBody(version) {
 }
 
 /**
+ * Normalise the current page body returned by the page-by-id endpoint.
+ * The versions endpoint is still the right source for historical bodies, but
+ * the live page endpoint is more reliable for the current version because it
+ * returns the page exactly as Confluence currently stores it.
+ */
+function extractCurrentPageStorageBody(page) {
+  const storage = page && page.body && page.body.storage;
+
+  if (!storage || !storage.value) {
+    return null;
+  }
+
+  return {
+    representation: storage.representation || 'storage',
+    value: storage.value || '',
+  };
+}
+
+/**
  * Resolve account ids -> display names (best effort; failures fall back to "Unknown user").
  */
 async function resolveAuthorNames(authorIds) {
@@ -155,18 +174,27 @@ resolver.define('getPageVersions', async (req) => {
 
   console.log('[getPageVersions] start, pageId =', pageId);
 
-  // Page title (best effort).
+  // Current page metadata/body (best effort). We still fetch historical versions
+  // below, but the latest version preview should use the dedicated page endpoint
+  // so current-vs-current rendering does not depend on the versions listing
+  // response shape for complex pages.
   let pageTitle = '';
+  let currentPageBody = null;
   try {
-    const pageRes = await api.asUser().requestConfluence(route`/wiki/api/v2/pages/${pageId}`, {
-      headers: { Accept: 'application/json' },
-    });
+    const pageRes = await api.asUser().requestConfluence(
+      route`/wiki/api/v2/pages/${pageId}?body-format=storage`,
+      {
+        headers: { Accept: 'application/json' },
+      }
+    );
     if (pageRes.ok) {
       const page = await pageRes.json();
       pageTitle = page.title || '';
+      currentPageBody = extractCurrentPageStorageBody(page);
     }
   } catch (e) {
-    // title is optional
+    // Current page metadata/body is optional here; the versions endpoint below
+    // remains the fallback so the app can still render something useful.
   }
 
   const { versions: rawVersions, baseUrl: versionsBaseUrl } = await fetchAllVersions(pageId);
@@ -185,16 +213,20 @@ resolver.define('getPageVersions', async (req) => {
     pageTitle,
     baseUrl,
     attachmentsByFilename: attachments,
-    versions: rawVersions.map((v) => ({
-      number: v.number,
-      authorId: v.authorId,
-      authorName: authorMap[v.authorId] || 'Unknown user',
-      createdAt: v.createdAt,
-      message: v.message || '',
-      minorEdit: !!v.minorEdit,
-      title: v.page && v.page.title ? v.page.title : pageTitle,
-      body: extractStorageBody(v),
-    })),
+    versions: rawVersions.map((v, index) => {
+      const versionBody = extractStorageBody(v);
+
+      return {
+        number: v.number,
+        authorId: v.authorId,
+        authorName: authorMap[v.authorId] || 'Unknown user',
+        createdAt: v.createdAt,
+        message: v.message || '',
+        minorEdit: !!v.minorEdit,
+        title: v.page && v.page.title ? v.page.title : pageTitle,
+        body: index === 0 && currentPageBody ? currentPageBody : versionBody,
+      };
+    }),
   };
 });
 

@@ -64,8 +64,25 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/'/g, '&#39;');
+}
+
+function decodeBasicHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
 function decodeCdata(value) {
-  return String(value || '').replace(/^<!\[CDATA\[/, '').replace(/\]\]>$/, '');
+  return decodeBasicHtmlEntities(decodeBasicHtmlEntities(value))
+    .replace(/^\s*<!--\s*\[CDATA\[/, '')
+    .replace(/\]\]\s*-->\s*$/, '')
+    .replace(/^\s*<!\[CDATA\[/, '')
+    .replace(/\]\]>\s*$/, '');
 }
 
 function normaliseLineEndings(value) {
@@ -90,6 +107,632 @@ function hashString(value) {
   return hash.toString(16);
 }
 
+const CONFLUENCE_COLOR_PALETTE = {
+  black: '#172b4d',
+  blue: '#0052cc',
+  gray: '#44546f',
+  grey: '#44546f',
+  green: '#00875a',
+  magenta: '#cd519d',
+  neutral: '#44546f',
+  orange: '#ff8b00',
+  purple: '#6554c0',
+  red: '#de350b',
+  teal: '#008da6',
+  white: '#ffffff',
+  yellow: '#ffab00',
+  'dark-blue': '#0055cc',
+  'dark-green': '#216e4e',
+  'dark-grey': '#44546f',
+  'dark-gray': '#44546f',
+  'dark-lime': '#4c6b1f',
+  'dark-magenta': '#943d73',
+  'dark-orange': '#a54800',
+  'dark-purple': '#5e4db2',
+  'dark-red': '#ae2a19',
+  'dark-teal': '#206a83',
+  'dark-yellow': '#7f5f01',
+  'light-blue': '#e9f2ff',
+  'light-green': '#dcfff1',
+  'light-grey': '#f4f5f7',
+  'light-gray': '#f4f5f7',
+  'light-lime': '#efffd6',
+  'light-magenta': '#ffecf8',
+  'light-orange': '#fef1e8',
+  'light-purple': '#f3f0ff',
+  'light-red': '#ffedeb',
+  'light-teal': '#e7f9ff',
+  'light-yellow': '#fff7d6',
+  'medium-gray': '#b3bac5',
+};
+
+const ATLASSIAN_DESIGN_TOKEN_COLORS = {
+  '--ds-text-accent-blue': '#0052cc',
+  '--ds-text-accent-blue-bolder': '#09326c',
+  '--ds-text-accent-green': '#00875a',
+  '--ds-text-accent-green-bolder': '#164b35',
+  '--ds-text-accent-lime': '#4c6b1f',
+  '--ds-text-accent-lime-bolder': '#37471f',
+  '--ds-text-accent-magenta': '#943d73',
+  '--ds-text-accent-magenta-bolder': '#50253f',
+  '--ds-text-accent-orange': '#a54800',
+  '--ds-text-accent-orange-bolder': '#702e00',
+  '--ds-text-accent-purple': '#5e4db2',
+  '--ds-text-accent-purple-bolder': '#352c63',
+  '--ds-text-accent-red': '#ae2a19',
+  '--ds-text-accent-red-bolder': '#601e16',
+  '--ds-text-accent-teal': '#206a83',
+  '--ds-text-accent-teal-bolder': '#164555',
+  '--ds-text-accent-yellow': '#7f5f01',
+  '--ds-text-accent-yellow-bolder': '#533f04',
+  '--ds-background-accent-blue-subtlest': '#e9f2ff',
+  '--ds-background-accent-blue-subtler': '#cce0ff',
+  '--ds-background-accent-green-subtlest': '#dcfff1',
+  '--ds-background-accent-green-subtler': '#baf3db',
+  '--ds-background-accent-lime-subtlest': '#efffd6',
+  '--ds-background-accent-lime-subtler': '#d3f1a7',
+  '--ds-background-accent-magenta-subtlest': '#ffecf8',
+  '--ds-background-accent-magenta-subtler': '#fdd0ec',
+  '--ds-background-accent-orange-subtlest': '#fff4e6',
+  '--ds-background-accent-orange-subtler': '#fedec8',
+  '--ds-background-accent-purple-subtlest': '#f3f0ff',
+  '--ds-background-accent-purple-subtler': '#dfd8fd',
+  '--ds-background-accent-red-subtlest': '#ffedeb',
+  '--ds-background-accent-red-subtler': '#ffd2cc',
+  '--ds-background-accent-teal-subtlest': '#e7f9ff',
+  '--ds-background-accent-teal-subtler': '#c6edfb',
+  '--ds-background-accent-yellow-subtlest': '#fff7d6',
+  '--ds-background-accent-yellow-subtler': '#f8e6a0',
+  '--ds-background-neutral': '#f4f5f7',
+  '--ds-surface': '#ffffff',
+};
+
+const ATLASSIAN_DESIGN_TOKEN_COLOR_KEYS = {
+  '--ds-text-accent-blue': 'blue',
+  '--ds-text-accent-blue-bolder': 'dark-blue',
+  '--ds-text-accent-green': 'green',
+  '--ds-text-accent-green-bolder': 'dark-green',
+  '--ds-text-accent-lime': 'dark-lime',
+  '--ds-text-accent-lime-bolder': 'dark-lime',
+  '--ds-text-accent-magenta': 'dark-magenta',
+  '--ds-text-accent-magenta-bolder': 'dark-magenta',
+  '--ds-text-accent-orange': 'dark-orange',
+  '--ds-text-accent-orange-bolder': 'dark-orange',
+  '--ds-text-accent-purple': 'dark-purple',
+  '--ds-text-accent-purple-bolder': 'dark-purple',
+  '--ds-text-accent-red': 'dark-red',
+  '--ds-text-accent-red-bolder': 'dark-red',
+  '--ds-text-accent-teal': 'dark-teal',
+  '--ds-text-accent-teal-bolder': 'dark-teal',
+  '--ds-text-accent-yellow': 'dark-yellow',
+  '--ds-text-accent-yellow-bolder': 'dark-yellow',
+  '--ds-background-accent-blue-subtlest': 'light-blue',
+  '--ds-background-accent-blue-subtler': 'light-blue',
+  '--ds-background-accent-green-subtlest': 'light-green',
+  '--ds-background-accent-green-subtler': 'light-green',
+  '--ds-background-accent-lime-subtlest': 'light-lime',
+  '--ds-background-accent-lime-subtler': 'light-lime',
+  '--ds-background-accent-magenta-subtlest': 'light-magenta',
+  '--ds-background-accent-magenta-subtler': 'light-magenta',
+  '--ds-background-accent-orange-subtlest': 'light-orange',
+  '--ds-background-accent-orange-subtler': 'light-orange',
+  '--ds-background-accent-purple-subtlest': 'light-purple',
+  '--ds-background-accent-purple-subtler': 'light-purple',
+  '--ds-background-accent-red-subtlest': 'light-red',
+  '--ds-background-accent-red-subtler': 'light-red',
+  '--ds-background-accent-teal-subtlest': 'light-teal',
+  '--ds-background-accent-teal-subtler': 'light-teal',
+  '--ds-background-accent-yellow-subtlest': 'light-yellow',
+  '--ds-background-accent-yellow-subtler': 'light-yellow',
+  '--ds-background-neutral': 'light-gray',
+  '--ds-surface': 'white',
+};
+
+const HEX_COLOR_KEYS = {
+  '#09326c': 'dark-blue',
+  '#0747a6': 'dark-blue',
+  '#0049b0': 'dark-blue',
+  '#0052cc': 'blue',
+  '#0055cc': 'blue',
+  '#0c66e4': 'blue',
+  '#2684ff': 'blue',
+  '#4c9aff': 'blue',
+  '#b3d4ff': 'light-blue',
+  '#cce0ff': 'light-blue',
+  '#deebff': 'light-blue',
+  '#e9f2ff': 'light-blue',
+  '#164b35': 'dark-green',
+  '#006644': 'dark-green',
+  '#00875a': 'green',
+  '#216e4e': 'dark-green',
+  '#36b37e': 'green',
+  '#57d9a3': 'green',
+  '#abf5d1': 'light-green',
+  '#baf3db': 'light-green',
+  '#dcfff1': 'light-green',
+  '#37471f': 'dark-lime',
+  '#4c6b1f': 'dark-lime',
+  '#d3f1a7': 'light-lime',
+  '#efffd6': 'light-lime',
+  '#50253f': 'dark-magenta',
+  '#943d73': 'dark-magenta',
+  '#cd519d': 'magenta',
+  '#fdd0ec': 'light-magenta',
+  '#ffecf8': 'light-magenta',
+  '#974f0c': 'dark-orange',
+  '#702e00': 'dark-orange',
+  '#a54800': 'dark-orange',
+  '#ff8b00': 'orange',
+  '#ff991f': 'orange',
+  '#ffc400': 'yellow',
+  '#fedec8': 'light-orange',
+  '#fef1e8': 'light-orange',
+  '#fff4e6': 'light-orange',
+  '#352c63': 'dark-purple',
+  '#403294': 'dark-purple',
+  '#5e4db2': 'dark-purple',
+  '#6554c0': 'purple',
+  '#dfd8fd': 'light-purple',
+  '#eae6ff': 'light-purple',
+  '#f3f0ff': 'light-purple',
+  '#601e16': 'dark-red',
+  '#bf2600': 'dark-red',
+  '#ae2a19': 'dark-red',
+  '#de350b': 'red',
+  '#ff5630': 'red',
+  '#ff7452': 'red',
+  '#ff8f73': 'red',
+  '#ffbdad': 'light-red',
+  '#ffd2cc': 'light-red',
+  '#ffedeb': 'light-red',
+  '#164555': 'dark-teal',
+  '#206a83': 'dark-teal',
+  '#008da6': 'teal',
+  '#c6edfb': 'light-teal',
+  '#e6fcff': 'light-teal',
+  '#e7f9ff': 'light-teal',
+  '#533f04': 'dark-yellow',
+  '#7f5f01': 'dark-yellow',
+  '#ffab00': 'yellow',
+  '#f8e6a0': 'light-yellow',
+  '#fff0b3': 'light-yellow',
+  '#fff7d6': 'light-yellow',
+  '#172b4d': 'black',
+  '#091e42': 'black',
+  '#253858': 'black',
+  '#42526e': 'gray',
+  '#44546f': 'gray',
+  '#5e6c84': 'gray',
+  '#6b778c': 'gray',
+  '#7a869a': 'gray',
+  '#97a0af': 'gray',
+  '#b3bac5': 'medium-gray',
+  '#dfe1e6': 'light-gray',
+  '#ebecf0': 'light-gray',
+  '#f4f5f7': 'light-gray',
+  '#ffffff': 'white',
+};
+
+function rgbToHexColorKey(value) {
+  const match = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.exec(
+    String(value || '').trim()
+  );
+  if (!match) return '';
+
+  const rgb = match.slice(1, 4).map((part) => Number(part));
+  if (rgb.some((part) => !Number.isFinite(part) || part < 0 || part > 255)) return '';
+
+  const hex = `#${rgb.map((part) => part.toString(16).padStart(2, '0')).join('')}`;
+  return HEX_COLOR_KEYS[hex] || '';
+}
+
+function normaliseConfluenceColorName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^color:/i, '')
+    .replace(/^background:/i, '')
+    .replace(/_/g, '-')
+    .replace(/\s+/g, '-')
+    .toLowerCase();
+}
+
+function normaliseConfluenceColorKey(value) {
+  const color = String(value || '').trim();
+  if (!color) return '';
+
+  const tokenMatch = /^var\(\s*(--ds-[^) ,]+)(?:\s*,\s*([^)]+))?\s*\)$/i.exec(color);
+  if (tokenMatch) {
+    const tokenKey = ATLASSIAN_DESIGN_TOKEN_COLOR_KEYS[tokenMatch[1].toLowerCase()];
+    if (tokenKey) return tokenKey;
+    if (tokenMatch[2]) return normaliseConfluenceColorKey(tokenMatch[2]);
+  }
+
+  const paletteKey = normaliseConfluenceColorName(color);
+  if (CONFLUENCE_COLOR_PALETTE[paletteKey]) return paletteKey;
+
+  const lowerHex = color.toLowerCase();
+  if (HEX_COLOR_KEYS[lowerHex]) return HEX_COLOR_KEYS[lowerHex];
+
+  const rgbKey = rgbToHexColorKey(color);
+  if (rgbKey) return rgbKey;
+
+  return '';
+}
+
+function normaliseCssColor(value) {
+  const color = String(value || '').trim();
+  if (!color) return '';
+
+  const tokenMatch = /^var\(\s*(--ds-[^) ,]+)(?:\s*,\s*([^)]+))?\s*\)$/i.exec(color);
+  if (tokenMatch) {
+    const tokenColor = ATLASSIAN_DESIGN_TOKEN_COLORS[tokenMatch[1].toLowerCase()];
+    if (tokenColor) return tokenColor;
+    if (tokenMatch[2]) return normaliseCssColor(tokenMatch[2]);
+  }
+
+  const paletteColor = CONFLUENCE_COLOR_PALETTE[normaliseConfluenceColorName(color)];
+  if (paletteColor) return paletteColor;
+
+  if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(color)) {
+    return color;
+  }
+
+  return '';
+}
+
+function colorDataAttr(name, value) {
+  const key = normaliseConfluenceColorKey(value);
+  return key ? ` ${name}="${escapeAttr(key)}"` : '';
+}
+
+function normaliseCssLength(value) {
+  const length = String(value || '').trim();
+  if (!length) return '';
+  if (length === '0') return '0';
+  if (/^\d{1,4}(?:\.\d{1,2})?(?:px|em|rem|%)$/i.test(length)) return length;
+  if (/^\d{1,4}$/.test(length)) return `${length}px`;
+  return '';
+}
+
+function normaliseCssKeyword(value, allowed) {
+  const keyword = String(value || '').trim().toLowerCase();
+  return allowed.includes(keyword) ? keyword : '';
+}
+
+function normaliseTextAlign(value) {
+  const text = normaliseConfluenceColorName(value)
+    .replace(/^text-align-/, '')
+    .replace(/^alignment-/, '')
+    .replace(/^align-/, '');
+
+  return normaliseCssKeyword(text, ['left', 'center', 'right', 'justify']);
+}
+
+function normaliseIndentLevel(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+
+  const classLikeMatch = /(?:indent|indentation)[-_ ]*(\d{1,2})/.exec(raw);
+  const numericValue = classLikeMatch ? Number(classLikeMatch[1]) : Number(raw);
+
+  if (Number.isFinite(numericValue)) {
+    const level = Math.max(0, Math.min(8, Math.round(numericValue)));
+    return level ? String(level) : '';
+  }
+
+  const pxMatch = /^(\d{1,4}(?:\.\d{1,2})?)px$/.exec(raw);
+  if (pxMatch) {
+    const level = Math.max(0, Math.min(8, Math.round(Number(pxMatch[1]) / 24)));
+    return level ? String(level) : '';
+  }
+
+  const emMatch = /^(\d{1,2}(?:\.\d{1,2})?)(?:em|rem)$/.exec(raw);
+  if (emMatch) {
+    const level = Math.max(0, Math.min(8, Math.round(Number(emMatch[1]) / 1.5)));
+    return level ? String(level) : '';
+  }
+
+  return '';
+}
+
+function setTextLayoutDataAttributes(node, { align, indent } = {}) {
+  const safeAlign = normaliseTextAlign(align);
+  const safeIndent = normaliseIndentLevel(indent);
+
+  if (safeAlign) node.setAttribute('data-dh-align', safeAlign);
+  if (safeIndent) node.setAttribute('data-dh-indent', safeIndent);
+}
+
+function textLayoutDataAttrs({ align, indent } = {}) {
+  const attrs = [];
+  const safeAlign = normaliseTextAlign(align);
+  const safeIndent = normaliseIndentLevel(indent);
+
+  if (safeAlign) attrs.push(` data-dh-align="${escapeAttr(safeAlign)}"`);
+  if (safeIndent) attrs.push(` data-dh-indent="${escapeAttr(safeIndent)}"`);
+
+  return attrs.join('');
+}
+
+function textLayoutDataAttrsFromMarkup(markup) {
+  const align =
+    extractAdfAttribute(markup, ['textAlign', 'align', 'alignment', 'text-align']) ||
+    extractLooseField(markup, ['textAlign', 'align', 'alignment', 'text-align']) ||
+    extractAttr(markup, ['data-dh-align', 'data-align', 'data-alignment', 'data-text-align', 'align']);
+  const indent =
+    extractAdfAttribute(markup, ['indentation', 'indent', 'level']) ||
+    extractLooseField(markup, ['indentation', 'indent', 'level']) ||
+    extractAttr(markup, ['data-dh-indent', 'data-indent', 'data-indentation', 'indent']);
+
+  return textLayoutDataAttrs({ align, indent });
+}
+
+function safeStyleDeclarations(styleText) {
+  const declarations = [];
+
+  // The app renders Confluence storage HTML with dangerouslySetInnerHTML in a
+  // Custom UI iframe. That is fine only if we aggressively reduce style
+  // attributes to a small allow-list that supports page fidelity without
+  // allowing script URLs, fixed positioning, overlays, or layout escape hatches.
+  String(styleText || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const colonIndex = part.indexOf(':');
+      if (colonIndex === -1) return;
+
+      const property = part.slice(0, colonIndex).trim().toLowerCase();
+      const value = part.slice(colonIndex + 1).trim();
+      let safeValue = '';
+
+      if (property === 'color' || property === 'background' || property === 'background-color' || property === 'border-color') {
+        safeValue = normaliseCssColor(value);
+      } else if (property === 'text-align') {
+        safeValue = normaliseCssKeyword(value, ['left', 'center', 'right', 'justify']);
+      } else if (property === 'vertical-align') {
+        safeValue = normaliseCssKeyword(value, ['top', 'middle', 'bottom', 'baseline']);
+      } else if (['width', 'height', 'max-width', 'min-width', 'margin-left', 'padding-left'].includes(property)) {
+        safeValue = normaliseCssLength(value);
+      }
+
+      if (safeValue) declarations.push(`${property}: ${safeValue}`);
+    });
+
+  return declarations;
+}
+
+function styleAttr(declarations) {
+  const safeDeclarations = Array.isArray(declarations)
+    ? declarations.filter(Boolean)
+    : safeStyleDeclarations(declarations);
+
+  return safeDeclarations.length ? ` style="${escapeAttr(safeDeclarations.join('; '))}"` : '';
+}
+
+function appendSafeStyle(existingStyle, extraDeclarations) {
+  return [...safeStyleDeclarations(existingStyle), ...extraDeclarations.filter(Boolean)].join('; ');
+}
+
+function applySafeColorDataAttribute(node, attrName, value) {
+  const colorKey = normaliseConfluenceColorKey(value);
+  if (!colorKey) return false;
+
+  node.setAttribute(attrName, colorKey);
+  return true;
+}
+
+function styleDeclarationsWithoutColor(styleText) {
+  return safeStyleDeclarations(styleText).filter((declaration) => {
+    const property = declaration.split(':')[0].trim().toLowerCase();
+    return !['color', 'background', 'background-color', 'border-color', 'text-align', 'margin-left', 'padding-left'].includes(property);
+  });
+}
+
+function applyColorDeclarationsFromStyle(node, styleText) {
+  String(styleText || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const colonIndex = part.indexOf(':');
+      if (colonIndex === -1) return;
+
+      const property = part.slice(0, colonIndex).trim().toLowerCase();
+      const value = part.slice(colonIndex + 1).trim();
+
+      if (property === 'color') {
+        applySafeColorDataAttribute(node, 'data-dh-text-color', value);
+      } else if (property === 'background' || property === 'background-color') {
+        applySafeColorDataAttribute(node, 'data-dh-bg-color', value);
+      } else if (property === 'border-color') {
+        applySafeColorDataAttribute(node, 'data-dh-border-color', value);
+      }
+    });
+}
+
+function applyTextLayoutDeclarationsFromStyle(node, styleText) {
+  safeStyleDeclarations(styleText).forEach((declaration) => {
+    const colonIndex = declaration.indexOf(':');
+    if (colonIndex === -1) return;
+
+    const property = declaration.slice(0, colonIndex).trim().toLowerCase();
+    const value = declaration.slice(colonIndex + 1).trim();
+
+    if (property === 'text-align') {
+      setTextLayoutDataAttributes(node, { align: value });
+    } else if (property === 'margin-left' || property === 'padding-left') {
+      setTextLayoutDataAttributes(node, { indent: value });
+    }
+  });
+}
+
+function applyTextLayoutHintsFromClass(node, className) {
+  const text = normaliseConfluenceColorName(className);
+  const alignMatch = /(?:^|[-_ ])(?:text[-_ ]align|alignment|align)[-_ ](left|center|right|justify)(?:$|[-_ ])/.exec(text);
+  const indentMatch = /(?:^|[-_ ])(?:indent|indentation)[-_ ](\d{1,2})(?:$|[-_ ])/.exec(text);
+
+  if (alignMatch) setTextLayoutDataAttributes(node, { align: alignMatch[1] });
+  if (indentMatch) setTextLayoutDataAttributes(node, { indent: indentMatch[1] });
+}
+
+function normaliseNestedIndentation(root) {
+  Array.from(root.querySelectorAll('[data-dh-indent]')).forEach((node) => {
+    const absoluteLevel = Number(node.getAttribute('data-dh-indent'));
+    if (!Number.isFinite(absoluteLevel) || absoluteLevel <= 0) {
+      node.removeAttribute('data-dh-indent');
+      return;
+    }
+
+    // ADF paragraph wrappers and their HTML fallback children can both carry
+    // the same absolute indentation metadata. CSS margins naturally add, so a
+    // level-two wrapper containing a level-one paragraph would otherwise look
+    // like level three. Earlier ancestors have already been converted to local
+    // deltas, therefore their sum is the indentation currently inherited here.
+    let inheritedLevel = 0;
+    let ancestor = node.parentElement;
+
+    while (ancestor && ancestor !== root) {
+      const ancestorLevel = Number(ancestor.getAttribute('data-dh-indent'));
+      if (Number.isFinite(ancestorLevel) && ancestorLevel > 0) {
+        inheritedLevel += ancestorLevel;
+      }
+      ancestor = ancestor.parentElement;
+    }
+
+    const localLevel = absoluteLevel - inheritedLevel;
+    if (localLevel > 0) {
+      node.setAttribute('data-dh-indent', String(localLevel));
+    } else {
+      node.removeAttribute('data-dh-indent');
+    }
+  });
+}
+
+function colorKeyFromClassName(className) {
+  const normalised = normaliseConfluenceColorName(className);
+  const classParts = normalised.split('-');
+
+  for (let size = 3; size >= 1; size--) {
+    for (let index = 0; index <= classParts.length - size; index++) {
+      const candidate = classParts.slice(index, index + size).join('-');
+      if (CONFLUENCE_COLOR_PALETTE[candidate]) return candidate;
+    }
+  }
+
+  return '';
+}
+
+function applyColorHintsFromClass(node, className) {
+  const classes = String(className || '').split(/\s+/).filter(Boolean);
+
+  classes.forEach((classToken) => {
+    const colorKey = colorKeyFromClassName(classToken);
+    if (!colorKey) return;
+
+    const lowerClass = classToken.toLowerCase();
+    if (/status|lozenge/.test(lowerClass)) {
+      node.setAttribute('data-dh-status-color', normaliseStatusColor(colorKey));
+    } else if (/background|highlight|mark|bg/.test(lowerClass)) {
+      node.setAttribute('data-dh-bg-color', colorKey);
+    } else if (/border/.test(lowerClass)) {
+      node.setAttribute('data-dh-border-color', colorKey);
+    } else if (/text|color|colour/.test(lowerClass)) {
+      node.setAttribute('data-dh-text-color', colorKey);
+    }
+  });
+
+  if (/\baui-lozenge-success\b/i.test(className)) node.setAttribute('data-dh-status-color', 'green');
+  if (/\baui-lozenge-error\b/i.test(className)) node.setAttribute('data-dh-status-color', 'red');
+  if (/\baui-lozenge-current\b/i.test(className)) node.setAttribute('data-dh-status-color', 'blue');
+  if (/\baui-lozenge-moved\b/i.test(className)) node.setAttribute('data-dh-status-color', 'yellow');
+  if (/\baui-lozenge-complete\b/i.test(className)) node.setAttribute('data-dh-status-color', 'green');
+}
+
+function formatConfluenceDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const numeric = Number(raw);
+  const date =
+    Number.isFinite(numeric) && raw.length >= 10
+      ? new Date(raw.length <= 10 ? numeric * 1000 : numeric)
+      : new Date(raw);
+
+  if (!isNaN(date.getTime())) {
+    return date.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  return raw;
+}
+
+function extractDateValueFromMarkup(markup) {
+  return (
+    cleanMacroDisplayText(
+      extractAdfAttribute(markup, [
+        'timestamp',
+        'date',
+        'value',
+        'datetime',
+        'dateTime',
+        'startDate',
+        'endDate',
+      ])
+    ) ||
+    cleanMacroDisplayText(
+      extractLooseField(markup, [
+        'timestamp',
+        'date',
+        'value',
+        'datetime',
+        'dateTime',
+        'startDate',
+        'endDate',
+      ])
+    ) ||
+    cleanMacroDisplayText(
+      extractAttr(markup, [
+        'ri:value',
+        'value',
+        'datetime',
+        'data-date',
+        'data-value',
+        'data-timestamp',
+        'timestamp',
+      ])
+    )
+  );
+}
+
+function renderDate(value, fallbackText = '') {
+  const dateValue = value || fallbackText;
+  const displayDate = formatConfluenceDate(dateValue);
+
+  if (displayDate) {
+    const datetimeAttr = value ? ` datetime="${escapeAttr(value)}"` : '';
+    return `<time data-dh-node-type="date"${datetimeAttr}>${escapeHtml(displayDate)}</time>`;
+  }
+
+  return fallbackText
+    ? `<time data-dh-node-type="date">${escapeHtml(fallbackText)}</time>`
+    : '<time data-dh-node-type="date">Date</time>';
+}
+
+function expandSelfClosingTimeTags(html) {
+  return String(html || '').replace(/<time\b([^>]*)\/>/gi, (match) =>
+    renderDate(extractDateValueFromMarkup(match))
+  );
+}
+
+function normaliseSelfClosingTimeTagsForParsing(html) {
+  return String(html || '').replace(/<time\b([^>]*)\/>/gi, '<time$1></time>');
+}
+
 function extractAttr(markup, attrNames) {
   for (const attrName of attrNames) {
     const escapedName = attrName.replace(':', '\\:');
@@ -97,6 +740,17 @@ function extractAttr(markup, attrNames) {
     const m = re.exec(markup);
     if (m) return m[1];
   }
+  return '';
+}
+
+function extractExactAttr(markup, attrNames) {
+  for (const attrName of attrNames) {
+    const escapedName = attrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?:^|\\s)${escapedName}=["']([^"']+)["']`, 'i');
+    const match = re.exec(String(markup || ''));
+    if (match) return match[1];
+  }
+
   return '';
 }
 
@@ -149,8 +803,214 @@ function renderWhiteboardCard(url, title) {
   ].join('');
 }
 
+function extractImageCaption(markup) {
+  const captionMatch = /<ac:caption\b[^>]*>([\s\S]*?)<\/ac:caption>/i.exec(markup);
+  if (!captionMatch) return '';
+  return stripTags(captionMatch[1]).replace(/\s+/g, ' ').trim();
+}
+
+function extractImageAltText(markup, fallback) {
+  return (
+    cleanUserFacingName(extractAttr(markup, ['ac:alt', 'alt', 'ac:title', 'title'])) ||
+    cleanUserFacingName(fallback) ||
+    fallback ||
+    ''
+  );
+}
+
+function extractImageStyle(markup) {
+  const width = normaliseCssLength(extractExactAttr(markup, ['ac:width', 'width']));
+  const height = normaliseCssLength(extractExactAttr(markup, ['ac:height', 'height']));
+  const align = normaliseCssKeyword(extractAttr(markup, ['ac:align', 'align']), [
+    'left',
+    'center',
+    'right',
+  ]);
+  const borderValue = extractAttr(markup, [
+    'ac:border',
+    'border',
+    'data-border',
+    'data-image-border',
+  ]);
+  const borderMark = /<ac:adf-mark\b[^>]*(?:key|type)=["']border["'][^>]*>/i.exec(markup);
+  const internalBorderMarker = /<span\b[^>]*data-dh-image-border-marker=["']true["'][^>]*>/i.exec(
+    markup
+  );
+  const borderMarkMarkup = borderMark
+    ? borderMark[0]
+    : internalBorderMarker
+      ? internalBorderMarker[0]
+      : '';
+  const borderSizeRaw = extractAttr(borderMarkMarkup, [
+    'size',
+    'data-dh-image-border-size',
+  ]);
+  const borderSizeValue = borderSizeRaw ? Number(borderSizeRaw) : Number.NaN;
+  const borderSize = Number.isFinite(borderSizeValue)
+    ? Math.max(1, Math.min(5, Math.round(borderSizeValue)))
+    : 0;
+  const borderColor = normaliseConfluenceColorKey(
+    extractAttr(borderMarkMarkup, ['color', 'colour', 'data-dh-image-border-color'])
+  );
+  const hasBorder =
+    /^(?:true|1|yes|on|border)$/i.test(borderValue) || Boolean(borderMarkMarkup);
+  const styles = [];
+
+  if (height) styles.push(`height: ${height}`);
+  if (align === 'center') {
+    styles.push('margin-left: auto', 'margin-right: auto');
+  }
+
+  return {
+    imageStyle: styleAttr(styles),
+    imageWidth: width,
+    align: align || '',
+    hasBorder,
+    borderSize,
+    borderColor,
+  };
+}
+
+function renderImageFigure({
+  src,
+  alt,
+  caption,
+  imageStyle,
+  imageWidth = '',
+  align,
+  hasBorder = false,
+  borderSize = 0,
+  borderColor = '',
+}) {
+  if (!src) return '';
+
+  const alignAttr = align ? ` data-dh-align="${escapeAttr(align)}"` : '';
+  const borderAttr = hasBorder ? ' data-dh-image-border="true"' : '';
+  const borderSizeAttr = borderSize
+    ? ` data-dh-image-border-size="${escapeAttr(borderSize)}"`
+    : '';
+  const borderColorAttr = borderColor
+    ? ` data-dh-border-color="${escapeAttr(borderColor)}"`
+    : '';
+  const imageWidthAttr = imageWidth
+    ? ` data-dh-image-width="${escapeAttr(imageWidth)}"`
+    : '';
+  const numericImageWidth = /^\d+(?:\.\d+)?px$/i.test(imageWidth)
+    ? String(Math.max(1, Math.round(Number.parseFloat(imageWidth))))
+    : '';
+  const nativeWidthAttr = numericImageWidth
+    ? ` width="${escapeAttr(numericImageWidth)}"`
+    : '';
+  const captionHtml = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : '';
+
+  return [
+    `<figure data-dh-node-type="image"${alignAttr}>`,
+    `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt || caption || '')}"${nativeWidthAttr}${borderAttr}${borderSizeAttr}${borderColorAttr}${imageWidthAttr}${imageStyle || ''} />`,
+    captionHtml,
+    '</figure>',
+  ].join('');
+}
+
+function normaliseStatusColor(color) {
+  const key = normaliseConfluenceColorName(color);
+  if (!key) return '';
+
+  const aliases = {
+    grey: 'gray',
+    'light-grey': 'gray',
+    'light-gray': 'gray',
+    neutral: 'gray',
+    default: 'gray',
+    standard: 'gray',
+    success: 'green',
+    'dark-green': 'green',
+    error: 'red',
+    'dark-red': 'red',
+    'dark-orange': 'orange',
+    'dark-yellow': 'yellow',
+    'dark-blue': 'blue',
+    'dark-purple': 'purple',
+    'dark-teal': 'teal',
+    'dark-magenta': 'magenta',
+    'dark-lime': 'lime',
+    'light-blue': 'blue',
+    'light-green': 'green',
+    'light-red': 'red',
+    'light-orange': 'orange',
+    'light-yellow': 'yellow',
+    'light-purple': 'purple',
+    'light-teal': 'teal',
+    'light-magenta': 'magenta',
+    'light-lime': 'lime',
+  };
+
+  const normalised = aliases[key] || key;
+  return ['gray', 'green', 'red', 'orange', 'yellow', 'blue', 'purple', 'teal', 'magenta', 'lime'].includes(
+    normalised
+  )
+    ? normalised
+    : '';
+}
+
+function renderStatus(text, color) {
+  const initialText = cleanMacroDisplayText(text) || cleanUserFacingName(text);
+  const normalisedColor = normaliseStatusColor(color) || normaliseStatusColor(initialText);
+  const statusText =
+    initialText && initialText.toLowerCase() !== 'status'
+      ? initialText
+      : normalisedColor
+        ? normalisedColor.toUpperCase()
+        : 'Status';
+  const colorAttr = normalisedColor ? ` data-dh-status-color="${escapeAttr(normalisedColor)}"` : '';
+  return `<span data-dh-node-type="status"${colorAttr}>${escapeHtml(statusText)}</span>`;
+}
+
+function renderDecision(body, state = '') {
+  const normalisedState = /^(?:decided|done|complete|completed|true)$/i.test(state)
+    ? 'decided'
+    : state
+      ? 'undecided'
+      : '';
+  const stateAttr = normalisedState
+    ? ` data-dh-decision-state="${escapeAttr(normalisedState)}"`
+    : '';
+
+  return `<div data-dh-node-type="decision"${stateAttr}>${removeAdfAttributes(body)}</div>`;
+}
+
+function renderDecisionList(markup) {
+  const items = [];
+  const itemPattern =
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:decision-item|decisionItem)["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi;
+  let itemMatch = itemPattern.exec(markup);
+
+  while (itemMatch) {
+    const itemMarkup = itemMatch[0];
+    const contentMatch = /<ac:adf-content\b[^>]*>([\s\S]*?)<\/ac:adf-content>/i.exec(
+      itemMarkup
+    );
+    const content = getReadableHtmlText(contentMatch ? contentMatch[1] : '');
+    const state = extractAdfAttribute(itemMarkup, ['state']);
+
+    if (content) {
+      items.push(renderDecision(escapeHtml(content), state));
+    }
+
+    itemMatch = itemPattern.exec(markup);
+  }
+
+  if (!items.length) return '';
+
+  return `<div data-dh-node-type="decision_list">${items.join('')}</div>`;
+}
+
 function expandConfluenceLinks(html, baseUrl) {
   return html.replace(/<ac:link\b[\s\S]*?<\/ac:link>/gi, (match) => {
+    const dateMatch = /<ri:date\b[^>]*\/?>/i.exec(match);
+    if (dateMatch) {
+      return renderDate(extractDateValueFromMarkup(dateMatch[0]));
+    }
+
     const bodyMatch =
       /<ac:plain-text-link-body[^>]*>([\s\S]*?)<\/ac:plain-text-link-body>/i.exec(match) ||
       /<ac:link-body[^>]*>([\s\S]*?)<\/ac:link-body>/i.exec(match);
@@ -190,6 +1050,322 @@ function expandConfluenceLinks(html, baseUrl) {
   });
 }
 
+function normaliseCodeLanguage(value) {
+  const language = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^language-/, '')
+    .replace(/\s+/g, '');
+
+  const aliases = {
+    javascript: 'javascript',
+    js: 'javascript',
+    jsx: 'javascript',
+    typescript: 'typescript',
+    ts: 'typescript',
+    tsx: 'typescript',
+    python: 'python',
+    py: 'python',
+    java: 'java',
+    sql: 'sql',
+    html: 'html',
+    xml: 'html',
+    css: 'css',
+  };
+
+  return aliases[language] || language;
+}
+
+function normaliseDecodedCodeBody(value, language = '') {
+  const code = String(value || '');
+
+  if (normaliseCodeLanguage(language) !== 'html') return code;
+
+  // Some Confluence storage responses encode an HTML code block using a
+  // comment-shaped CDATA wrapper. After that wrapper is decoded, the closing
+  // characters from its opening marker can occasionally remain attached to
+  // the first HTML tag, for example: <section class="example"-->. This is not
+  // valid source code and is only a storage-serialization artefact. Restrict
+  // the repair to the first tag of HTML/XML code blocks so genuine comments,
+  // JavaScript operators, and code in every other language remain untouched.
+  const malformedOpening = /^(\s*<([A-Za-z][\w:-]*)(?:\s+[^<>\n]*?)?)-->/i.exec(code);
+  if (!malformedOpening) return code;
+
+  const repairedCode = code.replace(malformedOpening[0], `${malformedOpening[1]}>`);
+  const rootTag = malformedOpening[2];
+  const voidElements = new Set([
+    'area',
+    'base',
+    'br',
+    'col',
+    'embed',
+    'hr',
+    'img',
+    'input',
+    'link',
+    'meta',
+    'param',
+    'source',
+    'track',
+    'wbr',
+  ]);
+
+  // The same premature parsing that leaves "-->" on the opening tag can
+  // consume the matching root closing tag. Only reconstruct it when this
+  // precise corruption marker was present, the element is not void or
+  // self-closing, and no matching closing tag survived in the code body.
+  const closingTag = new RegExp(`</${rootTag}\\s*>`, 'i');
+  const openingWasSelfClosing = /\/\s*$/.test(malformedOpening[1]);
+  if (
+    voidElements.has(rootTag.toLowerCase()) ||
+    openingWasSelfClosing ||
+    closingTag.test(repairedCode)
+  ) {
+    return repairedCode;
+  }
+
+  return `${repairedCode.replace(/\s+$/, '')}\n</${rootTag}>`;
+}
+
+function codeKeywordsForLanguage(language) {
+  const common = ['false', 'null', 'true'];
+  const keywordMap = {
+    javascript: [
+      ...common,
+      'async',
+      'await',
+      'break',
+      'case',
+      'catch',
+      'class',
+      'const',
+      'continue',
+      'default',
+      'else',
+      'export',
+      'extends',
+      'finally',
+      'for',
+      'from',
+      'function',
+      'if',
+      'import',
+      'let',
+      'new',
+      'return',
+      'switch',
+      'throw',
+      'try',
+      'var',
+      'while',
+    ],
+    typescript: [
+      ...common,
+      'async',
+      'await',
+      'class',
+      'const',
+      'enum',
+      'export',
+      'extends',
+      'from',
+      'function',
+      'implements',
+      'import',
+      'interface',
+      'let',
+      'private',
+      'protected',
+      'public',
+      'readonly',
+      'return',
+      'type',
+    ],
+    python: [
+      ...common,
+      'and',
+      'as',
+      'class',
+      'def',
+      'elif',
+      'else',
+      'except',
+      'finally',
+      'for',
+      'from',
+      'if',
+      'import',
+      'in',
+      'is',
+      'lambda',
+      'none',
+      'not',
+      'or',
+      'pass',
+      'print',
+      'return',
+      'try',
+      'while',
+    ],
+    java: [
+      ...common,
+      'class',
+      'else',
+      'extends',
+      'final',
+      'for',
+      'if',
+      'import',
+      'new',
+      'private',
+      'protected',
+      'public',
+      'return',
+      'static',
+      'void',
+      'while',
+    ],
+    sql: [
+      'and',
+      'as',
+      'by',
+      'create',
+      'delete',
+      'desc',
+      'from',
+      'group',
+      'insert',
+      'into',
+      'join',
+      'left',
+      'limit',
+      'not',
+      'null',
+      'or',
+      'order',
+      'right',
+      'select',
+      'set',
+      'table',
+      'true',
+      'update',
+      'where',
+    ],
+    css: ['background', 'background-color', 'border', 'color', 'display', 'font', 'margin', 'padding'],
+  };
+
+  return keywordMap[language] || keywordMap.javascript;
+}
+
+function codeToken(tokenType, value) {
+  return `<span data-dh-code-token="${tokenType}">${escapeHtml(value)}</span>`;
+}
+
+function highlightHtmlCodeLine(line) {
+  let html = '';
+  let lastIndex = 0;
+  const tagRe = /(<\/?)([A-Za-z][\w:-]*)([^>]*?)(\/?>)/g;
+  let match = tagRe.exec(line);
+
+  while (match) {
+    html += escapeHtml(line.slice(lastIndex, match.index));
+    html += `${escapeHtml(match[1])}${codeToken('tag', match[2])}`;
+    html += String(match[3] || '').replace(
+      /([A-Za-z_:][\w:.-]*)(=)("[^"]*"|'[^']*')/g,
+      (_attrMatch, attrName, equals, attrValue) =>
+        `${codeToken('attr', attrName)}${escapeHtml(equals)}${codeToken('string', attrValue)}`
+    );
+    html += escapeHtml(match[4]);
+    lastIndex = match.index + match[0].length;
+    match = tagRe.exec(line);
+  }
+
+  return html + escapeHtml(line.slice(lastIndex));
+}
+
+function highlightCssCodeLine(line) {
+  let html = '';
+  let lastIndex = 0;
+  const tokenRe =
+    /(\/\*.*?\*\/|#[0-9a-f]{3,8}\b|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\b[-a-zA-Z]+(?=\s*:)|\b\d+(?:\.\d+)?(?:px|em|rem|%)?\b)/g;
+  let match = tokenRe.exec(line);
+
+  while (match) {
+    const token = match[0];
+    html += escapeHtml(line.slice(lastIndex, match.index));
+    if (/^\/\*/.test(token)) {
+      html += codeToken('comment', token);
+    } else if (/^['"]/.test(token) || /^#/.test(token)) {
+      html += codeToken('string', token);
+    } else if (/^\d/.test(token)) {
+      html += codeToken('number', token);
+    } else {
+      html += codeToken('property', token);
+    }
+    lastIndex = match.index + token.length;
+    match = tokenRe.exec(line);
+  }
+
+  return html + escapeHtml(line.slice(lastIndex));
+}
+
+function highlightGenericCodeLine(line, language) {
+  const keywords = codeKeywordsForLanguage(language)
+    .map((keyword) => keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .sort((a, b) => b.length - a.length);
+  const keywordSource = keywords.length ? `\\b(?:${keywords.join('|')})\\b` : '(?!)';
+  const commentSource = language === 'python' ? '#.*' : language === 'sql' ? '--.*' : '\\/\\/.*';
+  const tokenRe = new RegExp(
+    `(${commentSource}|\\/\\*.*?\\*\\/|\`(?:\\\\.|[^\`])*\`|"(?:\\\\.|[^"])*"|'(?:\\\\.|[^'])*'|\\b\\d+(?:\\.\\d+)?\\b|${keywordSource})`,
+    'gi'
+  );
+  let html = '';
+  let lastIndex = 0;
+  let match = tokenRe.exec(line);
+
+  while (match) {
+    const token = match[0];
+    html += escapeHtml(line.slice(lastIndex, match.index));
+    if (/^(\/\/|#|--|\/\*)/.test(token)) {
+      html += codeToken('comment', token);
+    } else if (/^['"`]/.test(token)) {
+      html += codeToken('string', token);
+    } else if (/^\d/.test(token)) {
+      html += codeToken('number', token);
+    } else if (/^[A-Z][\w$]*$/.test(token) && language !== 'sql') {
+      html += codeToken('type', token);
+    } else {
+      html += codeToken('keyword', token);
+    }
+    lastIndex = match.index + token.length;
+    match = tokenRe.exec(line);
+  }
+
+  return html + escapeHtml(line.slice(lastIndex));
+}
+
+function highlightCodeLine(line, language) {
+  const normalisedLanguage = normaliseCodeLanguage(language);
+
+  if (normalisedLanguage === 'html') return highlightHtmlCodeLine(line);
+  if (normalisedLanguage === 'css') return highlightCssCodeLine(line);
+  return highlightGenericCodeLine(line, normalisedLanguage);
+}
+
+function renderCodeBlockHtml(code, language = '', extraLineClass = '') {
+  const lines = normaliseLineEndings(code).split('\n');
+  const lineClass = extraLineClass ? ` class="${escapeAttr(extraLineClass)}"` : '';
+
+  return lines
+    .map(
+      (line) =>
+        `<span data-dh-code-line="true"${lineClass}><span data-dh-code-line-content="true">${escapeHtml(
+          line
+        )}</span></span>`
+    )
+    .join('');
+}
+
 function expandConfluenceCodeMacros(html) {
   return String(html || '').replace(
     /<ac:structured-macro\b[^>]*(?:ac:name|name)=["']code["'][^>]*>[\s\S]*?<\/ac:structured-macro>/gi,
@@ -204,16 +1380,20 @@ function expandConfluenceCodeMacros(html) {
       const title =
         /<ac:parameter\b[^>]*(?:ac:name|name)=["']title["'][^>]*>([\s\S]*?)<\/ac:parameter>/i.exec(
           match
-        );
+      );
       const rawBody = plainTextBody ? plainTextBody[1] : richTextBody ? richTextBody[1] : '';
-      const code = normaliseLineEndings(decodeCdata(rawBody));
+      const languageValue = language ? decodeCdata(language[1]).trim() : '';
+      const code = normaliseLineEndings(
+        normaliseDecodedCodeBody(decodeCdata(rawBody), languageValue)
+      );
       const languageAttr = language
-        ? ` data-language="${escapeHtml(decodeCdata(language[1]).trim())}"`
+        ? ` data-language="${escapeHtml(languageValue)}"`
         : '';
       const titleAttr = title ? ` title="${escapeHtml(decodeCdata(title[1]).trim())}"` : '';
 
-      return `<pre data-dh-node-type="code_block"${languageAttr}${titleAttr}><code>${escapeHtml(
-        code
+      return `<pre data-dh-node-type="code_block" data-dh-code-enhanced="true"${languageAttr}${titleAttr}><code>${renderCodeBlockHtml(
+        code,
+        languageValue
       )}</code></pre>`;
     }
   );
@@ -235,6 +1415,41 @@ function extractMacroBody(markup) {
   return richTextBody ? richTextBody[1] : plainTextBody ? escapeHtml(decodeCdata(plainTextBody[1])) : '';
 }
 
+function extractFirstMacroParameter(markup, names) {
+  for (const name of names) {
+    const value = cleanMacroDisplayText(extractMacroParameter(markup, name));
+    if (value) return value;
+  }
+
+  return '';
+}
+
+function buildPanelStyleAttribute(macroMarkup) {
+  return [
+    colorDataAttr(
+      'data-dh-bg-color',
+      extractFirstMacroParameter(macroMarkup, ['bgColor', 'backgroundColor', 'backgroundColour'])
+    ),
+    colorDataAttr(
+      'data-dh-border-color',
+      extractFirstMacroParameter(macroMarkup, ['borderColor', 'borderColour'])
+    ),
+  ].join('');
+}
+
+function buildPanelTitleStyleAttribute(macroMarkup) {
+  return [
+    colorDataAttr(
+      'data-dh-bg-color',
+      extractFirstMacroParameter(macroMarkup, ['titleBGColor', 'titleBackgroundColor'])
+    ),
+    colorDataAttr(
+      'data-dh-text-color',
+      extractFirstMacroParameter(macroMarkup, ['titleColor', 'titleColour'])
+    ),
+  ].join('');
+}
+
 function stripTags(value) {
   return String(value || '').replace(/<[^>]+>/g, '').trim();
 }
@@ -252,6 +1467,22 @@ function cleanUserFacingName(value) {
   if (text.length > 80) return '';
 
   return text;
+}
+
+function cleanMacroDisplayText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (/https?:\/\//i.test(text)) return '';
+  if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) return '';
+
+  // Unlike generic names, macro display text is allowed to contain words such
+  // as "status" (for example a Status lozenge whose text is literally STATUS).
+  // Only strip obvious id-like labels instead of discarding the whole value.
+  const withoutInternalLabels = text
+    .replace(/\b(?:localid|local-id|macro-id|status-id|extension-key)\b\s*[:=]\s*\S+/gi, '')
+    .trim();
+
+  return withoutInternalLabels.length <= 120 ? withoutInternalLabels : '';
 }
 
 function extractAdfAttribute(markup, names) {
@@ -272,6 +1503,326 @@ function extractAdfAttribute(markup, names) {
 
 function removeAdfAttributes(markup) {
   return String(markup || '').replace(/<ac:adf-attribute\b[\s\S]*?<\/ac:adf-attribute>/gi, '');
+}
+
+function expandAdfMarks(html) {
+  return String(html || '').replace(
+    /<ac:adf-mark\b[^>]*>[\s\S]*?<\/ac:adf-mark>/gi,
+    (markMarkup) => {
+      const markType = normaliseConfluenceColorName(
+        extractAttr(markMarkup, ['type', 'ac:type', 'key', 'ac:key', 'name', 'ac:name'])
+      );
+      const bodyMatch = /<ac:adf-mark\b[^>]*>([\s\S]*?)<\/ac:adf-mark>/i.exec(markMarkup);
+      const body = removeAdfAttributes(bodyMatch ? bodyMatch[1] : '');
+      const rawColor =
+        extractAdfAttribute(markMarkup, [
+          'color',
+          'colour',
+          'textColor',
+          'textColour',
+          'backgroundColor',
+          'backgroundColour',
+          'highlightColor',
+          'highlightColour',
+        ]) ||
+        extractAttr(markMarkup, [
+          'color',
+          'colour',
+          'text-color',
+          'text-colour',
+          'background-color',
+          'background-colour',
+        ]);
+      const colorKey = normaliseConfluenceColorKey(rawColor);
+      const layoutAttrs = textLayoutDataAttrsFromMarkup(markMarkup);
+
+      if (markType === 'border') {
+        const sizeRaw = extractAttr(markMarkup, ['size']);
+        const sizeValue = sizeRaw ? Number(sizeRaw) : Number.NaN;
+        const safeSize = Number.isFinite(sizeValue)
+          ? Math.max(1, Math.min(5, Math.round(sizeValue)))
+          : 0;
+        const sizeAttr = safeSize
+          ? ` data-dh-image-border-size="${escapeAttr(safeSize)}"`
+          : '';
+        const colorAttr = colorKey
+          ? ` data-dh-image-border-color="${escapeAttr(colorKey)}"`
+          : '';
+
+        // Confluence stores the image border as an empty ADF mark next to the
+        // attachment. Preserve its metadata just long enough for the enclosing
+        // ac:image renderer to consume it; the marker is not emitted in the
+        // final user-facing HTML.
+        return `<span data-dh-image-border-marker="true"${sizeAttr}${colorAttr}></span>`;
+      }
+
+      if (layoutAttrs && /align|alignment|indent|indentation/.test(markType)) {
+        return `<span${layoutAttrs}>${body}</span>`;
+      }
+
+      if (!colorKey) return body;
+
+      if (/background|highlight/.test(markType)) {
+        return `<mark data-dh-bg-color="${escapeAttr(colorKey)}">${body}</mark>`;
+      }
+
+      if (/color|colour|text/.test(markType)) {
+        return `<span data-dh-text-color="${escapeAttr(colorKey)}">${body}</span>`;
+      }
+
+      return body;
+    }
+  );
+}
+
+function extractAdfBodiedExtensionBody(markup) {
+  const bodyMatch =
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:bodiedExtension|multiBodiedExtension)["'][^>]*>([\s\S]*?)<\/ac:adf-node>/i.exec(
+      markup
+    );
+  const body = bodyMatch ? removeAdfAttributes(bodyMatch[1]) : '';
+  return body.replace(/<ac:adf-node\b[^>]*>[\s\S]*?<\/ac:adf-node>/gi, '').trim();
+}
+
+function extractAdfFallbackBody(markup) {
+  const fallbackMatch = /<ac:adf-fallback\b[^>]*>([\s\S]*?)<\/ac:adf-fallback>/i.exec(markup);
+  if (!fallbackMatch) return '';
+
+  return removeAdfAttributes(fallbackMatch[1])
+    .replace(/<\/?ac:adf-fallback\b[^>]*>/gi, '')
+    .replace(/<\/?ac:adf-node\b[^>]*>/gi, '')
+    .trim();
+}
+
+function extractAdfPanelFallbackBody(markup) {
+  const fallbackBody = extractAdfFallbackBody(markup);
+  if (!fallbackBody) return '';
+
+  // The newer Note panel fallback contains a complete legacy panel renderer
+  // inside the ADF extension. Keeping those wrapper divs would place a second
+  // background and border inside the app's own panel, producing the pale box
+  // around the body. Select only Confluence's explicit panelContent wrapper;
+  // arbitrary divs authored inside the panel body remain untouched.
+  const doc = new DOMParser().parseFromString(fallbackBody, 'text/html');
+  const panelContent = doc.body.querySelector('.panelContent');
+
+  return panelContent ? panelContent.innerHTML.trim() : fallbackBody;
+}
+
+function extractAdfPlainBody(markup) {
+  return removeAdfAttributes(markup)
+    .replace(/<\/?ac:adf-extension\b[^>]*>/gi, '')
+    .replace(/<\/?ac:bodied-extension\b[^>]*>/gi, '')
+    .replace(/<\/?ac:extension\b[^>]*>/gi, '')
+    .replace(/<\/?ac:adf-fallback\b[^>]*>/gi, '')
+    .replace(/<\/?ac:adf-node\b[^>]*>/gi, '')
+    .trim();
+}
+
+function extractLooseField(markup, names) {
+  const decoded = String(markup || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+
+  for (const name of names) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const jsonMatch = new RegExp(`["']${escapedName}["']\\s*:\\s*["']([^"']+)["']`, 'i').exec(decoded);
+    if (jsonMatch) return stripTags(jsonMatch[1]);
+
+    const xmlMatch = new RegExp(
+      `<ac:adf-parameter\\b[^>]*(?:key|ac:key|name|ac:name)=["']${escapedName}["'][^>]*>([\\s\\S]*?)<\\/ac:adf-parameter>`,
+      'i'
+    ).exec(decoded);
+    if (xmlMatch) return stripTags(decodeCdata(xmlMatch[1]));
+  }
+
+  return '';
+}
+
+function inferPanelTypeFromText(value) {
+  const text = normaliseConfluenceColorName(value);
+  if (/note/.test(text)) return 'note';
+  if (/warning|warn/.test(text)) return 'warning';
+  if (/error/.test(text)) return 'error';
+  if (/success/.test(text)) return 'success';
+  if (/info/.test(text)) return 'info';
+  if (/custom|panel/.test(text)) return 'panel';
+  return '';
+}
+
+function normalisePanelType(value) {
+  const type = normaliseConfluenceColorName(value);
+  if (type === 'info') return 'info';
+  if (type === 'note') return 'note';
+  if (type === 'warning' || type === 'warn') return 'warning';
+  if (type === 'error') return 'error';
+  if (type === 'success') return 'success';
+  if (type === 'panel' || type === 'custom') return 'panel';
+  return '';
+}
+
+function panelTypeFromStructuredMacroName(value) {
+  const macroName = normaliseConfluenceColorName(value);
+
+  // Legacy Confluence structured macro names do not use the same vocabulary
+  // as the current editor's panel picker. These mappings come from the actual
+  // storage emitted for each visual type on the target site; visible panel text
+  // must never be used to override them.
+  const legacyPanelTypes = {
+    info: 'info',
+    tip: 'success',
+    note: 'warning',
+    warning: 'error',
+    panel: 'panel',
+    success: 'success',
+    error: 'error',
+  };
+
+  return legacyPanelTypes[macroName] || '';
+}
+
+function getReadableHtmlText(markup) {
+  const text = String(markup || '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(p|div|li|td|th|h[1-6])>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return text;
+}
+
+function inferPanelTypeFromPanelText(title, body) {
+  const text = `${cleanMacroDisplayText(title)} ${getReadableHtmlText(body)}`.trim();
+  const leadingText = text.slice(0, 160);
+
+  if (/(^|\s)(error|错误)\s*(panel|面板|:|：)/i.test(leadingText)) return 'error';
+  if (/(^|\s)(warning|warn|警告)\s*(panel|面板|:|：)/i.test(leadingText)) return 'warning';
+  if (/(^|\s)(success|成功)\s*(panel|面板|:|：)/i.test(leadingText)) return 'success';
+  if (/(^|\s)(tip|提示)\s*(panel|面板|:|：)/i.test(leadingText)) return 'tip';
+  if (/(^|\s)(note|备注|注释)\s*(panel|面板|:|：)/i.test(leadingText)) return 'note';
+  if (/(^|\s)(info|信息)\s*(panel|面板|:|：)/i.test(leadingText)) return 'info';
+  if (/(^|\s)(custom|自定义)\s*(panel|面板|:|：)/i.test(leadingText)) return 'panel';
+
+  return '';
+}
+
+function panelBodyAlreadyNamesPanel(title, body, panelType) {
+  const bodyText = getReadableHtmlText(body).toLowerCase();
+  if (!bodyText) return false;
+
+  const heading = cleanMacroDisplayText(title).toLowerCase();
+  const typeName = titleCaseStorageName(panelType).toLowerCase();
+  const knownPanelLead = /^(info|note|warning|warn|error|success|tip|custom|信息|备注|注释|警告|错误|成功|提示|自定义)\s*(panel|面板|:|：)/i;
+
+  return (
+    knownPanelLead.test(bodyText) ||
+    (heading && bodyText.startsWith(heading)) ||
+    (typeName && bodyText.startsWith(typeName))
+  );
+}
+
+function panelTypeDisplayName(panelType) {
+  const labels = {
+    info: 'Info',
+    note: 'Note',
+    success: 'Success',
+    warning: 'Warning',
+    error: 'Error',
+    panel: 'Custom',
+  };
+
+  return labels[panelType] || titleCaseStorageName(panelType);
+}
+
+function renderPanelBlock(panelType, title, body, extraAttrs = '') {
+  const type = normalisePanelType(panelType) || 'info';
+  const typeLabel = panelTypeDisplayName(type);
+  const titleAttrMatch = /\sdata-dh-panel-title-extra="([^"]*)"/.exec(extraAttrs);
+  const titleExtraAttrs = titleAttrMatch ? ` ${titleAttrMatch[1]}` : '';
+  const blockAttrs = extraAttrs.replace(/\sdata-dh-panel-title-extra="[^"]*"/, '');
+
+  return [
+    `<div data-dh-node-type="panel" data-dh-panel-type="${escapeHtml(type)}"${blockAttrs}>`,
+    `<strong data-dh-panel-title="true"${titleExtraAttrs}>${escapeHtml(typeLabel)}</strong>`,
+    '<div data-dh-panel-body="true">',
+    body || '',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+function renderAdfExtension(match) {
+  const adfNodeType = extractAttr(match, ['type', 'ac:type']);
+  const panelTypeHint =
+    extractAdfAttribute(match, ['panel-type', 'panelType', 'panelStyle', 'type']) ||
+    extractLooseField(match, ['panel-type', 'panelType', 'panelStyle', 'type']);
+  const extensionKey = [
+    adfNodeType,
+    extractAdfAttribute(match, ['extensionKey', 'extensionType', 'extensionTitle', 'title']),
+    panelTypeHint,
+    extractAdfAttribute(match, ['macroMetadata', 'parameters', 'attrs']),
+    extractLooseField(match, ['extensionKey', 'extensionType', 'extensionTitle', 'macroName', 'panel-type', 'panelType']),
+  ].join(' ');
+  const lowerExtensionKey = extensionKey.toLowerCase();
+  const looksLikePanel =
+    /panel|note|warning|error|success|info/.test(lowerExtensionKey) ||
+    inferPanelTypeFromText(panelTypeHint) ||
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']panel["']/i.test(match);
+
+  if (
+    /decision[-_]?list|decisionlist/.test(lowerExtensionKey) ||
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']decision-list["']/i.test(match)
+  ) {
+    const renderedDecisionList = renderDecisionList(match);
+    if (renderedDecisionList) return renderedDecisionList;
+  }
+
+  if (/status/.test(lowerExtensionKey)) {
+    const text =
+      cleanMacroDisplayText(extractAdfAttribute(match, ['text', 'title', 'label', 'value'])) ||
+      cleanMacroDisplayText(extractAdfAttribute(match, ['statusText'])) ||
+      cleanMacroDisplayText(extractLooseField(match, ['text', 'title', 'label', 'value', 'statusText'])) ||
+      'Status';
+    const color =
+      extractAdfAttribute(match, ['color', 'colour', 'style', 'appearance', 'statusColor', 'statusColour']) ||
+      extractLooseField(match, ['color', 'colour', 'style', 'appearance', 'statusColor', 'statusColour']) ||
+      inferPanelTypeFromText(extensionKey);
+
+    return renderStatus(text, color);
+  }
+
+  if (looksLikePanel) {
+    const panelType = normalisePanelType(inferPanelTypeFromText(panelTypeHint)) || 'info';
+    const title =
+      cleanMacroDisplayText(extractAdfAttribute(match, ['title', 'panelTitle'])) ||
+      cleanMacroDisplayText(extractLooseField(match, ['title', 'panelTitle'])) ||
+      titleCaseStorageName(panelType);
+    const body =
+      extractAdfPanelFallbackBody(match) ||
+      extractAdfBodiedExtensionBody(match) ||
+      extractAdfPlainBody(match) ||
+      `<p>${escapeHtml(
+        cleanMacroDisplayText(extractAdfAttribute(match, ['text', 'content'])) ||
+          cleanMacroDisplayText(extractLooseField(match, ['text', 'content'])) ||
+          ''
+      )}</p>`;
+
+    return renderPanelBlock(panelType, title, body);
+  }
+
+  return createRawFallbackHtml(match, {
+    type: 'Extension',
+    name: titleCaseStorageName(extractAdfAttribute(match, ['extensionTitle', 'title'])),
+  });
 }
 
 function fallbackEmojiText(name) {
@@ -352,15 +1903,21 @@ function expandWhiteboardAnchors(html) {
 }
 
 function expandAdfNodes(html) {
-  let expanded = String(html || '');
+  let expanded = expandAdfMarks(html);
 
   expanded = expanded.replace(
     /<ac:adf-node\b[^>]*(?:type|ac:type)=["']status["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
     (match) => {
       const text =
-        cleanUserFacingName(extractAdfAttribute(match, ['text', 'title', 'localId'])) ||
+        cleanMacroDisplayText(
+          extractAdfAttribute(match, ['text', 'title', 'label', 'value', 'statusText'])
+        ) ||
+        cleanMacroDisplayText(extractLooseField(match, ['text', 'title', 'label', 'value', 'statusText'])) ||
         'Status';
-      return `<span data-dh-node-type="status">[Status: ${escapeHtml(text)}]</span>`;
+      const color =
+        extractAdfAttribute(match, ['color', 'colour', 'style', 'appearance', 'statusColor', 'statusColour']) ||
+        extractLooseField(match, ['color', 'colour', 'style', 'appearance', 'statusColor', 'statusColour']);
+      return renderStatus(text, color);
     }
   );
 
@@ -375,8 +1932,7 @@ function expandAdfNodes(html) {
   expanded = expanded.replace(
     /<ac:adf-node\b[^>]*(?:type|ac:type)=["']date["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
     (match) => {
-      const value = cleanUserFacingName(extractAdfAttribute(match, ['timestamp', 'date', 'value']));
-      return value ? `<span data-dh-node-type="date">${escapeHtml(value)}</span>` : '[Date]';
+      return renderDate(extractDateValueFromMarkup(match), stripTags(removeAdfAttributes(match)));
     }
   );
 
@@ -406,7 +1962,7 @@ function expandAdfNodes(html) {
 
   expanded = expanded.replace(
     /<ac:adf-node\b[^>]*(?:type|ac:type)=["']decisionItem["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
-    (_match, body) => `<div data-dh-node-type="decision">[Decision] ${removeAdfAttributes(body)}</div>`
+    (_match, body) => renderDecision(body)
   );
 
   expanded = expanded.replace(
@@ -429,12 +1985,24 @@ function expandAdfNodes(html) {
   );
 
   expanded = expanded.replace(
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:paragraph|heading|blockquote|listItem)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
+    (match) => {
+      const layoutAttrs = textLayoutDataAttrsFromMarkup(match);
+      const bodyMatch = /<ac:adf-node\b[^>]*>([\s\S]*?)<\/ac:adf-node>/i.exec(match);
+      const body = removeAdfAttributes(bodyMatch ? bodyMatch[1] : '');
+
+      return layoutAttrs ? `<div data-dh-node-type="paragraph"${layoutAttrs}>${body}</div>` : body;
+    }
+  );
+
+  expanded = expanded.replace(
     /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:extension|bodiedExtension|multiBodiedExtension)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
-    (match) =>
-      createRawFallbackHtml(match, {
-        type: 'Extension',
-        name: titleCaseStorageName(extractAdfAttribute(match, ['extensionTitle', 'title'])),
-      })
+    (match) => renderAdfExtension(match)
+  );
+
+  expanded = expanded.replace(
+    /<ac:(?:adf-extension|bodied-extension|extension)\b[\s\S]*?<\/ac:(?:adf-extension|bodied-extension|extension)>/gi,
+    (match) => renderAdfExtension(match)
   );
 
   // Any remaining ADF attributes are implementation details. Removing them
@@ -455,35 +2023,40 @@ function expandKnownStructuredMacros(html) {
       }
 
       if (['info', 'note', 'warning', 'tip', 'success', 'error', 'panel'].includes(normalisedName)) {
-        const title = cleanUserFacingName(extractMacroParameter(macroMarkup, 'title'));
+        const title = cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'title'));
         const body = extractMacroBody(macroMarkup);
-        const panelType = normalisedName === 'panel' ? 'panel' : normalisedName;
-        const heading = title || `${titleCaseStorageName(panelType)} panel`;
+        const panelStyle = buildPanelStyleAttribute(macroMarkup);
+        const titleStyle = buildPanelTitleStyleAttribute(macroMarkup);
+        const panelType = panelTypeFromStructuredMacroName(normalisedName) || 'info';
+        const titleExtra = titleStyle ? ` data-dh-panel-title-extra="${escapeAttr(titleStyle.trim())}"` : '';
 
-        return [
-          `<div data-dh-node-type="panel" data-dh-panel-type="${escapeHtml(panelType)}">`,
-          `<p><strong>${escapeHtml(heading)}</strong></p>`,
-          body,
-          '</div>',
-        ].join('');
+        return renderPanelBlock(panelType, title || titleCaseStorageName(panelType), body, `${panelStyle}${titleExtra}`);
       }
 
       if (normalisedName === 'status') {
         const statusText =
-          cleanUserFacingName(extractMacroParameter(macroMarkup, 'title')) ||
-          cleanUserFacingName(extractMacroParameter(macroMarkup, 'text')) ||
+          cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'title')) ||
+          cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'text')) ||
+          cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'label')) ||
           'Status';
-        return `<span data-dh-node-type="status">[Status: ${escapeHtml(statusText)}]</span>`;
+        const statusColor =
+          cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'colour')) ||
+          cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'color')) ||
+          cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'subtleColour')) ||
+          cleanMacroDisplayText(extractMacroParameter(macroMarkup, 'subtleColor'));
+        return renderStatus(statusText, statusColor);
       }
 
       if (normalisedName === 'expand') {
         const title = cleanUserFacingName(extractMacroParameter(macroMarkup, 'title')) || 'Details';
         const body = extractMacroBody(macroMarkup);
         return [
-          '<div data-dh-node-type="expand">',
-          `<p>[Expand: ${escapeHtml(title)}]</p>`,
+          '<details data-dh-node-type="expand" open>',
+          `<summary>${escapeHtml(title)}</summary>`,
+          '<div data-dh-expand-body="true">',
           body,
           '</div>',
+          '</details>',
         ].join('');
       }
 
@@ -498,25 +2071,25 @@ function expandKnownStructuredMacros(html) {
 function expandUnsupportedStorageNodes(html) {
   return String(html || '')
     .replace(/<ac:(?:adf-extension|bodied-extension|extension)\b[\s\S]*?<\/ac:(?:adf-extension|bodied-extension|extension)>/gi, (match) =>
-      createRawFallbackHtml(match, {
-        type: 'Extension',
-        name: titleCaseStorageName(extractAttr(match, ['ac:name', 'name'])),
-      })
+      renderAdfExtension(match)
     )
     .replace(/<ri:user\b[^>]*\/?>/gi, () => '<span data-dh-node-type="mention">[Mention]</span>')
-    .replace(/<ri:date\b[^>]*(?:ri:value|value)=["']([^"']+)["'][^>]*\/?>/gi, (_match, value) =>
-      `<time datetime="${escapeHtml(value)}">${escapeHtml(value)}</time>`
-    );
+    .replace(/<ri:date\b[^>]*\/?>/gi, (match) => renderDate(extractDateValueFromMarkup(match)));
 }
 
 export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {}) {
   if (!html) return '';
 
-  const expandedStorage = expandWhiteboardAnchors(
-    expandUnsupportedStorageNodes(
-      expandKnownStructuredMacros(
-        expandConfluenceTaskLists(
-          expandAdfNodes(expandConfluenceLinks(expandConfluenceCodeMacros(html), baseUrl))
+  // Convert Confluence-only storage constructs into ordinary, sanitized HTML.
+  // This is intentionally a renderer-only layer: the original storage fragments
+  // are still kept in the diff blocks for reconstruction and draft creation.
+  const expandedStorage = expandSelfClosingTimeTags(
+    expandWhiteboardAnchors(
+      expandUnsupportedStorageNodes(
+        expandKnownStructuredMacros(
+          expandConfluenceTaskLists(
+            expandAdfNodes(expandConfluenceLinks(expandConfluenceCodeMacros(html), baseUrl))
+          )
         )
       )
     )
@@ -526,14 +2099,40 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
     )
     .replace(
       /<ac:image[\s\S]*?<ri:url[^>]*(?:ri:value|value)=["']([^"']+)["'][^>]*>[\s\S]*?<\/ac:image>/gi,
-      '<img src="$1" alt="" />'
+      (match, url) => {
+        const imageMeta = extractImageStyle(match);
+        const renderedImage = renderImageFigure({
+          src: url,
+          alt: extractImageAltText(match, ''),
+          caption: extractImageCaption(match),
+          imageStyle: imageMeta.imageStyle,
+          imageWidth: imageMeta.imageWidth,
+          align: imageMeta.align,
+          hasBorder: imageMeta.hasBorder,
+          borderSize: imageMeta.borderSize,
+          borderColor: imageMeta.borderColor,
+        });
+        return renderedImage;
+      }
     )
     .replace(
       /<ac:image[\s\S]*?<ri:attachment[^>]*(?:ri:filename|filename)=["']([^"']+)["'][^>]*>[\s\S]*?<\/ac:image>/gi,
-      (_match, filename) => {
+      (match, filename) => {
         const url = lookupAttachmentUrl(filename, attachmentsByFilename);
+        const imageMeta = extractImageStyle(match);
         if (url) {
-          return `<img src="${escapeHtml(url)}" alt="${escapeHtml(filename)}" />`;
+          const renderedImage = renderImageFigure({
+            src: url,
+            alt: extractImageAltText(match, filename),
+            caption: extractImageCaption(match),
+            imageStyle: imageMeta.imageStyle,
+            imageWidth: imageMeta.imageWidth,
+            align: imageMeta.align,
+            hasBorder: imageMeta.hasBorder,
+            borderSize: imageMeta.borderSize,
+            borderColor: imageMeta.borderColor,
+          });
+          return renderedImage;
         }
         return `<figure><div data-image-placeholder="true">Image attachment: ${escapeHtml(
           filename
@@ -554,6 +2153,7 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
     'DIV',
     'EM',
     'FIGURE',
+    'FIGCAPTION',
     'H1',
     'H2',
     'H3',
@@ -572,7 +2172,9 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
     'S',
     'SPAN',
     'STRONG',
+    'SUB',
     'SUMMARY',
+    'SUP',
     'TABLE',
     'TBODY',
     'TD',
@@ -581,8 +2183,22 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
     'TR',
     'U',
     'UL',
+    'TIME',
   ]);
-  const allowedAttrs = new Set(['alt', 'colspan', 'href', 'rowspan', 'src', 'title']);
+  const allowedAttrs = new Set([
+    'alt',
+    'colspan',
+    'datetime',
+    'height',
+    'href',
+    'rowspan',
+    'scope',
+    'src',
+    'start',
+    'style',
+    'title',
+    'width',
+  ]);
   const doc = new DOMParser().parseFromString(expandedStorage, 'text/html');
 
   Array.from(doc.body.querySelectorAll('*')).forEach((node) => {
@@ -591,11 +2207,117 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
       return;
     }
 
+    const originalClassName = node.getAttribute('class') || '';
+
     Array.from(node.attributes).forEach((attr) => {
       const name = attr.name.toLowerCase();
       const value = attr.value || '';
       const isAllowedDataImage = name === 'src' && value.startsWith('data:image/');
+      const isAlignmentAttr = name === 'align' || name === 'valign';
+      const isTableCell = node.tagName === 'TD' || node.tagName === 'TH';
+
+      if (name === 'class') {
+        applyColorHintsFromClass(node, value);
+        applyTextLayoutHintsFromClass(node, value);
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (['data-align', 'data-alignment', 'data-text-align', 'data-text-alignment', 'text-align'].includes(name)) {
+        setTextLayoutDataAttributes(node, { align: value });
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (['data-indent', 'data-indentation', 'indent', 'indentation'].includes(name)) {
+        setTextLayoutDataAttributes(node, { indent: value });
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (name === 'data-layout') {
+        setTextLayoutDataAttributes(node, { align: value, indent: value });
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (['data-color', 'data-colour', 'data-text-color', 'data-text-colour', 'text-color', 'text-colour'].includes(name)) {
+        const shouldTreatAsBackground =
+          isTableCell ||
+          node.tagName === 'MARK' ||
+          /background|highlight|mark|bg/i.test(originalClassName);
+        applySafeColorDataAttribute(
+          node,
+          shouldTreatAsBackground ? 'data-dh-bg-color' : 'data-dh-text-color',
+          value
+        );
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (
+        name === 'bgcolor' ||
+        [
+          'data-highlight-color',
+          'data-highlight-colour',
+          'data-background-color',
+          'data-background-colour',
+          'data-cell-background',
+          'data-cell-background-color',
+          'data-cell-background-colour',
+        ].includes(name)
+      ) {
+        if (isTableCell || name !== 'bgcolor') {
+          applySafeColorDataAttribute(node, 'data-dh-bg-color', value);
+        }
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (isAlignmentAttr) {
+        const property = name === 'align' ? 'text-align' : 'vertical-align';
+        const allowed = name === 'align'
+          ? ['left', 'center', 'right', 'justify']
+          : ['top', 'middle', 'bottom', 'baseline'];
+        const safeValue = normaliseCssKeyword(value, allowed);
+        if (safeValue) {
+          node.setAttribute(
+            'style',
+            appendSafeStyle(node.getAttribute('style') || '', [`${property}: ${safeValue}`])
+          );
+        }
+        node.removeAttribute(attr.name);
+        return;
+      }
+
       if (!allowedAttrs.has(name) && !name.startsWith('data-')) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if (name === 'style') {
+        applyColorDeclarationsFromStyle(node, value);
+        applyTextLayoutDeclarationsFromStyle(node, value);
+        const safeStyle = styleDeclarationsWithoutColor(value).join('; ');
+        if (safeStyle) {
+          node.setAttribute(attr.name, safeStyle);
+        } else {
+          node.removeAttribute(attr.name);
+        }
+        return;
+      }
+
+      if (name === 'width' || name === 'height') {
+        const safeLength = normaliseCssLength(value);
+        if (safeLength) {
+          node.setAttribute(attr.name, safeLength.replace(/px$/i, ''));
+        } else {
+          node.removeAttribute(attr.name);
+        }
+        return;
+      }
+
+      if (name === 'start' && !/^-?\d+$/.test(value)) {
         node.removeAttribute(attr.name);
         return;
       }
@@ -616,7 +2338,51 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
       node.setAttribute('target', '_blank');
       node.setAttribute('rel', 'noreferrer');
     }
+
+    const explicitDateValue =
+      node.getAttribute('datetime') ||
+      node.getAttribute('data-date') ||
+      node.getAttribute('data-value') ||
+      node.getAttribute('data-timestamp');
+    const isExplicitDateNode =
+      node.tagName === 'TIME' ||
+      node.getAttribute('data-node-type') === 'date' ||
+      (node.tagName === 'SPAN' && /\bdate-node\b/i.test(originalClassName) && explicitDateValue);
+
+    if (isExplicitDateNode) {
+      const value =
+        explicitDateValue ||
+        node.textContent;
+      const displayDate = formatConfluenceDate(value);
+
+      node.setAttribute('data-dh-node-type', 'date');
+      if (value && node.tagName === 'TIME') {
+        node.setAttribute('datetime', value);
+      }
+      if (displayDate) {
+        node.textContent = displayDate;
+      }
+    }
+
+    // Confluence sometimes stores/returns status lozenges as regular spans
+    // with AUI/Fabric classes instead of as a structured status macro. The
+    // visible fallback text for those spans can be the generic word "STATUS",
+    // while the real user-facing distinction is carried by the lozenge color.
+    // Preserve normal custom labels, but replace generic labels with the color
+    // name so the regression page displays NEUTRAL/PURPLE/BLUE/... as expected.
+    if (node.tagName === 'SPAN' && /\b(status|lozenge)\b/i.test(originalClassName)) {
+      const statusColor = normaliseStatusColor(node.getAttribute('data-dh-status-color'));
+      const currentText = cleanMacroDisplayText(node.textContent);
+      node.setAttribute('data-dh-node-type', 'status');
+
+      if (statusColor && (!currentText || /^status$/i.test(currentText))) {
+        node.textContent = /\bneutral\b/i.test(originalClassName) ? 'NEUTRAL' : statusColor.toUpperCase();
+      }
+    }
   });
+
+  normaliseNestedIndentation(doc.body);
+  markEmptyParentListItems(doc.body);
 
   return doc.body.innerHTML;
 }
@@ -752,7 +2518,56 @@ function extractBlockMeta(node, options = {}) {
 }
 
 function wrapListItemHtml(listTag, itemHtml) {
-  return `<${listTag}>${itemHtml}</${listTag}>`;
+  return `<${listTag}>${normaliseNestedListItemHtml(itemHtml)}</${listTag}>`;
+}
+
+function isEmptyParentListItem(item) {
+  if (!item || item.nodeType !== Node.ELEMENT_NODE || !/^li$/i.test(item.tagName)) return false;
+
+  const hasNestedList = Array.from(item.children).some((child) => /^(ul|ol)$/i.test(child.tagName));
+  const hasDirectText = Array.from(item.childNodes).some(
+    (child) => child.nodeType === Node.TEXT_NODE && normaliseBlockText(child)
+  );
+  const hasDirectNonListElement = Array.from(item.children).some(
+    (child) => !/^(ul|ol)$/i.test(child.tagName) && normaliseBlockText(child)
+  );
+
+  return hasNestedList && !hasDirectText && !hasDirectNonListElement;
+}
+
+function markEmptyParentListItems(root) {
+  if (!root || !root.querySelectorAll) return;
+
+  Array.from(root.querySelectorAll('li')).forEach((item) => {
+    if (isEmptyParentListItem(item)) {
+      item.setAttribute('data-dh-empty-parent-list-item', 'true');
+      if (!item.querySelector(':scope > [data-dh-empty-list-marker]')) {
+        const markerAnchor = item.ownerDocument.createElement('span');
+        markerAnchor.setAttribute('data-dh-empty-list-marker', 'true');
+        markerAnchor.setAttribute('aria-hidden', 'true');
+        item.insertBefore(markerAnchor, item.firstChild);
+      }
+    }
+  });
+}
+
+function normaliseNestedListItemHtml(itemHtml) {
+  const doc = new DOMParser().parseFromString(itemHtml || '', 'text/html');
+  const item = doc.body.firstElementChild;
+
+  if (!item || !/^li$/i.test(item.tagName)) return itemHtml;
+
+  if (isEmptyParentListItem(item)) {
+    item.setAttribute('data-dh-empty-parent-list-item', 'true');
+    if (!item.querySelector(':scope > [data-dh-empty-list-marker]')) {
+      const markerAnchor = doc.createElement('span');
+      markerAnchor.setAttribute('data-dh-empty-list-marker', 'true');
+      markerAnchor.setAttribute('aria-hidden', 'true');
+      item.insertBefore(markerAnchor, item.firstChild);
+    }
+  }
+
+  return item.outerHTML;
 }
 
 function hasBlockElementChildren(node) {
@@ -863,7 +2678,8 @@ function extractComparableBlocksFromPreparedNode(node, rawHtml) {
 }
 
 function extractDiffBlocks(html, baseUrl, attachmentsByFilename) {
-  const rawDoc = new DOMParser().parseFromString(html || '', 'text/html');
+  const parserSafeHtml = normaliseSelfClosingTimeTagsForParsing(html || '');
+  const rawDoc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
   const rawBlocks = Array.from(rawDoc.body.childNodes)
     .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
     .flatMap(collectRawBlockNodes);
@@ -1261,19 +3077,19 @@ function canPairForInlineDiff(oldBlock, currentBlock) {
   return textSimilarity(oldBlock.text, currentBlock.text) >= 0.25;
 }
 
-function renderCodeDiffLines(segments) {
+function renderCodeDiffLines(segments, language = '') {
   const html = segments
     .map((segment) =>
-      segment.lines
-        .map((line) => {
-          const className = `dh-code-diff-line dh-code-diff-line--${segment.type}`;
-          return `<span class="${className}">${escapeHtml(line)}</span>`;
-        })
-        .join('\n')
+      renderCodeBlockHtml(
+        segment.lines.join('\n'),
+        language,
+        `dh-code-diff-line dh-code-diff-line--${segment.type}`
+      )
     )
-    .join('\n');
+    .join('');
 
-  return `<pre data-dh-node-type="code_block"><code>${html}</code></pre>`;
+  const languageAttr = language ? ` data-language="${escapeAttr(language)}"` : '';
+  return `<pre data-dh-node-type="code_block" data-dh-code-enhanced="true"${languageAttr}><code>${html}</code></pre>`;
 }
 
 function buildCodeBlockDiff(oldBlock, currentBlock) {
@@ -1297,7 +3113,10 @@ function buildCodeBlockDiff(oldBlock, currentBlock) {
     newText: currentBlock.text,
     oldHtml: oldBlock.html,
     newHtml: currentBlock.html,
-    renderedHtml: renderCodeDiffLines(lineDiff.segments),
+    renderedHtml: renderCodeDiffLines(
+      lineDiff.segments,
+      extractAttr(currentBlock.renderedHtml || currentBlock.html || '', ['data-language'])
+    ),
     inline,
     added: lineDiff.added,
     removed: lineDiff.removed,
@@ -1340,7 +3159,10 @@ function countTableCells(rows) {
 }
 
 function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
-  const doc = new DOMParser().parseFromString(currentBlock.html || '', 'text/html');
+  const doc = new DOMParser().parseFromString(
+    currentBlock.renderedHtml || currentBlock.html || '',
+    'text/html'
+  );
   const table = doc.body.querySelector('table');
   let added = 0;
   let removed = 0;
@@ -1413,11 +3235,11 @@ function buildSideBySideTableDiff(oldBlock, currentBlock, oldRows, currentRows) 
       '<div class="dh-table-diff-pair">',
       '<div class="dh-table-diff-panel dh-table-diff-panel--removed">',
       '<div class="dh-table-diff-label">Previous table</div>',
-      oldBlock.html,
+      oldBlock.renderedHtml || oldBlock.html,
       '</div>',
       '<div class="dh-table-diff-panel dh-table-diff-panel--added">',
       '<div class="dh-table-diff-label">Current table</div>',
-      currentBlock.html,
+      currentBlock.renderedHtml || currentBlock.html,
       '</div>',
       '</div>',
     ].join(''),
@@ -1437,8 +3259,8 @@ function buildSideBySideTableDiff(oldBlock, currentBlock, oldRows, currentRows) 
 }
 
 function buildTableDiff(oldBlock, currentBlock) {
-  const oldRows = extractTableRows(oldBlock.html);
-  const currentRows = extractTableRows(currentBlock.html);
+  const oldRows = extractTableRows(oldBlock.renderedHtml || oldBlock.html);
+  const currentRows = extractTableRows(currentBlock.renderedHtml || currentBlock.html);
 
   if (haveSameTableShape(oldRows, currentRows)) {
     const cellLevelDiff = buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows);
