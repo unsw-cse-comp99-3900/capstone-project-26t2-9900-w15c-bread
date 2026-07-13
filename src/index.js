@@ -216,23 +216,7 @@ resolver.define('getPageVersions', async (req) => {
     pageTitle,
     baseUrl,
     attachmentsByFilename: attachments,
-<<<<<<< Updated upstream
-    versions: rawVersions.map((v, index) => {
-=======
-<<<<<<< Updated upstream
-    versions: rawVersions.map((v) => ({
-      number: v.number,
-      authorId: v.authorId,
-      authorName: authorMap[v.authorId] || 'Unknown user',
-      createdAt: v.createdAt,
-      message: v.message || '',
-      minorEdit: !!v.minorEdit,
-      title: v.page && v.page.title ? v.page.title : pageTitle,
-      body: extractStorageBody(v),
-    })),
-=======
     versions: sortedVersions.map((v, index) => {
->>>>>>> Stashed changes
       const versionBody = extractStorageBody(v);
 
       return {
@@ -246,10 +230,6 @@ resolver.define('getPageVersions', async (req) => {
         body: index === 0 && currentPageBody ? currentPageBody : versionBody,
       };
     }),
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   };
 });
 

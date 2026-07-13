@@ -78,34 +78,18 @@ function decodeBasicHtmlEntities(value) {
 }
 
 function decodeCdata(value) {
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-  return String(value || '').replace(/^<!\[CDATA\[/, '').replace(/\]\]>$/, '');
-=======
->>>>>>> Stashed changes
   return decodeBasicHtmlEntities(decodeBasicHtmlEntities(value))
     .replace(/^\s*<!--\s*\[CDATA\[/, '')
     .replace(/\]\]\s*-->\s*$/, '')
     .replace(/^\s*<!\[CDATA\[/, '')
-<<<<<<< Updated upstream
-    .replace(/\]\]>\s*$/, '');
-=======
     .replace(/\]\]>\s*$/, '')
     .replace(/\]\]\]\]><!\[CDATA\[>/g, ']]>');
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 }
 
 function normaliseLineEndings(value) {
   return String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 function getNodeOuterHtml(node) {
   if (!node) return '';
   if (node.nodeType === Node.TEXT_NODE) return escapeHtml(node.textContent || '');
@@ -113,8 +97,6 @@ function getNodeOuterHtml(node) {
   return '';
 }
 
-<<<<<<< Updated upstream
-=======
 // DOMParser serializes Confluence's empty storage elements with closing tags.
 // Confluence storage expects these elements to remain self-closing, so recovery
 // uses this serializer instead of trusting the browser's generic outerHTML.
@@ -246,7 +228,6 @@ export function getStorageNodeOuterHtml(node) {
   return `<${tag}${attributes}>${children}</${tag}>`;
 }
 
->>>>>>> Stashed changes
 function hashString(value) {
   let hash = 0;
   const text = String(value || '');
@@ -903,14 +884,6 @@ function expandSelfClosingTimeTags(html) {
   );
 }
 
-<<<<<<< Updated upstream
-function normaliseSelfClosingTimeTagsForParsing(html) {
-  return String(html || '').replace(/<time\b([^>]*)\/>/gi, '<time$1></time>');
-}
-
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 function extractAttr(markup, attrNames) {
   for (const attrName of attrNames) {
     const escapedName = attrName.replace(':', '\\:');
@@ -1006,12 +979,6 @@ function confluenceEmoticonToText(name) {
   return map[name] || (name ? `:${name}:` : '');
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-function expandConfluenceLinks(html, baseUrl) {
-=======
->>>>>>> Stashed changes
 function isWhiteboardUrl(url) {
   return /\/wiki\/spaces\/[^/]+\/whiteboard\/[^/?#]+/i.test(String(url || ''));
 }
@@ -1216,26 +1183,6 @@ function renderDecision(body, state = '') {
 
 function renderDecisionList(markup) {
   const items = [];
-<<<<<<< Updated upstream
-  const itemPattern =
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:decision-item|decisionItem)["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi;
-  let itemMatch = itemPattern.exec(markup);
-
-  while (itemMatch) {
-    const itemMarkup = itemMatch[0];
-    const contentMatch = /<ac:adf-content\b[^>]*>([\s\S]*?)<\/ac:adf-content>/i.exec(
-      itemMarkup
-    );
-    const content = getReadableHtmlText(contentMatch ? contentMatch[1] : '');
-    const state = extractAdfAttribute(itemMarkup, ['state']);
-
-    if (content) {
-      items.push(renderDecision(escapeHtml(content), state));
-    }
-
-    itemMatch = itemPattern.exec(markup);
-  }
-=======
   const doc = new DOMParser().parseFromString(
     normaliseStorageHtmlForParsing(markup || ''),
     'text/html'
@@ -1275,7 +1222,6 @@ function renderDecisionList(markup) {
 
     if (content) items.push(renderDecision(escapeHtml(content), state));
   });
->>>>>>> Stashed changes
 
   if (!items.length) {
     const renderedDecisionPattern =
@@ -1294,10 +1240,6 @@ function renderDecisionList(markup) {
 }
 
 function expandConfluenceLinks(html, baseUrl, usersByAccountId = {}) {
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   return html.replace(/<ac:link\b[\s\S]*?<\/ac:link>/gi, (match) => {
     const dateMatch = /<ri:date\b[^>]*\/?>/i.exec(match);
     if (dateMatch) {
@@ -1358,11 +1300,6 @@ function expandConfluenceLinks(html, baseUrl, usersByAccountId = {}) {
   });
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 function normaliseCodeLanguage(value) {
   const language = String(value || '')
     .trim()
@@ -1440,8 +1377,6 @@ function normaliseDecodedCodeBody(value, language = '') {
   return `${repairedCode.replace(/\s+$/, '')}\n</${rootTag}>`;
 }
 
-<<<<<<< Updated upstream
-=======
 function wrapCodeBodyInCdata(code) {
   // XML cannot contain the CDATA terminator inside one section. Splitting at
   // the terminator is the standard lossless representation and Confluence
@@ -1514,7 +1449,6 @@ export function normaliseCodeMacroStorageForWriteBack(html) {
   );
 }
 
->>>>>>> Stashed changes
 function codeKeywordsForLanguage(language) {
   const common = ['false', 'null', 'true'];
   const keywordMap = {
@@ -1754,10 +1688,6 @@ function renderCodeBlockHtml(code, language = '', extraLineClass = '') {
     .join('');
 }
 
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 function expandConfluenceCodeMacros(html) {
   return String(html || '').replace(
     /<ac:structured-macro\b[^>]*(?:ac:name|name)=["']code["'][^>]*>[\s\S]*?<\/ac:structured-macro>/gi,
@@ -1791,12 +1721,6 @@ function expandConfluenceCodeMacros(html) {
   );
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {}) {
-=======
->>>>>>> Stashed changes
 function extractMacroParameter(markup, name) {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(
@@ -2303,8 +2227,6 @@ function expandWhiteboardAnchors(html) {
 function expandAdfNodes(html, usersByAccountId = {}) {
   let expanded = expandAdfMarks(html);
 
-<<<<<<< Updated upstream
-=======
   // Decision fallbacks can contain a second ADF copy of every item. Render
   // the enclosing extension before the generic item pass so only the primary
   // decision-list's direct children become visible preview blocks.
@@ -2318,7 +2240,6 @@ function expandAdfNodes(html, usersByAccountId = {}) {
         : match
   );
 
->>>>>>> Stashed changes
   expanded = expanded.replace(
     /<ac:adf-node\b[^>]*(?:type|ac:type)=["']status["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
     (match) => {
@@ -2632,12 +2553,6 @@ function layoutSkeletonForNode(node) {
   const tag = layoutWrapperTag(node);
   if (!tag) return '';
 
-<<<<<<< Updated upstream
-  const attrs = Array.from(node.attributes || [])
-    .map((attr) => `${attr.name.toLowerCase()}=${normaliseSignatureText(attr.value)}`)
-    .sort()
-    .join('|');
-=======
   const openingTag = storageOpeningTag(node);
   const attrs = [];
 
@@ -2664,25 +2579,16 @@ function layoutSkeletonForNode(node) {
     if (width) attrs.push(`width=${width}`);
   }
 
->>>>>>> Stashed changes
   const children = Array.from(node.children || [])
     .map(layoutSkeletonForNode)
     .filter(Boolean)
     .join('');
 
-<<<<<<< Updated upstream
-  return `<${tag}[${attrs}]>${children}</${tag}>`;
-}
-
-function layoutStructureSignature(html) {
-  const parserSafeHtml = normaliseSelfClosingTimeTagsForParsing(html || '');
-=======
   return `<${tag}[${attrs.sort().join('|')}]>${children}</${tag}>`;
 }
 
 function layoutStructureSignature(html) {
   const parserSafeHtml = normaliseStorageHtmlForParsing(html || '');
->>>>>>> Stashed changes
   const doc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
   return Array.from(doc.body.children)
     .filter((node) => layoutWrapperTag(node) === 'ac:layout')
@@ -2771,10 +2677,6 @@ export function prepareConfluenceHtml(
   usersByAccountId = {},
   options = {}
 ) {
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   if (!html) return '';
 
   // Layouts remain one atomic recovery block, but each cell is rendered in
@@ -2919,18 +2821,10 @@ export function prepareConfluenceHtml(
     'title',
     'width',
   ]);
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-  const allowedAttrs = new Set(['alt', 'colspan', 'href', 'rowspan', 'src', 'title']);
->>>>>>> Stashed changes
-  const doc = new DOMParser().parseFromString(expandedStorage, 'text/html');
-=======
   const doc = new DOMParser().parseFromString(
     normaliseStorageHtmlForParsing(expandedStorage),
     'text/html'
   );
->>>>>>> Stashed changes
 
   Array.from(doc.body.querySelectorAll('*')).forEach((node) => {
     if (!allowedTags.has(node.tagName)) {
@@ -3151,11 +3045,6 @@ function normaliseComparableText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 function normaliseSignatureText(text) {
   return String(text || '')
     .replace(/\u00a0/g, ' ')
@@ -3314,8 +3203,6 @@ function imageRawSignature(rawHtml) {
   return values.sort().join('|');
 }
 
-<<<<<<< Updated upstream
-=======
 const VOLATILE_STORAGE_SIGNATURE_ATTRIBUTES = new Set([
   'ac:local-id',
   'ac:macro-id',
@@ -3384,8 +3271,6 @@ function stableRawStorageSignature(rawHtml) {
     .join('|');
 }
 
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 function stableHtmlSignature(node) {
   if (node.nodeType === Node.TEXT_NODE) return normaliseBlockText(node);
   if (node.nodeType !== Node.ELEMENT_NODE) return '';
@@ -3453,28 +3338,15 @@ function extractBlockMeta(node, options = {}) {
   const hasNonTextMedia = Boolean(
     node.querySelector && node.querySelector('img, table, hr, iframe, video, audio')
   );
-<<<<<<< Updated upstream
-  const rawImageSignature = nodeType === 'image' ? imageRawSignature(options.rawHtml || html) : '';
-  const key =
-    nodeType === 'unsupported'
-      ? `unsupported:${hashString(options.rawHtml || html)}`
-=======
-<<<<<<< Updated upstream
-=======
   const rawImageSignature = nodeType === 'image' ? imageRawSignature(options.rawHtml || html) : '';
   const key =
     nodeType === 'unsupported'
       ? `unsupported:${hashString(stableRawStorageSignature(options.rawHtml || html))}`
->>>>>>> Stashed changes
       : nodeType === 'task_item'
         ? `task_item:${taskStatus}:${text}`
         : rawImageSignature
           ? `${stableHtmlSignature(node)}:raw-image=${rawImageSignature}`
           : stableHtmlSignature(node);
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
   return {
     key,
@@ -3484,20 +3356,6 @@ function extractBlockMeta(node, options = {}) {
     tag,
     nodeType,
     text,
-<<<<<<< Updated upstream
-    taskStatus,
-    supportLevel: nodeType === 'unsupported' ? 'raw' : 'full',
-    rawPreview: nodeType === 'unsupported' ? options.rawHtml || html : undefined,
-    canInlineDiff:
-      nodeType !== 'code_block' &&
-      nodeType !== 'unsupported' &&
-      isTextDiffableTag(tag) &&
-      text &&
-      !hasNonTextMedia,
-=======
-<<<<<<< Updated upstream
-    canInlineDiff: nodeType !== 'code_block' && isTextDiffableTag(tag) && text && !hasNonTextMedia,
-=======
     taskStatus,
     supportLevel: options.supportLevel || (nodeType === 'unsupported' ? 'raw' : 'full'),
     rawPreview:
@@ -3513,8 +3371,6 @@ function extractBlockMeta(node, options = {}) {
       isTextDiffableTag(tag) &&
       text &&
       !hasNonTextMedia,
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   };
 }
 
@@ -3522,236 +3378,6 @@ function wrapListItemHtml(listTag, itemHtml) {
   return `<${listTag}>${normaliseNestedListItemHtml(itemHtml)}</${listTag}>`;
 }
 
-<<<<<<< Updated upstream
-function isEmptyParentListItem(item) {
-  if (!item || item.nodeType !== Node.ELEMENT_NODE || !/^li$/i.test(item.tagName)) return false;
-
-  const hasNestedList = Array.from(item.children).some((child) => /^(ul|ol)$/i.test(child.tagName));
-  const hasDirectText = Array.from(item.childNodes).some(
-    (child) => child.nodeType === Node.TEXT_NODE && normaliseBlockText(child)
-  );
-  const hasDirectNonListElement = Array.from(item.children).some(
-    (child) => !/^(ul|ol)$/i.test(child.tagName) && normaliseBlockText(child)
-  );
-
-  return hasNestedList && !hasDirectText && !hasDirectNonListElement;
-}
-
-function markEmptyParentListItems(root) {
-  if (!root || !root.querySelectorAll) return;
-
-  Array.from(root.querySelectorAll('li')).forEach((item) => {
-    if (isEmptyParentListItem(item)) {
-      item.setAttribute('data-dh-empty-parent-list-item', 'true');
-      if (!item.querySelector(':scope > [data-dh-empty-list-marker]')) {
-        const markerAnchor = item.ownerDocument.createElement('span');
-        markerAnchor.setAttribute('data-dh-empty-list-marker', 'true');
-        markerAnchor.setAttribute('aria-hidden', 'true');
-        item.insertBefore(markerAnchor, item.firstChild);
-      }
-    }
-  });
-}
-
-function normaliseNestedListItemHtml(itemHtml) {
-  const doc = new DOMParser().parseFromString(itemHtml || '', 'text/html');
-  const item = doc.body.firstElementChild;
-
-  if (!item || !/^li$/i.test(item.tagName)) return itemHtml;
-
-  if (isEmptyParentListItem(item)) {
-    item.setAttribute('data-dh-empty-parent-list-item', 'true');
-    if (!item.querySelector(':scope > [data-dh-empty-list-marker]')) {
-      const markerAnchor = doc.createElement('span');
-      markerAnchor.setAttribute('data-dh-empty-list-marker', 'true');
-      markerAnchor.setAttribute('aria-hidden', 'true');
-      item.insertBefore(markerAnchor, item.firstChild);
-    }
-  }
-
-  return item.outerHTML;
-}
-
-function hasBlockElementChildren(node) {
-  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
-
-  return Array.from(node.children).some((child) =>
-    /^(p|div|section|h[1-6]|ul|ol|li|table|blockquote|pre|figure|hr|ac:layout|ac:layout-section|ac:layout-cell)$/i.test(child.tagName)
-  );
-}
-
-function isTransparentContainer(node) {
-  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
-
-  const tag = node.tagName.toLowerCase();
-  if (node.getAttribute('data-dh-node-type')) return false;
-  if (tag === 'div' || tag === 'section' || tag === 'main' || tag === 'article') {
-    return hasBlockElementChildren(node);
-  }
-
-  return false;
-}
-
-function isRawTransparentContainer(node) {
-  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
-
-  const tag = node.tagName.toLowerCase();
-
-  if (/^(p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|hr)$/i.test(tag)) return false;
-  // A complete Confluence layout is one recovery unit. Splitting its cells into
-  // independent blocks loses the section/cell wrappers when draft HTML is
-  // reconstructed. Nested section and cell nodes remain transparent only when
-  // encountered without their expected root layout wrapper.
-  if (/^ac:layout$/i.test(tag)) return false;
-  if (/^ac:(layout-section|layout-cell)$/i.test(tag)) return true;
-  if (/^(ac|ri):/i.test(tag)) return false;
-
-  return hasBlockElementChildren(node);
-}
-
-function collectRawBlockNodes(node) {
-  if (!node) return [];
-  if (node.nodeType === Node.TEXT_NODE) return normaliseBlockText(node) ? [node] : [];
-  if (node.nodeType !== Node.ELEMENT_NODE) return [];
-
-  if (isRawTransparentContainer(node)) {
-    return Array.from(node.childNodes).flatMap(collectRawBlockNodes);
-  }
-
-  return [node];
-}
-
-function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
-  if (!rawHtml) return [];
-
-  if (/<ac:task-list\b/i.test(rawHtml)) {
-    const taskItems = [];
-    const taskRe = /<ac:task(?=[\s>])[^>]*>[\s\S]*?<\/ac:task>/gi;
-    let match = taskRe.exec(rawHtml);
-
-    while (match) {
-      taskItems.push(`<ac:task-list>${match[0]}</ac:task-list>`);
-      match = taskRe.exec(rawHtml);
-    }
-
-    return taskItems.length === expectedCount ? taskItems : [];
-  }
-
-  const rawDoc = new DOMParser().parseFromString(rawHtml, 'text/html');
-  const list = rawDoc.body.querySelector(listTag);
-  if (!list) return [];
-
-  const items = Array.from(list.children).filter((child) => /^li$/i.test(child.tagName));
-  if (items.length !== expectedCount) return [];
-
-  return items.map((item) => wrapListItemHtml(listTag, item.outerHTML));
-}
-
-function extractRawDecisionItemHtmls(rawHtml, expectedCount) {
-  if (!rawHtml) return [];
-
-  const decisionItems = [];
-  const decisionRe =
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:decision-item|decisionItem)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi;
-  let match = decisionRe.exec(rawHtml);
-
-  while (match) {
-    decisionItems.push(`<ac:adf-node type="decision-list">${match[0]}</ac:adf-node>`);
-    match = decisionRe.exec(rawHtml);
-  }
-
-  return decisionItems.length === expectedCount ? decisionItems : [];
-}
-
-function extractComparableBlocksFromPreparedNode(node, rawHtml) {
-  if (isTransparentContainer(node)) {
-    return Array.from(node.childNodes)
-      .filter((child) => child.nodeType === Node.ELEMENT_NODE || normaliseBlockText(child))
-      .flatMap((child) => extractComparableBlocksFromPreparedNode(child, getNodeOuterHtml(child)));
-  }
-
-  if (
-    node.nodeType === Node.ELEMENT_NODE &&
-    node.getAttribute('data-dh-node-type') === 'decision_list'
-  ) {
-    const decisions = Array.from(node.children).filter(
-      (child) => child.getAttribute('data-dh-node-type') === 'decision'
-    );
-    const rawDecisionHtmls = extractRawDecisionItemHtmls(rawHtml, decisions.length);
-
-    if (decisions.length) {
-      return decisions.map((decision) => {
-        const renderedHtml = getNodeOuterHtml(decision);
-        const reconstructionHtml = rawDecisionHtmls.length ? rawDecisionHtmls.shift() : renderedHtml;
-
-        return extractBlockMeta(decision, {
-          html: reconstructionHtml,
-          renderedHtml,
-          rawHtml: reconstructionHtml,
-        });
-      });
-    }
-  }
-
-  if (
-    node.nodeType === Node.ELEMENT_NODE &&
-    /^(ul|ol)$/i.test(node.tagName) &&
-    node.getAttribute('data-dh-node-type') === 'task_list'
-  ) {
-    const listTag = node.tagName.toLowerCase();
-    const items = Array.from(node.children).filter((child) => /^li$/i.test(child.tagName));
-
-    if (items.length) {
-      const rawItemHtmls = extractRawListItemHtmls(rawHtml, listTag, items.length);
-
-      return items.map((item) => {
-        const itemHtml = wrapListItemHtml(listTag, item.outerHTML);
-        const reconstructionHtml = rawItemHtmls.length ? rawItemHtmls.shift() : itemHtml;
-
-        return extractBlockMeta(item, {
-          html: reconstructionHtml,
-          renderedHtml: itemHtml,
-          rawHtml: reconstructionHtml,
-        });
-      });
-    }
-  }
-
-  const renderedHtml = getNodeOuterHtml(node);
-  return [
-    extractBlockMeta(node, {
-      html: rawHtml || renderedHtml,
-      renderedHtml,
-      rawHtml: rawHtml || renderedHtml,
-    }),
-  ];
-}
-
-function extractPreparedBlocksFromRawNode(
-  rawNode,
-  baseUrl,
-  attachmentsByFilename,
-  usersByAccountId,
-  keyPrefix = ''
-) {
-  const rawHtml = getNodeOuterHtml(rawNode);
-  const prepared = prepareConfluenceHtml(
-    rawHtml,
-    baseUrl,
-    attachmentsByFilename,
-    usersByAccountId
-  );
-  const preparedDoc = new DOMParser().parseFromString(prepared, 'text/html');
-
-  return Array.from(preparedDoc.body.childNodes)
-    .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-    .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml))
-=======
-<<<<<<< Updated upstream
-  return Array.from(doc.body.childNodes)
-    .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-    .map(extractBlockMeta)
-=======
 function isEmptyParentListItem(item) {
   if (!item || item.nodeType !== Node.ELEMENT_NODE || !/^li$/i.test(item.tagName)) return false;
 
@@ -4090,7 +3716,6 @@ function extractPreparedBlocksFromRawNode(
         );
 
   return extractedBlocks
->>>>>>> Stashed changes
     .map((block) => ({
       ...block,
       key: keyPrefix ? `${keyPrefix}:${block.key}` : block.key,
@@ -4131,23 +3756,15 @@ function extractLayoutDiffBlocks(
       if (tag !== 'ac:layout-cell') return;
 
       const rawNodes = collectRawBlockNodes(child);
-<<<<<<< Updated upstream
-      rawNodes.forEach((rawNode) => {
-=======
       rawNodes.forEach((rawNode, rawIndex) => {
->>>>>>> Stashed changes
         blocks.push(
           ...extractPreparedBlocksFromRawNode(
             rawNode,
             baseUrl,
             attachmentsByFilename,
             usersByAccountId,
-<<<<<<< Updated upstream
-            path
-=======
             path,
             `${path}:raw:${rawIndex}`
->>>>>>> Stashed changes
           )
         );
       });
@@ -4169,16 +3786,10 @@ function extractDiffBlocks(
   usersByAccountId = {},
   options = {}
 ) {
-<<<<<<< Updated upstream
-  const parserSafeHtml = normaliseSelfClosingTimeTagsForParsing(html || '');
-  const rawDoc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
-  let layoutIndex = 0;
-=======
   const parserSafeHtml = normaliseStorageHtmlForParsing(html || '');
   const rawDoc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
   let layoutIndex = 0;
   let rawBlockIndex = 0;
->>>>>>> Stashed changes
 
   return Array.from(rawDoc.body.childNodes)
     .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
@@ -4198,17 +3809,6 @@ function extractDiffBlocks(
         return blocks;
       }
 
-<<<<<<< Updated upstream
-      return collectRawBlockNodes(node).flatMap((rawNode) =>
-        extractPreparedBlocksFromRawNode(
-          rawNode,
-          baseUrl,
-          attachmentsByFilename,
-          usersByAccountId
-        )
-      );
-    })
-=======
       return collectRawBlockNodes(node).flatMap((rawNode) => {
         const blocks = extractPreparedBlocksFromRawNode(
           rawNode,
@@ -4222,8 +3822,6 @@ function extractDiffBlocks(
         return blocks;
       });
     })
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     .filter((block) => block.html);
 }
 
@@ -4261,23 +3859,6 @@ function renderDiffBlock(block) {
 function makeSameBlock(currentBlock, oldBlock = currentBlock) {
   return {
     type: 'same',
-<<<<<<< Updated upstream
-    tag: block.tag,
-    nodeType: block.nodeType,
-    text: block.text,
-    html: block.html,
-<<<<<<< Updated upstream
-    renderedHtml: block.renderedHtml,
-    taskStatus: block.taskStatus,
-    supportLevel: block.supportLevel,
-    rawPreview: block.rawPreview,
-    fullRenderedHtml: block.fullRenderedHtml,
-    isStructuralBoundary: block.isStructuralBoundary,
-    layoutPath: block.layoutPath,
-    layoutBoundaryEdge: block.layoutBoundaryEdge,
-    layoutWrapperTag: block.layoutWrapperTag,
-=======
-=======
     tag: currentBlock.tag,
     nodeType: currentBlock.nodeType,
     text: currentBlock.text,
@@ -4302,8 +3883,6 @@ function makeSameBlock(currentBlock, oldBlock = currentBlock) {
     layoutPath: currentBlock.layoutPath,
     layoutBoundaryEdge: currentBlock.layoutBoundaryEdge,
     layoutWrapperTag: currentBlock.layoutWrapperTag,
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   };
 }
 
@@ -4348,32 +3927,19 @@ function makeAddedBlock(block) {
     nodeType: block.nodeType,
     text: block.text,
     newHtml: block.html,
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-    renderedHtml: block.html,
-=======
     newRawHtml: block.rawHtml || block.html,
->>>>>>> Stashed changes
     renderedHtml: block.renderedHtml || block.html,
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
-<<<<<<< Updated upstream
-=======
     newStorageGroupHtml: block.storageGroupHtml,
     newStorageGroupKey: block.storageGroupKey,
     newStorageGroupKind: block.storageGroupKind,
->>>>>>> Stashed changes
     fullRenderedHtml: block.fullRenderedHtml,
     isStructuralBoundary: block.isStructuralBoundary,
     layoutPath: block.layoutPath,
     layoutBoundaryEdge: block.layoutBoundaryEdge,
     layoutWrapperTag: block.layoutWrapperTag,
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     added: 1,
     removed: 0,
   };
@@ -4386,32 +3952,19 @@ function makeRemovedBlock(block) {
     nodeType: block.nodeType,
     text: block.text,
     oldHtml: block.html,
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-    renderedHtml: block.html,
-=======
     oldRawHtml: block.rawHtml || block.html,
->>>>>>> Stashed changes
     renderedHtml: block.renderedHtml || block.html,
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
-<<<<<<< Updated upstream
-=======
     oldStorageGroupHtml: block.storageGroupHtml,
     oldStorageGroupKey: block.storageGroupKey,
     oldStorageGroupKind: block.storageGroupKind,
->>>>>>> Stashed changes
     fullRenderedHtml: block.fullRenderedHtml,
     isStructuralBoundary: block.isStructuralBoundary,
     layoutPath: block.layoutPath,
     layoutBoundaryEdge: block.layoutBoundaryEdge,
     layoutWrapperTag: block.layoutWrapperTag,
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     added: 0,
     removed: 1,
   };

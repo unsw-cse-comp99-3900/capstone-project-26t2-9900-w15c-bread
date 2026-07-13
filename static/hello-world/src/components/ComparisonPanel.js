@@ -180,84 +180,6 @@ function fallbackTextHtml(text) {
   return paragraph.outerHTML;
 }
 
-<<<<<<< Updated upstream
-function getBlockPreviewHtml(block, selected) {
-  if (!block) return '';
-
-  if (block.type === 'same') {
-    return block.html || block.renderedHtml || '';
-  }
-
-  if (block.type === 'added') {
-    return selected ? block.newHtml || block.renderedHtml || fallbackTextHtml(block.text) : '';
-  }
-
-  if (block.type === 'removed') {
-    // The preview starts from the historical version. Applying a removal
-    // therefore omits the old block; leaving it unselected preserves it.
-    return selected ? '' : block.oldHtml || block.renderedHtml || fallbackTextHtml(block.text);
-  }
-
-  if (block.type === 'modified') {
-    if (selected) {
-      return block.newHtml || block.renderedHtml || fallbackTextHtml(block.newText);
-    }
-
-    return block.oldHtml || fallbackTextHtml(block.oldText);
-  }
-
-  return block.renderedHtml || block.html || '';
-}
-
-function getBlockRenderedPreviewHtml(block, selected) {
-  if (!block) return '';
-
-  if (block.isStructuralBoundary) {
-    return block.fullRenderedHtml || '';
-  }
-
-  if (block.type === 'same') {
-    return block.renderedHtml || block.html || '';
-  }
-
-  if (block.type === 'added') {
-    return selected ? block.renderedHtml || fallbackTextHtml(block.text) : '';
-  }
-
-  if (block.type === 'removed') {
-    return selected ? '' : block.renderedHtml || fallbackTextHtml(block.text);
-  }
-
-  if (block.type === 'modified') {
-    return selected
-      ? block.newRenderedHtml || block.renderedHtml || fallbackTextHtml(block.newText)
-      : block.oldRenderedHtml || fallbackTextHtml(block.oldText);
-  }
-
-  return block.renderedHtml || fallbackTextHtml(block.text);
-}
-
-function buildDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()) {
-  return (blocks || [])
-    .map((block, index) => {
-      // Unresolved changes keep the current version by default. A user choice
-      // only changes the draft when they explicitly restore the old content.
-      const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
-      const choice = blockChoices.get(choiceKey);
-      return getBlockPreviewHtml(block, choice !== 'old');
-    })
-    .join('');
-}
-
-<<<<<<< Updated upstream
-function buildRenderedDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()) {
-  return (blocks || [])
-    .map((block, index) => {
-      const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
-      const choice = blockChoices.get(choiceKey);
-      return getBlockRenderedPreviewHtml(block, choice !== 'old');
-=======
-=======
 function getBlockRenderedPreviewHtml(block, selected) {
   if (!block) return '';
 
@@ -301,15 +223,10 @@ export function buildRecoveryPreviewHtml(
       // rendering that reconstructed Storage here was the post-merge change
       // that made two Decisions appear as four in Draft Preview.
       return getBlockRenderedPreviewHtml(block, useCurrent);
->>>>>>> Stashed changes
     })
     .join('');
 }
 
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 function getDiffBlockHtml(block) {
   return (
     block.renderedHtml ||
@@ -784,31 +701,14 @@ function ComparisonPanelContent({
     setActiveBlockKey(null);
   };
 
-<<<<<<< Updated upstream
-  const previewHtml = useMemo(
-<<<<<<< Updated upstream
-    () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices, diffDisplay.blockChoiceKeys),
-    [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
-  );
-  const renderedPreviewHtml = useMemo(
-    () =>
-      buildRenderedDraftPreviewHtml(
-=======
-    () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices),
-    [blockChoices, richDiff.blocks]
-=======
   const recoveryStorage = useMemo(
     () =>
       buildRecoveryStorageHtml(
->>>>>>> Stashed changes
         richDiff.blocks || [],
         blockChoices,
         diffDisplay.blockChoiceKeys
       ),
     [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
   );
   const renderedPreviewHtml = useMemo(
     () =>
@@ -825,7 +725,6 @@ function ComparisonPanelContent({
       recoveryStorage.error,
       richDiff.blocks,
     ]
->>>>>>> Stashed changes
   );
 
   const diffSummary = richDiff.summary || {
@@ -845,18 +744,9 @@ function ComparisonPanelContent({
         blockIndices: row.blocks.map(({ index }) => index),
         choice: blockChoices.get(row.key) || 'current',
       })),
-<<<<<<< Updated upstream
-      previewHtml: renderedPreviewHtml,
-      storageHtml: previewHtml,
-=======
-<<<<<<< Updated upstream
-      previewHtml,
-=======
       previewHtml: renderedPreviewHtml,
       storageHtml: recoveryStorage.html,
       storageError: recoveryStorage.error,
->>>>>>> Stashed changes
->>>>>>> Stashed changes
       createdAt: new Date().toISOString(),
     };
 
@@ -877,16 +767,8 @@ function ComparisonPanelContent({
       const { invoke } = await import('@forge/bridge');
       const updatedPage = await invoke('writeRecoveredPage', {
         pageId,
-<<<<<<< Updated upstream
-        bodyValue: draftPreview.storageHtml,
-=======
-<<<<<<< Updated upstream
-        bodyValue: draftPreview.previewHtml,
-=======
         bodyValue: draftPreview.storageHtml,
         expectedVersionNumber: draftPreview.currentVersionNumber,
->>>>>>> Stashed changes
->>>>>>> Stashed changes
       });
 
       if (updatedPage && updatedPage.ok === false) {
