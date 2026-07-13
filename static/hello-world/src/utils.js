@@ -468,6 +468,27 @@ function textLayoutDataAttrsFromMarkup(markup) {
   return textLayoutDataAttrs({ align, indent });
 }
 
+function normaliseGridTemplateColumns(value) {
+  const source = String(value || '').trim();
+  if (!source) return '';
+
+  const tokens = source.match(/minmax\(0,\s*(\d+(?:\.\d+)?)fr\)/gi) || [];
+  if (!tokens.length || tokens.join(' ').replace(/\s+/g, '') !== source.replace(/\s+/g, '')) {
+    return '';
+  }
+
+  const weights = tokens.map((token) => {
+    const match = /minmax\(0,\s*(\d+(?:\.\d+)?)fr\)/i.exec(token);
+    return match ? Number(match[1]) : 0;
+  });
+
+  if (weights.some((weight) => !Number.isFinite(weight) || weight <= 0 || weight > 100)) {
+    return '';
+  }
+
+  return weights.map((weight) => `minmax(0, ${weight}fr)`).join(' ');
+}
+
 function safeStyleDeclarations(styleText) {
   const declarations = [];
 
@@ -495,6 +516,8 @@ function safeStyleDeclarations(styleText) {
         safeValue = normaliseCssKeyword(value, ['top', 'middle', 'bottom', 'baseline']);
       } else if (['width', 'height', 'max-width', 'min-width', 'margin-left', 'padding-left'].includes(property)) {
         safeValue = normaliseCssLength(value);
+      } else if (property === 'grid-template-columns') {
+        safeValue = normaliseGridTemplateColumns(value);
       }
 
       if (safeValue) declarations.push(`${property}: ${safeValue}`);
@@ -752,6 +775,58 @@ function extractExactAttr(markup, attrNames) {
   }
 
   return '';
+}
+
+function normaliseMentionAccountId(value) {
+  return String(value || '').trim();
+}
+
+function mentionDisplayName(accountId, fallbackText, usersByAccountId = {}) {
+  const normalisedId = normaliseMentionAccountId(accountId);
+  const resolvedName = normalisedId ? usersByAccountId[normalisedId] : '';
+  const fallbackName = cleanUserFacingName(String(fallbackText || '').replace(/^@/, ''));
+  return resolvedName || fallbackName || '';
+}
+
+function renderMention(accountId, fallbackText, usersByAccountId = {}) {
+  const normalisedId = normaliseMentionAccountId(accountId);
+  const displayName = mentionDisplayName(normalisedId, fallbackText, usersByAccountId);
+  const accountAttr = normalisedId
+    ? ` data-dh-mention-account-id="${escapeAttr(normalisedId)}"`
+    : '';
+
+  return `<span data-dh-node-type="mention"${accountAttr}>${escapeHtml(
+    displayName ? `@${displayName}` : '[Mention]'
+  )}</span>`;
+}
+
+export function extractMentionAccountIds(storageHtml) {
+  const ids = new Set();
+  const source = String(storageHtml || '');
+  const storageMentionPattern = /<ri:user\b[^>]*\/?\s*>/gi;
+  const adfMentionPattern =
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']mention["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi;
+  let match = storageMentionPattern.exec(source);
+
+  while (match) {
+    const accountId = extractAttr(match[0], [
+      'ri:account-id',
+      'account-id',
+      'ri:accountid',
+      'accountid',
+    ]);
+    if (accountId) ids.add(normaliseMentionAccountId(accountId));
+    match = storageMentionPattern.exec(source);
+  }
+
+  match = adfMentionPattern.exec(source);
+  while (match) {
+    const accountId = extractAdfAttribute(match[0], ['id', 'accountId', 'account-id']);
+    if (accountId) ids.add(normaliseMentionAccountId(accountId));
+    match = adfMentionPattern.exec(source);
+  }
+
+  return Array.from(ids);
 }
 
 function confluenceEmoticonToText(name) {
@@ -1015,11 +1090,26 @@ function renderDecisionList(markup) {
   return `<div data-dh-node-type="decision_list">${items.join('')}</div>`;
 }
 
-function expandConfluenceLinks(html, baseUrl) {
+function expandConfluenceLinks(html, baseUrl, usersByAccountId = {}) {
   return html.replace(/<ac:link\b[\s\S]*?<\/ac:link>/gi, (match) => {
     const dateMatch = /<ri:date\b[^>]*\/?>/i.exec(match);
     if (dateMatch) {
       return renderDate(extractDateValueFromMarkup(dateMatch[0]));
+    }
+
+    const userMatch = /<ri:user\b[^>]*\/?\s*>/i.exec(match);
+    if (userMatch) {
+      const accountId = extractAttr(userMatch[0], [
+        'ri:account-id',
+        'account-id',
+        'ri:accountid',
+        'accountid',
+      ]);
+      const labelMatch =
+        /<ac:plain-text-link-body[^>]*>([\s\S]*?)<\/ac:plain-text-link-body>/i.exec(match) ||
+        /<ac:link-body[^>]*>([\s\S]*?)<\/ac:link-body>/i.exec(match);
+      const label = labelMatch ? stripTags(decodeCdata(labelMatch[1])).trim() : '';
+      return renderMention(accountId, label, usersByAccountId);
     }
 
     const bodyMatch =
@@ -1913,7 +2003,7 @@ function expandWhiteboardAnchors(html) {
   });
 }
 
-function expandAdfNodes(html) {
+function expandAdfNodes(html, usersByAccountId = {}) {
   let expanded = expandAdfMarks(html);
 
   expanded = expanded.replace(
@@ -1951,7 +2041,8 @@ function expandAdfNodes(html) {
     /<ac:adf-node\b[^>]*(?:type|ac:type)=["']mention["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
     (match) => {
       const displayName = cleanUserFacingName(extractAdfAttribute(match, ['text', 'displayName']));
-      return `<span data-dh-node-type="mention">${escapeHtml(displayName ? `@${displayName}` : '[Mention]')}</span>`;
+      const accountId = extractAdfAttribute(match, ['id', 'accountId', 'account-id']);
+      return renderMention(accountId, displayName, usersByAccountId);
     }
   );
 
@@ -2079,17 +2170,273 @@ function expandKnownStructuredMacros(html) {
   );
 }
 
-function expandUnsupportedStorageNodes(html) {
+function expandUnsupportedStorageNodes(html, usersByAccountId = {}) {
   return String(html || '')
     .replace(/<ac:(?:adf-extension|bodied-extension|extension)\b[\s\S]*?<\/ac:(?:adf-extension|bodied-extension|extension)>/gi, (match) =>
       renderAdfExtension(match)
     )
-    .replace(/<ri:user\b[^>]*\/?>/gi, () => '<span data-dh-node-type="mention">[Mention]</span>')
+    .replace(/<ri:user\b[^>]*\/?>/gi, (match) => {
+      const accountId = extractAttr(match, [
+        'ri:account-id',
+        'account-id',
+        'ri:accountid',
+        'accountid',
+      ]);
+      return renderMention(accountId, '', usersByAccountId);
+    })
     .replace(/<ri:date\b[^>]*\/?>/gi, (match) => renderDate(extractDateValueFromMarkup(match)));
 }
 
-export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {}) {
+function normaliseLayoutType(value) {
+  const normalised = String(value || 'single')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  const aliases = {
+    twoequal: 'two_equal',
+    twoleftsidebar: 'two_left_sidebar',
+    tworightsidebar: 'two_right_sidebar',
+    threeequal: 'three_equal',
+    threewithsidebars: 'three_with_sidebars',
+  };
+
+  return aliases[normalised.replace(/_/g, '')] || normalised;
+}
+
+function layoutTypeUsesFixedSidebarRatio(layoutType) {
+  return [
+    'two_left_sidebar',
+    'two_right_sidebar',
+    'three_with_sidebars',
+  ].includes(layoutType);
+}
+
+function layoutTypeColumnWeights(layoutType) {
+  const columnsByType = {
+    single: ['1'],
+    two_equal: ['1', '1'],
+    two_left_sidebar: ['1', '2'],
+    two_right_sidebar: ['2', '1'],
+    three_equal: ['1', '1', '1'],
+    three_with_sidebars: ['1', '2', '1'],
+  };
+
+  return columnsByType[layoutType] || [];
+}
+
+function normaliseLayoutColumnWidth(value) {
+  const source = String(value || '').trim().replace(/%$/, '');
+  if (!/^\d+(?:\.\d+)?$/.test(source)) return '';
+
+  const width = Number(source);
+  if (!Number.isFinite(width) || width <= 0 || width > 100) return '';
+  return String(width);
+}
+
+function layoutColumnWidths(renderedCells) {
+  const widths = [];
+  const cellPattern = /<div\b[^>]*data-dh-layout-cell=["']true["'][^>]*>/gi;
+  let match = cellPattern.exec(renderedCells);
+
+  while (match) {
+    widths.push(
+      normaliseLayoutColumnWidth(
+        extractAttr(match[0], ['data-dh-layout-width'])
+      )
+    );
+    match = cellPattern.exec(renderedCells);
+  }
+
+  return widths.length && widths.every(Boolean) ? widths : [];
+}
+
+function expandConfluenceLayouts(html, renderCellBody) {
+  return String(html || '')
+    .replace(
+      /<ac:layout-cell\b([^>]*)>([\s\S]*?)<\/ac:layout-cell>/gi,
+      (_match, attributes, body) => {
+        const width = normaliseLayoutColumnWidth(
+          extractAttr(attributes, ['data-width', 'ac:width', 'width'])
+        );
+        const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
+        return `<div data-dh-layout-cell="true"${widthAttr}>${renderCellBody(body)}</div>`;
+      }
+    )
+    .replace(
+      /<ac:layout-section\b([^>]*)>([\s\S]*?)<\/ac:layout-section>/gi,
+      (_match, attributes, body) => {
+        const layoutType = normaliseLayoutType(
+          extractAttr(attributes, ['ac:type', 'type', 'data-layout', 'layout'])
+        );
+        // Confluence can retain stale data-width values on predefined sidebar
+        // layouts. Its native renderer follows the semantic layout type in that
+        // case, so only equal/custom layouts should allow widths to override it.
+        const customWidths = layoutTypeUsesFixedSidebarRatio(layoutType)
+          ? []
+          : layoutColumnWidths(body);
+        const columnWeights = customWidths.length
+          ? customWidths
+          : layoutTypeColumnWeights(layoutType);
+        const customWidthAttr = customWidths.length
+          ? ' data-dh-layout-custom-widths="true"'
+          : '';
+        const gridStyle = columnWeights.length
+          ? styleAttr([
+              `grid-template-columns: ${columnWeights
+                .map((width) => `minmax(0, ${width}fr)`)
+                .join(' ')}`,
+            ])
+          : '';
+
+        return [
+          `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
+          customWidthAttr,
+          gridStyle,
+          '>',
+          body,
+          '</div>',
+        ].join('');
+      }
+    )
+    .replace(/<ac:layout(?=[\s>])[^>]*>/gi, '<div data-dh-node-type="layout">')
+    .replace(/<\/ac:layout>/gi, '</div>');
+}
+
+function storageOpeningTag(node) {
+  const match = /^<[^>]+>/.exec(getNodeOuterHtml(node));
+  return match ? match[0] : '';
+}
+
+function layoutWrapperTag(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return '';
+  const tag = node.tagName.toLowerCase();
+  return /^ac:(layout|layout-section|layout-cell)$/.test(tag) ? tag : '';
+}
+
+function layoutSkeletonForNode(node) {
+  const tag = layoutWrapperTag(node);
+  if (!tag) return '';
+
+  const attrs = Array.from(node.attributes || [])
+    .map((attr) => `${attr.name.toLowerCase()}=${normaliseSignatureText(attr.value)}`)
+    .sort()
+    .join('|');
+  const children = Array.from(node.children || [])
+    .map(layoutSkeletonForNode)
+    .filter(Boolean)
+    .join('');
+
+  return `<${tag}[${attrs}]>${children}</${tag}>`;
+}
+
+function layoutStructureSignature(html) {
+  const parserSafeHtml = normaliseSelfClosingTimeTagsForParsing(html || '');
+  const doc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
+  return Array.from(doc.body.children)
+    .filter((node) => layoutWrapperTag(node) === 'ac:layout')
+    .map(layoutSkeletonForNode)
+    .join('');
+}
+
+function renderedLayoutBoundaryStart(node) {
+  const tag = layoutWrapperTag(node);
+  const openingTag = storageOpeningTag(node);
+
+  if (tag === 'ac:layout') {
+    return '<div data-dh-node-type="layout">';
+  }
+
+  if (tag === 'ac:layout-cell') {
+    const width = normaliseLayoutColumnWidth(
+      extractAttr(openingTag, ['data-width', 'ac:width', 'width'])
+    );
+    const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
+    return `<div data-dh-layout-cell="true"${widthAttr}>`;
+  }
+
+  if (tag === 'ac:layout-section') {
+    const layoutType = normaliseLayoutType(
+      extractAttr(openingTag, ['ac:type', 'type', 'data-layout', 'layout'])
+    );
+    const cells = Array.from(node.children || []).filter(
+      (child) => layoutWrapperTag(child) === 'ac:layout-cell'
+    );
+    const rawWidths = cells.map((cell) =>
+      normaliseLayoutColumnWidth(
+        extractAttr(storageOpeningTag(cell), ['data-width', 'ac:width', 'width'])
+      )
+    );
+    const customWidths =
+      !layoutTypeUsesFixedSidebarRatio(layoutType) &&
+      rawWidths.length &&
+      rawWidths.every(Boolean)
+        ? rawWidths
+        : [];
+    const columnWeights = customWidths.length
+      ? customWidths
+      : layoutTypeColumnWeights(layoutType);
+    const customWidthAttr = customWidths.length
+      ? ' data-dh-layout-custom-widths="true"'
+      : '';
+    const gridStyle = columnWeights.length
+      ? styleAttr([
+          `grid-template-columns: ${columnWeights
+            .map((width) => `minmax(0, ${width}fr)`)
+            .join(' ')}`,
+        ])
+      : '';
+
+    return [
+      `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
+      customWidthAttr,
+      gridStyle,
+      '>',
+    ].join('');
+  }
+
+  return '';
+}
+
+function createLayoutBoundaryBlock(path, edge, wrapperTag, storageHtml, fullRenderedHtml) {
+  return {
+    key: `layout-boundary:${path}`,
+    tag: 'layout_boundary',
+    nodeType: 'layout_boundary',
+    text: '',
+    html: storageHtml,
+    renderedHtml: '<!-- dynamic-history-layout-boundary -->',
+    fullRenderedHtml,
+    isStructuralBoundary: true,
+    layoutBoundaryEdge: edge,
+    layoutWrapperTag: wrapperTag,
+  };
+}
+
+export function prepareConfluenceHtml(
+  html,
+  baseUrl,
+  attachmentsByFilename = {},
+  usersByAccountId = {},
+  options = {}
+) {
   if (!html) return '';
+
+  // Layouts remain one atomic recovery block, but each cell is rendered in
+  // isolation. This prevents broad storage-macro patterns from matching across
+  // cell boundaries and swallowing otherwise valid content in large layouts.
+  const sourceHtml = options.skipLayouts
+    ? html
+    : expandConfluenceLayouts(html, (cellBody) =>
+        prepareConfluenceHtml(
+          cellBody,
+          baseUrl,
+          attachmentsByFilename,
+          usersByAccountId,
+          { skipLayouts: true }
+        )
+      );
 
   // Convert Confluence-only storage constructs into ordinary, sanitized HTML.
   // This is intentionally a renderer-only layer: the original storage fragments
@@ -2099,9 +2446,17 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
       expandUnsupportedStorageNodes(
         expandKnownStructuredMacros(
           expandConfluenceTaskLists(
-            expandAdfNodes(expandConfluenceLinks(expandConfluenceCodeMacros(html), baseUrl))
+            expandAdfNodes(
+              expandConfluenceLinks(
+                expandConfluenceCodeMacros(sourceHtml),
+                baseUrl,
+                usersByAccountId
+              ),
+              usersByAccountId
+            )
           )
-        )
+        ),
+        usersByAccountId
       )
     )
   )
@@ -2765,7 +3120,12 @@ function isRawTransparentContainer(node) {
   const tag = node.tagName.toLowerCase();
 
   if (/^(p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|hr)$/i.test(tag)) return false;
-  if (/^ac:(layout|layout-section|layout-cell)$/i.test(tag)) return true;
+  // A complete Confluence layout is one recovery unit. Splitting its cells into
+  // independent blocks loses the section/cell wrappers when draft HTML is
+  // reconstructed. Nested section and cell nodes remain transparent only when
+  // encountered without their expected root layout wrapper.
+  if (/^ac:layout$/i.test(tag)) return false;
+  if (/^ac:(layout-section|layout-cell)$/i.test(tag)) return true;
   if (/^(ac|ri):/i.test(tag)) return false;
 
   return hasBlockElementChildren(node);
@@ -2889,22 +3249,124 @@ function extractComparableBlocksFromPreparedNode(node, rawHtml) {
   ];
 }
 
-function extractDiffBlocks(html, baseUrl, attachmentsByFilename) {
+function extractPreparedBlocksFromRawNode(
+  rawNode,
+  baseUrl,
+  attachmentsByFilename,
+  usersByAccountId,
+  keyPrefix = ''
+) {
+  const rawHtml = getNodeOuterHtml(rawNode);
+  const prepared = prepareConfluenceHtml(
+    rawHtml,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId
+  );
+  const preparedDoc = new DOMParser().parseFromString(prepared, 'text/html');
+
+  return Array.from(preparedDoc.body.childNodes)
+    .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
+    .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml))
+    .map((block) => ({
+      ...block,
+      key: keyPrefix ? `${keyPrefix}:${block.key}` : block.key,
+      layoutPath: keyPrefix || '',
+    }));
+}
+
+function extractLayoutDiffBlocks(
+  layoutNode,
+  baseUrl,
+  attachmentsByFilename,
+  usersByAccountId,
+  layoutIndex
+) {
+  function walkWrapper(node, path) {
+    const tag = layoutWrapperTag(node);
+    if (!tag) return [];
+
+    const blocks = [
+      createLayoutBoundaryBlock(
+        `${path}:start`,
+        'start',
+        tag,
+        storageOpeningTag(node),
+        renderedLayoutBoundaryStart(node)
+      ),
+    ];
+
+    let wrapperIndex = 0;
+    Array.from(node.childNodes || []).forEach((child) => {
+      const childTag = layoutWrapperTag(child);
+      if (childTag) {
+        blocks.push(...walkWrapper(child, `${path}:${childTag}:${wrapperIndex}`));
+        wrapperIndex++;
+        return;
+      }
+
+      if (tag !== 'ac:layout-cell') return;
+
+      const rawNodes = collectRawBlockNodes(child);
+      rawNodes.forEach((rawNode) => {
+        blocks.push(
+          ...extractPreparedBlocksFromRawNode(
+            rawNode,
+            baseUrl,
+            attachmentsByFilename,
+            usersByAccountId,
+            path
+          )
+        );
+      });
+    });
+
+    blocks.push(
+      createLayoutBoundaryBlock(`${path}:end`, 'end', tag, `</${tag}>`, '</div>')
+    );
+    return blocks;
+  }
+
+  return walkWrapper(layoutNode, `layout:${layoutIndex}`);
+}
+
+function extractDiffBlocks(
+  html,
+  baseUrl,
+  attachmentsByFilename,
+  usersByAccountId = {},
+  options = {}
+) {
   const parserSafeHtml = normaliseSelfClosingTimeTagsForParsing(html || '');
   const rawDoc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
-  const rawBlocks = Array.from(rawDoc.body.childNodes)
+  let layoutIndex = 0;
+
+  return Array.from(rawDoc.body.childNodes)
     .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-    .flatMap(collectRawBlockNodes);
+    .flatMap((node) => {
+      if (
+        options.splitCompatibleLayouts &&
+        layoutWrapperTag(node) === 'ac:layout'
+      ) {
+        const blocks = extractLayoutDiffBlocks(
+          node,
+          baseUrl,
+          attachmentsByFilename,
+          usersByAccountId,
+          layoutIndex
+        );
+        layoutIndex++;
+        return blocks;
+      }
 
-  return rawBlocks
-    .flatMap((rawNode) => {
-      const rawHtml = getNodeOuterHtml(rawNode);
-      const prepared = prepareConfluenceHtml(rawHtml, baseUrl, attachmentsByFilename);
-      const preparedDoc = new DOMParser().parseFromString(prepared, 'text/html');
-
-      return Array.from(preparedDoc.body.childNodes)
-        .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-        .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml));
+      return collectRawBlockNodes(node).flatMap((rawNode) =>
+        extractPreparedBlocksFromRawNode(
+          rawNode,
+          baseUrl,
+          attachmentsByFilename,
+          usersByAccountId
+        )
+      );
     })
     .filter((block) => block.html);
 }
@@ -2923,6 +3385,10 @@ function createDiffSummary(overrides = {}) {
 }
 
 function renderDiffBlock(block) {
+  if (block.isStructuralBoundary) {
+    return block.fullRenderedHtml || '';
+  }
+
   if (block.type === 'same') return block.renderedHtml || block.html;
 
   const html =
@@ -2947,6 +3413,11 @@ function makeSameBlock(block) {
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    fullRenderedHtml: block.fullRenderedHtml,
+    isStructuralBoundary: block.isStructuralBoundary,
+    layoutPath: block.layoutPath,
+    layoutBoundaryEdge: block.layoutBoundaryEdge,
+    layoutWrapperTag: block.layoutWrapperTag,
   };
 }
 
@@ -2961,6 +3432,11 @@ function makeAddedBlock(block) {
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    fullRenderedHtml: block.fullRenderedHtml,
+    isStructuralBoundary: block.isStructuralBoundary,
+    layoutPath: block.layoutPath,
+    layoutBoundaryEdge: block.layoutBoundaryEdge,
+    layoutWrapperTag: block.layoutWrapperTag,
     added: 1,
     removed: 0,
   };
@@ -2977,6 +3453,11 @@ function makeRemovedBlock(block) {
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    fullRenderedHtml: block.fullRenderedHtml,
+    isStructuralBoundary: block.isStructuralBoundary,
+    layoutPath: block.layoutPath,
+    layoutBoundaryEdge: block.layoutBoundaryEdge,
+    layoutWrapperTag: block.layoutWrapperTag,
     added: 0,
     removed: 1,
   };
@@ -2990,7 +3471,7 @@ function buildDiffResult(blocks, summaryOverrides = {}) {
   // future component-based rendering. Keeping both outputs avoids a risky UI
   // rewrite while making the diff result easier for the frontend to consume.
   blocks.forEach((block) => {
-    if (block.type === 'same') summary.unchangedBlocks++;
+    if (block.type === 'same' && !block.isStructuralBoundary) summary.unchangedBlocks++;
     if (block.type === 'added') summary.addedBlocks++;
     if (block.type === 'removed') summary.removedBlocks++;
     if (block.type === 'modified') summary.modifiedBlocks++;
@@ -3735,9 +4216,32 @@ function decorateTableReplacementBlocks(blocks) {
   return decorated;
 }
 
-export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename = {}) {
-  const oldBlocks = extractDiffBlocks(oldHtml, baseUrl, attachmentsByFilename);
-  const currentBlocks = extractDiffBlocks(currentHtml, baseUrl, attachmentsByFilename);
+export function buildRichTextDiffHtml(
+  oldHtml,
+  currentHtml,
+  baseUrl,
+  attachmentsByFilename = {},
+  usersByAccountId = {}
+) {
+  const oldLayoutStructure = layoutStructureSignature(oldHtml);
+  const currentLayoutStructure = layoutStructureSignature(currentHtml);
+  const splitCompatibleLayouts = Boolean(
+    oldLayoutStructure && oldLayoutStructure === currentLayoutStructure
+  );
+  const oldBlocks = extractDiffBlocks(
+    oldHtml,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId,
+    { splitCompatibleLayouts }
+  );
+  const currentBlocks = extractDiffBlocks(
+    currentHtml,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId,
+    { splitCompatibleLayouts }
+  );
   const oldCount = oldBlocks.length;
   const currentCount = currentBlocks.length;
   const maxCells = 120000;

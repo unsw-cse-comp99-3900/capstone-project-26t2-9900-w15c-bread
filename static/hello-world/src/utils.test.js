@@ -1,4 +1,8 @@
-import { buildRichTextDiffHtml, prepareConfluenceHtml } from './utils';
+import {
+  buildRichTextDiffHtml,
+  extractMentionAccountIds,
+  prepareConfluenceHtml,
+} from './utils';
 
 function visiblePreviewText(html) {
   const doc = new DOMParser().parseFromString(html || '', 'text/html');
@@ -174,37 +178,257 @@ describe('type-specific diff safety', () => {
     ]);
   });
 
-  test('confluence layout containers do not become one giant diff block', () => {
+  test('compatible confluence layouts diff semantic children and preserve recovery wrappers', () => {
     const oldHtml = [
-      '<ac:layout><ac:layout-section><ac:layout-cell>',
+      '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell>',
       '<p>Intro</p>',
       '<table><tbody><tr><td>old</td></tr></tbody></table>',
-      '<p>Outro</p>',
-      '</ac:layout-cell></ac:layout-section></ac:layout>',
+      '</ac:layout-cell><ac:layout-cell><p>Outro</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
     ].join('');
     const newHtml = [
-      '<ac:layout><ac:layout-section><ac:layout-cell>',
+      '<ac:layout><ac:layout-section ac:type="two_equal"><ac:layout-cell>',
       '<p>Intro</p>',
       '<table><tbody><tr><td>new</td></tr></tbody></table>',
-      '<p>Outro</p>',
-      '</ac:layout-cell></ac:layout-section></ac:layout>',
+      '</ac:layout-cell><ac:layout-cell><p>Outro</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
     ].join('');
     const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+    const reconstructedCurrent = result.blocks
+      .map((block) => {
+        if (block.type === 'removed') return '';
+        return block.newHtml || block.html || '';
+      })
+      .join('');
 
-    expect(result.blocks.map((block) => block.nodeType)).toEqual([
+    expect(contentBlocks.map((block) => block.nodeType)).toEqual([
       'paragraph',
       'table',
       'table',
       'paragraph',
     ]);
-    expect(result.blocks[1]).toMatchObject({
-      type: 'removed',
-      nodeType: 'table',
+    expect(contentBlocks.map((block) => block.type)).toEqual([
+      'same',
+      'removed',
+      'added',
+      'same',
+    ]);
+    expect(reconstructedCurrent).toContain('<ac:layout>');
+    expect(reconstructedCurrent).toContain('<ac:layout-section ac:type="two_equal">');
+    expect(reconstructedCurrent).toContain('<td>new</td>');
+    expect(reconstructedCurrent).not.toContain('<td>old</td>');
+    expect(result.html).toContain('data-dh-node-type="layout"');
+    expect(result.html).toContain('data-dh-layout-type="two_equal"');
+  });
+
+  test('unchanged confluence layouts preserve storage wrappers', () => {
+    const layout = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(layout, layout, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+    const reconstructed = result.blocks.map((block) => block.html || '').join('');
+
+    expect(contentBlocks).toMatchObject([
+      { type: 'same', nodeType: 'paragraph', text: 'Left' },
+      { type: 'same', nodeType: 'paragraph', text: 'Right' },
+    ]);
+    expect(reconstructed).toContain('<ac:layout>');
+    expect(reconstructed).toContain('</ac:layout>');
+    expect(result.html).toContain('data-dh-layout-type="two_equal"');
+  });
+
+  test('layout cells render complex content independently without swallowing later cells', () => {
+    const layout = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell>',
+      '<ac:image><ri:attachment ri:filename="first.png" /></ac:image>',
+      '<p>Text after the first image</p>',
+      '</ac:layout-cell>',
+      '<ac:layout-cell>',
+      '<p>Second cell heading</p>',
+      '<ac:image><ri:url ri:value="https://example.com/second.png" /></ac:image>',
+      '</ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(layout, layout, '', {
+      'first.png': 'https://example.com/first.png',
     });
-    expect(result.blocks[2]).toMatchObject({
-      type: 'added',
-      nodeType: 'table',
+
+    expect(result.html).toContain('https://example.com/first.png');
+    expect(result.html).toContain('Text after the first image');
+    expect(result.html).toContain('Second cell heading');
+    expect(result.html).toContain('https://example.com/second.png');
+    expect(result.html).toContain('data-dh-layout-type="two_equal"');
+  });
+
+  test('three contextual tables select only the changed middle table', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>',
+      '<table><tbody><tr><td>stable first</td></tr></tbody></table>',
+      '<table><tbody><tr><td>old middle</td></tr></tbody></table>',
+      '<table><tbody><tr><td>stable third</td></tr></tbody></table>',
+      '</ac:layout-cell></ac:layout-section></ac:layout>',
+    ].join('');
+    const newHtml = oldHtml.replace('old middle', 'new middle');
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+
+    expect(contentBlocks.map((block) => block.type)).toEqual([
+      'same',
+      'removed',
+      'added',
+      'same',
+    ]);
+    expect(contentBlocks.map((block) => block.nodeType)).toEqual([
+      'table',
+      'table',
+      'table',
+      'table',
+    ]);
+    expect(contentBlocks[0].text).toContain('stable first');
+    expect(contentBlocks[1].oldHtml).toContain('old middle');
+    expect(contentBlocks[2].newHtml).toContain('new middle');
+    expect(contentBlocks[3].text).toContain('stable third');
+  });
+
+  test('layout structure changes fall back to complete layout recovery blocks', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const newHtml = oldHtml.replace('two_equal', 'two_left_sidebar');
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks.map((block) => block.nodeType)).toEqual(['layout', 'layout']);
+    expect(result.blocks.some((block) => block.isStructuralBoundary)).toBe(false);
+    expect(result.blocks[0].oldHtml).toContain('ac:type="two_equal"');
+    expect(result.blocks[1].newHtml).toContain('ac:type="two_left_sidebar"');
+  });
+
+  test('layout case 3 renders a narrow left sidebar and wide right content column', () => {
+    const layout = [
+      '<ac:layout><ac:layout-section ac:type="twoLeftSidebar" ac:breakout-mode="full-width">',
+      '<ac:layout-cell data-width="50"><p>Left sidebar</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>Main content</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const rendered = prepareConfluenceHtml(layout, '');
+    const css = require('fs').readFileSync(require('path').join(__dirname, 'styles.css'), 'utf8');
+
+    expect(rendered).toContain('data-dh-layout-type="two_left_sidebar"');
+    expect(rendered).toContain('Left sidebar');
+    expect(rendered).toContain('Main content');
+    expect(rendered).not.toContain('data-dh-layout-custom-widths="true"');
+    expect(rendered).toContain(
+      'grid-template-columns: minmax(0, 1fr) minmax(0, 2fr)'
+    );
+    expect(css).toMatch(
+      /\[data-dh-layout-type='two_left_sidebar'\]\s*{[^}]*minmax\(0, 1fr\) minmax\(0, 2fr\)/
+    );
+  });
+
+  test('layout case 4 renders a wide left content column and narrow right sidebar', () => {
+    const layout = [
+      '<ac:layout><ac:layout-section ac:type="two-right-sidebar" ac:breakout-mode="full-width">',
+      '<ac:layout-cell data-width="50"><p>Main content</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>Right sidebar</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const rendered = prepareConfluenceHtml(layout, '');
+    const css = require('fs').readFileSync(require('path').join(__dirname, 'styles.css'), 'utf8');
+
+    expect(rendered).toContain('data-dh-layout-type="two_right_sidebar"');
+    expect(rendered).not.toContain('data-dh-layout-custom-widths="true"');
+    expect(rendered).toContain(
+      'grid-template-columns: minmax(0, 2fr) minmax(0, 1fr)'
+    );
+    expect(css).toMatch(
+      /\[data-dh-layout-type='two_right_sidebar'\]\s*{[^}]*minmax\(0, 2fr\) minmax\(0, 1fr\)/
+    );
+  });
+
+  test('layout case 5 renders narrow sidebars around a wide middle column', () => {
+    const layout = [
+      '<ac:layout><ac:layout-section ac:type="three-with-sidebars">',
+      '<ac:layout-cell><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell><p>Middle</p></ac:layout-cell>',
+      '<ac:layout-cell><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const rendered = prepareConfluenceHtml(layout, '');
+    const css = require('fs').readFileSync(require('path').join(__dirname, 'styles.css'), 'utf8');
+
+    expect(rendered).toContain('data-dh-layout-type="three_with_sidebars"');
+    expect(css).toMatch(
+      /\[data-dh-layout-type='three_with_sidebars'\]\s*{[^}]*minmax\(0, 1fr\) minmax\(0, 2fr\) minmax\(0, 1fr\)/
+    );
+  });
+
+  test('layout case 6 preserves custom 25 50 25 column widths', () => {
+    const layout = [
+      '<ac:layout><ac:layout-section ac:type="three-equal">',
+      '<ac:layout-cell data-width="25"><p>25 percent</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50%"><p>50 percent</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="25"><p>25 percent</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const rendered = prepareConfluenceHtml(layout, '');
+
+    expect(rendered).toContain('data-dh-layout-custom-widths="true"');
+    expect(rendered).toContain('data-dh-layout-width="25"');
+    expect(rendered).toContain('data-dh-layout-width="50"');
+    expect(rendered).toContain(
+      'grid-template-columns: minmax(0, 25fr) minmax(0, 50fr) minmax(0, 25fr)'
+    );
+  });
+
+  test('extracts and resolves storage and ADF mention account ids', () => {
+    const storageMention =
+      '<p>Owner <ac:link><ri:user ri:account-id="account-1" /></ac:link></p>';
+    const adfMention = [
+      '<p>Reviewer ',
+      '<ac:adf-node type="mention">',
+      '<ac:adf-attribute key="id">account-2</ac:adf-attribute>',
+      '</ac:adf-node></p>',
+    ].join('');
+    const source = `${storageMention}${adfMention}${storageMention}`;
+
+    expect(extractMentionAccountIds(source)).toEqual(['account-1', 'account-2']);
+
+    const rendered = prepareConfluenceHtml(source, '', {}, {
+      'account-1': 'Ada Lovelace',
+      'account-2': 'Grace Hopper',
     });
+
+    expect(rendered).toContain('@Ada Lovelace');
+    expect(rendered).toContain('@Grace Hopper');
+    expect(rendered).toContain('data-dh-mention-account-id="account-1"');
+    expect(rendered).not.toContain('[Mention]');
+  });
+
+  test('mention diff preserves original storage while comparing resolved identities', () => {
+    const oldHtml =
+      '<p>Owner <ac:link><ri:user ri:account-id="account-1" /></ac:link></p>';
+    const newHtml =
+      '<p>Owner <ac:link><ri:user ri:account-id="account-2" /></ac:link></p>';
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {}, {
+      'account-1': 'Ada Lovelace',
+      'account-2': 'Grace Hopper',
+    });
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(result.blocks[0].oldHtml).toContain('ri:account-id="account-1"');
+    expect(result.blocks[1].newHtml).toContain('ri:account-id="account-2"');
+    expect(result.blocks[0].renderedHtml).toContain('@Ada Lovelace');
+    expect(result.blocks[1].renderedHtml).toContain('@Grace Hopper');
   });
 
   test('table diffs render prepared rich table content instead of raw date storage', () => {

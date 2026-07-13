@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   buildRichTextDiffHtml,
   countWords,
+  extractMentionAccountIds,
   formatDateTime,
   prepareConfluenceHtml,
   storageToPlainText,
@@ -84,6 +85,51 @@ function buildChangeRunRows(items, blockChoiceKeys) {
     .map((group) => createChangeDisplayRow(group, blockChoiceKeys));
 }
 
+function nestStructuralDisplayRows(rows) {
+  const root = [];
+  const stack = [{ children: root, wrapperTag: '' }];
+
+  rows.forEach((row) => {
+    const block = row.type === 'same' ? row.block : null;
+    if (!block || !block.isStructuralBoundary) {
+      stack[stack.length - 1].children.push(row);
+      return;
+    }
+
+    if (block.layoutBoundaryEdge === 'start') {
+      const wrapper = {
+        type: 'layout_structure',
+        key: row.key,
+        block,
+        wrapperTag: block.layoutWrapperTag,
+        children: [],
+      };
+      stack[stack.length - 1].children.push(wrapper);
+      stack.push(wrapper);
+      return;
+    }
+
+    if (
+      block.layoutBoundaryEdge === 'end' &&
+      stack.length > 1 &&
+      stack[stack.length - 1].wrapperTag === block.layoutWrapperTag
+    ) {
+      stack.pop();
+    }
+  });
+
+  return root;
+}
+
+function collectSelectableDisplayRows(rows) {
+  return rows.flatMap((row) => {
+    if (row.type === 'layout_structure') {
+      return collectSelectableDisplayRows(row.children || []);
+    }
+    return row.type === 'change' ? [row] : [];
+  });
+}
+
 function buildDiffDisplayRows(blocks) {
   const rows = [];
   const blockChoiceKeys = new Map();
@@ -116,9 +162,11 @@ function buildDiffDisplayRows(blocks) {
     index = runIndex - 1;
   }
 
+  const nestedRows = nestStructuralDisplayRows(rows);
+
   return {
-    rows,
-    selectableRows: rows.filter((row) => row.type === 'change'),
+    rows: nestedRows,
+    selectableRows: collectSelectableDisplayRows(nestedRows),
     blockChoiceKeys,
   };
 }
@@ -159,6 +207,34 @@ function getBlockPreviewHtml(block, selected) {
   return block.renderedHtml || block.html || '';
 }
 
+function getBlockRenderedPreviewHtml(block, selected) {
+  if (!block) return '';
+
+  if (block.isStructuralBoundary) {
+    return block.fullRenderedHtml || '';
+  }
+
+  if (block.type === 'same') {
+    return block.renderedHtml || block.html || '';
+  }
+
+  if (block.type === 'added') {
+    return selected ? block.renderedHtml || fallbackTextHtml(block.text) : '';
+  }
+
+  if (block.type === 'removed') {
+    return selected ? '' : block.renderedHtml || fallbackTextHtml(block.text);
+  }
+
+  if (block.type === 'modified') {
+    return selected
+      ? block.newRenderedHtml || block.renderedHtml || fallbackTextHtml(block.newText)
+      : block.oldRenderedHtml || fallbackTextHtml(block.oldText);
+  }
+
+  return block.renderedHtml || fallbackTextHtml(block.text);
+}
+
 function buildDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()) {
   return (blocks || [])
     .map((block, index) => {
@@ -167,6 +243,16 @@ function buildDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()
       const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
       const choice = blockChoices.get(choiceKey);
       return getBlockPreviewHtml(block, choice !== 'old');
+    })
+    .join('');
+}
+
+function buildRenderedDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()) {
+  return (blocks || [])
+    .map((block, index) => {
+      const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
+      const choice = blockChoices.get(choiceKey);
+      return getBlockRenderedPreviewHtml(block, choice !== 'old');
     })
     .join('');
 }
@@ -217,6 +303,177 @@ function getGitHubStyleDiffParts(blockOrBlocks) {
       html: block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.newText),
     },
   ];
+}
+
+function getLayoutWrapperProps(block) {
+  const doc = new DOMParser().parseFromString(
+    `${block.fullRenderedHtml || '<div>'}</div>`,
+    'text/html'
+  );
+  const element = doc.body.firstElementChild;
+  if (!element) return {};
+
+  const props = {};
+  [
+    'data-dh-node-type',
+    'data-dh-layout-section',
+    'data-dh-layout-type',
+    'data-dh-layout-custom-widths',
+    'data-dh-layout-cell',
+    'data-dh-layout-width',
+  ].forEach((name) => {
+    const value = element.getAttribute(name);
+    if (value !== null) props[name] = value;
+  });
+
+  const gridTemplateColumns = element.style && element.style.gridTemplateColumns;
+  if (gridTemplateColumns) {
+    props.style = { gridTemplateColumns };
+  }
+
+  return props;
+}
+
+function DiffDisplayRows({
+  rows,
+  blockChoices,
+  activeBlockKey,
+  setActiveBlockKey,
+  onChoose,
+  onUndo,
+}) {
+  return (rows || []).map((row) => {
+    if (row.type === 'layout_structure') {
+      return (
+        <div key={row.key} {...getLayoutWrapperProps(row.block)}>
+          <DiffDisplayRows
+            rows={row.children}
+            blockChoices={blockChoices}
+            activeBlockKey={activeBlockKey}
+            setActiveBlockKey={setActiveBlockKey}
+            onChoose={onChoose}
+            onUndo={onUndo}
+          />
+        </div>
+      );
+    }
+
+    const key = row.key;
+    if (row.type === 'same') {
+      return (
+        <div
+          className="dh-rich-diff-unchanged"
+          key={key}
+          dangerouslySetInnerHTML={{ __html: getDiffBlockHtml(row.block) }}
+        />
+      );
+    }
+
+    const choice = blockChoices.get(key);
+    if (choice) {
+      const resolvedHtml = row.blocks
+        .map(({ block }) =>
+          getBlockRenderedPreviewHtml(block, choice === 'current')
+        )
+        .join('');
+
+      return (
+        <div
+          className={`dh-resolved-change-block dh-resolved-change-block--${choice}`}
+          key={key}
+        >
+          <div className="dh-resolved-change-block__status">
+            <span>
+              {choice === 'current'
+                ? 'Current version selected'
+                : 'Old version restored'}
+            </span>
+            <button
+              aria-label="Undo this content choice"
+              className="dh-resolved-change-block__undo"
+              onClick={() => onUndo(key)}
+              title="Undo this content choice"
+              type="button"
+            >
+              Undo
+            </button>
+          </div>
+          {resolvedHtml ? (
+            <div
+              className="dh-resolved-change-block__content"
+              dangerouslySetInnerHTML={{ __html: resolvedHtml }}
+            />
+          ) : (
+            <div className="dh-resolved-change-block__empty">
+              This content is not present in the selected version.
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const isActive = activeBlockKey === key;
+    const diffParts = getGitHubStyleDiffParts(row.blocks);
+
+    return (
+      <div
+        aria-expanded={isActive}
+        className={`dh-choice-diff-module${
+          isActive ? ' dh-choice-diff-module--active' : ''
+        }`}
+        key={key}
+        onClick={() =>
+          setActiveBlockKey((previous) => (previous === key ? null : key))
+        }
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setActiveBlockKey((previous) => (previous === key ? null : key));
+          }
+        }}
+        role="button"
+        tabIndex={0}
+      >
+        {diffParts.map((part, partIndex) => (
+          <div
+            className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
+            key={`${key}-${part.type}-${partIndex}`}
+          >
+            <span className="dh-github-diff-part__marker">
+              {part.type === 'added' ? '+' : '-'}
+            </span>
+            <div
+              className="dh-github-diff-part__content"
+              dangerouslySetInnerHTML={{ __html: part.html }}
+            />
+          </div>
+        ))}
+
+        {isActive ? (
+          <div
+            className="dh-choice-diff-module__actions"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="dh-choice-action dh-choice-action--current"
+              onClick={() => onChoose(key, 'current')}
+              type="button"
+            >
+              Keep current change
+            </button>
+            <button
+              className="dh-choice-action"
+              onClick={() => onChoose(key, 'old')}
+              type="button"
+            >
+              Restore old content
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  });
 }
 
 /**
@@ -277,11 +534,22 @@ function ComparisonPanelContent({
     error: '',
     draft: null,
   });
+  const [mentionUsersByAccountId, setMentionUsersByAccountId] = useState({});
 
   const currentBodyValue =
     currentVersion && currentVersion.body ? currentVersion.body.value : '';
   const selectedBodyValue =
     selectedVersion && selectedVersion.body ? selectedVersion.body.value : '';
+  const mentionAccountIds = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...extractMentionAccountIds(selectedBodyValue),
+          ...extractMentionAccountIds(currentBodyValue),
+        ])
+      ).slice(0, 100),
+    [currentBodyValue, selectedBodyValue]
+  );
   const selectedPlainText = storageToPlainText(selectedBodyValue);
   const selectedWordCount = countWords(selectedPlainText);
   const hasComparisonBase = Boolean(currentVersion && selectedVersion);
@@ -303,6 +571,53 @@ function ComparisonPanelContent({
     removed: 0,
     limited: false,
   }), []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!mentionAccountIds.length) {
+      setMentionUsersByAccountId({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function resolveMentionUsers() {
+      try {
+        const { requestConfluence } = await import('@forge/bridge');
+        const entries = await Promise.all(
+          mentionAccountIds.map(async (accountId) => {
+            try {
+              const response = await requestConfluence(
+                `/wiki/rest/api/user?accountId=${encodeURIComponent(accountId)}`,
+                { headers: { Accept: 'application/json' } }
+              );
+              if (!response.ok) return null;
+
+              const user = await response.json();
+              return user.displayName ? [accountId, user.displayName] : null;
+            } catch (error) {
+              return null;
+            }
+          })
+        );
+
+        if (!cancelled) {
+          setMentionUsersByAccountId(Object.fromEntries(entries.filter(Boolean)));
+        }
+      } catch (error) {
+        // Local preview has no Forge bridge. The diff remains usable and shows
+        // a safe mention placeholder while preserving the original storage.
+        if (!cancelled) setMentionUsersByAccountId({});
+      }
+    }
+
+    resolveMentionUsers();
+    return () => {
+      cancelled = true;
+    };
+  }, [mentionAccountIds]);
+
   const { richDiff, selectedHtml } = useMemo(() => {
     let nextDiff = emptyDiff;
     let nextHtml = '';
@@ -313,7 +628,8 @@ function ComparisonPanelContent({
           selectedBodyValue,
           currentBodyValue,
           baseUrl,
-          attachmentsByFilename || {}
+          attachmentsByFilename || {},
+          mentionUsersByAccountId
         );
         nextHtml = nextDiff.html;
       } else if (hasComparisonBase && isCurrent) {
@@ -327,14 +643,16 @@ function ComparisonPanelContent({
           currentPreviewBody,
           currentPreviewBody,
           baseUrl,
-          attachmentsByFilename || {}
+          attachmentsByFilename || {},
+          mentionUsersByAccountId
         );
         nextHtml = nextDiff.html;
       } else {
         nextHtml = prepareConfluenceHtml(
           currentBodyValue || selectedBodyValue,
           baseUrl,
-          attachmentsByFilename || {}
+          attachmentsByFilename || {},
+          mentionUsersByAccountId
         );
       }
     } catch (e) {
@@ -359,6 +677,7 @@ function ComparisonPanelContent({
     emptyDiff,
     hasComparisonBase,
     isCurrent,
+    mentionUsersByAccountId,
     selectedBodyValue,
   ]);
 
@@ -410,6 +729,15 @@ function ComparisonPanelContent({
     () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices, diffDisplay.blockChoiceKeys),
     [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
   );
+  const renderedPreviewHtml = useMemo(
+    () =>
+      buildRenderedDraftPreviewHtml(
+        richDiff.blocks || [],
+        blockChoices,
+        diffDisplay.blockChoiceKeys
+      ),
+    [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
+  );
 
   const diffSummary = richDiff.summary || {
     added: richDiff.added || 0,
@@ -428,7 +756,8 @@ function ComparisonPanelContent({
         blockIndices: row.blocks.map(({ index }) => index),
         choice: blockChoices.get(row.key) || 'current',
       })),
-      previewHtml,
+      previewHtml: renderedPreviewHtml,
+      storageHtml: previewHtml,
       createdAt: new Date().toISOString(),
     };
 
@@ -445,7 +774,7 @@ function ComparisonPanelContent({
       const { invoke } = await import('@forge/bridge');
       const createdDraft = await invoke('createDraft', {
         pageId,
-        bodyValue: draftPreview.previewHtml,
+        bodyValue: draftPreview.storageHtml,
       });
 
       if (!createdDraft || !createdDraft.id) {
@@ -541,6 +870,21 @@ function ComparisonPanelContent({
             {showChangeSelection ? (
               <section className="dh-rendered-page-body">
                 {diffDisplay.rows.map((row) => {
+                  if (row.type === 'layout_structure') {
+                    return (
+                      <div key={row.key} {...getLayoutWrapperProps(row.block)}>
+                        <DiffDisplayRows
+                          rows={row.children}
+                          blockChoices={blockChoices}
+                          activeBlockKey={activeBlockKey}
+                          setActiveBlockKey={setActiveBlockKey}
+                          onChoose={handleChooseBlockVersion}
+                          onUndo={handleUndoBlockChoice}
+                        />
+                      </div>
+                    );
+                  }
+
                   const key = row.key;
 
                   if (row.type === 'same') {
@@ -557,7 +901,9 @@ function ComparisonPanelContent({
 
                   if (choice) {
                     const resolvedHtml = row.blocks
-                      .map(({ block }) => getBlockPreviewHtml(block, choice === 'current'))
+                      .map(({ block }) =>
+                        getBlockRenderedPreviewHtml(block, choice === 'current')
+                      )
                       .join('');
 
                     return (
