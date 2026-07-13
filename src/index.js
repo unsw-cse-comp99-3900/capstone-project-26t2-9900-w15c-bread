@@ -200,10 +200,13 @@ resolver.define('getPageVersions', async (req) => {
   const { versions: rawVersions, baseUrl: versionsBaseUrl } = await fetchAllVersions(pageId);
   const { attachments, baseUrl: attachmentsBaseUrl } = await fetchPageAttachments(pageId);
   const baseUrl = versionsBaseUrl || attachmentsBaseUrl;
+  const sortedVersions = [...rawVersions].sort(
+    (left, right) => Number(right.number || 0) - Number(left.number || 0)
+  );
 
   console.log('[getPageVersions] fetched', rawVersions.length, 'versions');
 
-  const authorIds = [...new Set(rawVersions.map((v) => v.authorId).filter(Boolean))];
+  const authorIds = [...new Set(sortedVersions.map((v) => v.authorId).filter(Boolean))];
   const authorMap = await resolveAuthorNames(authorIds);
 
   console.log('[getPageVersions] resolved', Object.keys(authorMap).length, 'author names; returning');
@@ -213,7 +216,23 @@ resolver.define('getPageVersions', async (req) => {
     pageTitle,
     baseUrl,
     attachmentsByFilename: attachments,
+<<<<<<< Updated upstream
     versions: rawVersions.map((v, index) => {
+=======
+<<<<<<< Updated upstream
+    versions: rawVersions.map((v) => ({
+      number: v.number,
+      authorId: v.authorId,
+      authorName: authorMap[v.authorId] || 'Unknown user',
+      createdAt: v.createdAt,
+      message: v.message || '',
+      minorEdit: !!v.minorEdit,
+      title: v.page && v.page.title ? v.page.title : pageTitle,
+      body: extractStorageBody(v),
+    })),
+=======
+    versions: sortedVersions.map((v, index) => {
+>>>>>>> Stashed changes
       const versionBody = extractStorageBody(v);
 
       return {
@@ -227,6 +246,10 @@ resolver.define('getPageVersions', async (req) => {
         body: index === 0 && currentPageBody ? currentPageBody : versionBody,
       };
     }),
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   };
 });
 
@@ -310,6 +333,153 @@ resolver.define('createDraft', async (req) => {
     title: draft.title || draftTitle,
     url: webUiPath && baseUrl ? `${baseUrl}${webUiPath}` : webUiPath,
   };
+});
+
+function getSafeWriteErrorMessage(error) {
+  const message = error && error.message
+    ? String(error.message)
+    : 'Confluence could not write the recovered content.';
+
+  // Resolver errors are returned to the invoking user so a failed update is
+  // visible in the modal instead of looking like a successful no-op. Limit
+  // the message because upstream REST errors can occasionally be very large.
+  return message.slice(0, 1500);
+}
+
+async function writeRecoveredPage(payload) {
+  const pageId = payload && payload.pageId;
+  const bodyValue = payload && payload.bodyValue;
+  const expectedVersionNumber = Number(payload && payload.expectedVersionNumber);
+
+  if (!pageId) {
+    throw new Error('A page id is required to write recovered content.');
+  }
+
+  if (typeof bodyValue !== 'string') {
+    throw new Error('Recovered content must be provided as a string.');
+  }
+
+  if (!bodyValue.trim()) {
+    throw new Error('Recovered content is empty, so the page was not updated.');
+  }
+
+  // Keep unexpectedly large client payloads from consuming the resolver
+  // invocation. Normal Confluence pages are well below this defensive limit.
+  if (bodyValue.length > 2_000_000) {
+    throw new Error('The recovered content is too large to write safely.');
+  }
+
+  // Preserve the pre-merge write-back flow: read the live page immediately
+  // before PUT so Confluence supplies the title, location, and next version.
+  const pageRes = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}?body-format=storage`,
+    { headers: { Accept: 'application/json' } }
+  );
+
+  if (!pageRes.ok) {
+    throw new Error(`Unable to read the current page (${pageRes.status}): ${await pageRes.text()}`);
+  }
+
+  const currentPage = await pageRes.json();
+  const currentVersionNumber =
+    currentPage.version && Number.isInteger(currentPage.version.number)
+      ? currentPage.version.number
+      : null;
+
+  if (!currentVersionNumber) {
+    throw new Error('Unable to determine the current page version.');
+  }
+
+  if (
+    Number.isInteger(expectedVersionNumber) &&
+    expectedVersionNumber !== currentVersionNumber
+  ) {
+    throw new Error(
+      `The page is now v${currentVersionNumber}, but this recovery was prepared from v${expectedVersionNumber}. Reload before writing back to avoid overwriting newer changes.`
+    );
+  }
+
+  const updatePayload = {
+    id: String(currentPage.id || pageId),
+    status: 'current',
+    title: currentPage.title || 'Untitled page',
+    body: {
+      representation: 'storage',
+      value: bodyValue,
+    },
+    version: {
+      number: currentVersionNumber + 1,
+      message: 'Recovered selected content with Dynamic History',
+    },
+  };
+
+  if (currentPage.spaceId) {
+    updatePayload.spaceId = currentPage.spaceId;
+  }
+
+  if (currentPage.parentId) {
+    updatePayload.parentId = currentPage.parentId;
+  }
+
+  console.log(
+    '[writeRecoveredPage] updating page',
+    String(pageId),
+    `v${currentVersionNumber} -> v${currentVersionNumber + 1}`,
+    `storageChars=${bodyValue.length}`
+  );
+
+  const updateRes = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}`,
+    {
+      method: 'PUT',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updatePayload),
+    }
+  );
+
+  if (!updateRes.ok) {
+    throw new Error(`Confluence update API ${updateRes.status}: ${await updateRes.text()}`);
+  }
+
+  const updatedPage = await updateRes.json();
+  const updatedVersionNumber =
+    updatedPage.version && updatedPage.version.number
+      ? updatedPage.version.number
+      : currentVersionNumber + 1;
+  console.log('[writeRecoveredPage] update completed at version', updatedVersionNumber);
+  const baseUrl =
+    (updatedPage._links && updatedPage._links.base) ||
+    (currentPage._links && currentPage._links.base) ||
+    '';
+  const webUiPath =
+    updatedPage._links && updatedPage._links.webui
+      ? updatedPage._links.webui
+      : '';
+
+  return {
+    ok: true,
+    id: updatedPage.id || String(pageId),
+    status: updatedPage.status || 'current',
+    title: updatedPage.title || updatePayload.title,
+    versionNumber: updatedVersionNumber,
+    url: webUiPath && baseUrl ? `${baseUrl}${webUiPath}` : webUiPath,
+  };
+}
+
+resolver.define('writeRecoveredPage', async (req) => {
+  try {
+    return await writeRecoveredPage((req && req.payload) || {});
+  } catch (error) {
+    const message = getSafeWriteErrorMessage(error);
+    console.error('[writeRecoveredPage] failed:', message);
+    return {
+      ok: false,
+      error: message,
+    };
+  }
 });
 
 export const handler = resolver.getDefinitions();

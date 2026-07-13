@@ -38,6 +38,11 @@ describe('buildRichTextDiffHtml replacement grouping', () => {
     expect(result.blocks.map((block) => block.type)).toEqual(['added', 'same']);
   });
 });
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
 
 describe('type-specific diff safety', () => {
   test('paragraph changes are represented as block-level removal and addition', () => {
@@ -162,6 +167,98 @@ describe('type-specific diff safety', () => {
     expect(result.blocks[0].renderedHtml).toContain('&lt;ac:structured-macro');
   });
 
+<<<<<<< Updated upstream
+=======
+  test('unsupported blocks ignore regenerated Confluence IDs and attribute order', () => {
+    const oldHtml = [
+      '<ac:structured-macro ac:name="jira-gadget" ac:macro-id="old-macro-id">',
+      '<ac:adf-attribute key="local-id">old-local-id</ac:adf-attribute>',
+      '<ac:parameter ac:name="url">https://example.atlassian.net/gadget</ac:parameter>',
+      '</ac:structured-macro>',
+    ].join('');
+    const newHtml = [
+      '<ac:structured-macro ac:macro-id="new-macro-id" ac:name="jira-gadget">',
+      '<ac:adf-attribute key="local-id">new-local-id</ac:adf-attribute>',
+      '<ac:parameter ac:name="url">https://example.atlassian.net/gadget</ac:parameter>',
+      '</ac:structured-macro>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['same']);
+    expect(result.summary.addedBlocks).toBe(0);
+    expect(result.summary.removedBlocks).toBe(0);
+    expect(result.blocks[0].html).toContain('new-macro-id');
+  });
+
+  test('unsupported blocks still detect meaningful macro parameter changes', () => {
+    const oldHtml =
+      '<ac:structured-macro ac:name="jira-gadget" ac:macro-id="old-id"><ac:parameter ac:name="url">https://example.atlassian.net/old</ac:parameter></ac:structured-macro>';
+    const newHtml =
+      '<ac:structured-macro ac:macro-id="new-id" ac:name="jira-gadget"><ac:parameter ac:name="url">https://example.atlassian.net/new</ac:parameter></ac:structured-macro>';
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+  });
+
+  test('write-back normalization does not turn an isolated edit into a whole-page diff', () => {
+    const version13 = [
+      '<p>Stable introduction</p>',
+      '<ac:structured-macro ac:name="jira-gadget" ac:macro-id="version-13-id"><ac:parameter ac:name="url">https://example.atlassian.net/gadget</ac:parameter></ac:structured-macro>',
+      '<p>Version 13 wording</p>',
+      '<p local-id="version-13-paragraph-id">Stable conclusion</p>',
+    ].join('');
+    const restoredVersion14 = [
+      '<p>Stable introduction</p>',
+      '<ac:structured-macro ac:macro-id="restored-version-12-id" ac:name="jira-gadget"><ac:parameter ac:name="url">https://example.atlassian.net/gadget</ac:parameter></ac:structured-macro>',
+      '<p>Version 12 wording</p>',
+      '<p local-id="restored-version-12-paragraph-id">Stable conclusion</p>',
+    ].join('');
+    const result = buildRichTextDiffHtml(version13, restoredVersion14, '', {});
+
+    expect(result.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'same',
+      'removed',
+      'added',
+      'same',
+    ]);
+    expect(result.summary.unchangedBlocks).toBe(3);
+    expect(result.summary.removedBlocks).toBe(1);
+    expect(result.summary.addedBlocks).toBe(1);
+  });
+
+  test('self-closing Confluence references do not swallow the remaining page after write-back', () => {
+    const versionBeforeWriteBack = [
+      '<p>Before mention</p>',
+      '<ri:user ri:account-id="account-1"></ri:user>',
+      '<p>After mention</p>',
+      '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Panel body</p></ac:rich-text-body></ac:structured-macro>',
+      '<p>Page ending</p>',
+    ].join('');
+    const versionAfterWriteBack = versionBeforeWriteBack.replace(
+      '<ri:user ri:account-id="account-1"></ri:user>',
+      '<ri:user ri:account-id="account-1" />'
+    );
+    const result = buildRichTextDiffHtml(
+      versionBeforeWriteBack,
+      versionAfterWriteBack,
+      '',
+      {},
+      { 'account-1': 'Example User' }
+    );
+
+    expect(result.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'same',
+      'same',
+      'same',
+      'same',
+    ]);
+    expect(result.summary.addedBlocks).toBe(0);
+    expect(result.summary.removedBlocks).toBe(0);
+  });
+
+>>>>>>> Stashed changes
   test('transparent containers are split into semantic child blocks', () => {
     const result = buildRichTextDiffHtml(
       '<div><p>Before table</p><table><tbody><tr><td>old</td></tr></tbody></table><p>After table</p></div>',
@@ -242,6 +339,32 @@ describe('type-specific diff safety', () => {
     expect(result.html).toContain('data-dh-layout-type="two_equal"');
   });
 
+<<<<<<< Updated upstream
+=======
+  test('layouts ignore regenerated Confluence bookkeeping IDs', () => {
+    const oldHtml = [
+      '<ac:layout ac:local-id="old-layout">',
+      '<ac:layout-section ac:type="two_equal" local-id="old-section">',
+      '<ac:layout-cell data-local-id="old-left"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-local-id="old-right"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const newHtml = [
+      '<ac:layout ac:local-id="new-layout">',
+      '<ac:layout-section local-id="new-section" ac:type="two_equal">',
+      '<ac:layout-cell data-local-id="new-left"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-local-id="new-right"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+
+    expect(contentBlocks.map((block) => block.type)).toEqual(['same', 'same']);
+    expect(result.summary.addedBlocks).toBe(0);
+    expect(result.summary.removedBlocks).toBe(0);
+  });
+
+>>>>>>> Stashed changes
   test('layout cells render complex content independently without swallowing later cells', () => {
     const layout = [
       '<ac:layout><ac:layout-section ac:type="two_equal">',
@@ -773,6 +896,15 @@ describe('Sprint 2 diff classification and display requirements', () => {
     expect(css).toMatch(/\.dh-github-diff-part\s*{[^}]*background:\s*transparent/);
     expect(css).not.toMatch(/\.dh-github-diff-part--removed\s*{[^}]*background:\s*var\(--dh-red-soft\)/);
     expect(css).not.toMatch(/\.dh-github-diff-part--added\s*{[^}]*background:\s*var\(--dh-green-soft\)/);
+<<<<<<< Updated upstream
+=======
+    expect(css).toMatch(
+      /\.dh-draft-modal__footer \.dh-write-back-button\s*{[^}]*background:\s*var\(--dh-blue\)/
+    );
+    expect(css).not.toMatch(
+      /\.dh-draft-modal__footer \.dh-write-back-button\s*{[^}]*background:\s*#c9372c/
+    );
+>>>>>>> Stashed changes
   });
 });
 
@@ -1095,6 +1227,30 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect(rendered).not.toContain('local-id');
   });
 
+<<<<<<< Updated upstream
+=======
+  test('renders only primary Decision items when the fallback repeats their ADF nodes', () => {
+    const primaryItems = [
+      '<ac:adf-node type="decision-item"><ac:adf-attribute key="state">DECIDED</ac:adf-attribute><ac:adf-content>First Decision</ac:adf-content></ac:adf-node>',
+      '<ac:adf-node type="decision-item"><ac:adf-attribute key="state">DECIDED</ac:adf-attribute><ac:adf-content>Second Decision</ac:adf-content></ac:adf-node>',
+    ].join('');
+    const html = [
+      '<ac:adf-extension>',
+      `<ac:adf-node type="decision-list">${primaryItems}</ac:adf-node>`,
+      '<ac:adf-fallback>',
+      `<ac:adf-node type="decision-list">${primaryItems}</ac:adf-node>`,
+      '</ac:adf-fallback>',
+      '</ac:adf-extension>',
+    ].join('');
+
+    const rendered = prepareConfluenceHtml(html, '');
+
+    expect(rendered.match(/data-dh-node-type="decision"/g)).toHaveLength(2);
+    expect((rendered.match(/First Decision/g) || [])).toHaveLength(1);
+    expect((rendered.match(/Second Decision/g) || [])).toHaveLength(1);
+  });
+
+>>>>>>> Stashed changes
   test('renders panel ADF fallback nodes and generic legacy status labels', () => {
     const html = [
       '<ac:adf-extension><ac:adf-node type="panel"><ac:adf-attribute key="panel-type">note</ac:adf-attribute><ac:adf-attribute key="local-id">04797b66-f9c9-41df-a521-60c460cea8bc</ac:adf-attribute><ac:adf-fallback><div><div><p local-id="60c460cea8bc">Note 面板：用于测试备注面板类型与正文变化。</p></div></div></ac:adf-fallback></ac:adf-node></ac:adf-extension>',
@@ -1207,3 +1363,7 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect(rendered).not.toContain('data-dh-panel-type="error"');
   });
 });
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
