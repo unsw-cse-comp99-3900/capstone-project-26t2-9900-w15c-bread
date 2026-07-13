@@ -38,11 +38,6 @@ describe('buildRichTextDiffHtml replacement grouping', () => {
     expect(result.blocks.map((block) => block.type)).toEqual(['added', 'same']);
   });
 });
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 
 describe('type-specific diff safety', () => {
   test('paragraph changes are represented as block-level removal and addition', () => {
@@ -167,8 +162,6 @@ describe('type-specific diff safety', () => {
     expect(result.blocks[0].renderedHtml).toContain('&lt;ac:structured-macro');
   });
 
-<<<<<<< Updated upstream
-=======
   test('unsupported blocks ignore regenerated Confluence IDs and attribute order', () => {
     const oldHtml = [
       '<ac:structured-macro ac:name="jira-gadget" ac:macro-id="old-macro-id">',
@@ -258,7 +251,6 @@ describe('type-specific diff safety', () => {
     expect(result.summary.removedBlocks).toBe(0);
   });
 
->>>>>>> Stashed changes
   test('transparent containers are split into semantic child blocks', () => {
     const result = buildRichTextDiffHtml(
       '<div><p>Before table</p><table><tbody><tr><td>old</td></tr></tbody></table><p>After table</p></div>',
@@ -339,8 +331,6 @@ describe('type-specific diff safety', () => {
     expect(result.html).toContain('data-dh-layout-type="two_equal"');
   });
 
-<<<<<<< Updated upstream
-=======
   test('layouts ignore regenerated Confluence bookkeeping IDs', () => {
     const oldHtml = [
       '<ac:layout ac:local-id="old-layout">',
@@ -364,7 +354,6 @@ describe('type-specific diff safety', () => {
     expect(result.summary.removedBlocks).toBe(0);
   });
 
->>>>>>> Stashed changes
   test('layout cells render complex content independently without swallowing later cells', () => {
     const layout = [
       '<ac:layout><ac:layout-section ac:type="two_equal">',
@@ -896,15 +885,12 @@ describe('Sprint 2 diff classification and display requirements', () => {
     expect(css).toMatch(/\.dh-github-diff-part\s*{[^}]*background:\s*transparent/);
     expect(css).not.toMatch(/\.dh-github-diff-part--removed\s*{[^}]*background:\s*var\(--dh-red-soft\)/);
     expect(css).not.toMatch(/\.dh-github-diff-part--added\s*{[^}]*background:\s*var\(--dh-green-soft\)/);
-<<<<<<< Updated upstream
-=======
     expect(css).toMatch(
       /\.dh-draft-modal__footer \.dh-write-back-button\s*{[^}]*background:\s*var\(--dh-blue\)/
     );
     expect(css).not.toMatch(
       /\.dh-draft-modal__footer \.dh-write-back-button\s*{[^}]*background:\s*#c9372c/
     );
->>>>>>> Stashed changes
   });
 });
 
@@ -1227,8 +1213,6 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect(rendered).not.toContain('local-id');
   });
 
-<<<<<<< Updated upstream
-=======
   test('renders only primary Decision items when the fallback repeats their ADF nodes', () => {
     const primaryItems = [
       '<ac:adf-node type="decision-item"><ac:adf-attribute key="state">DECIDED</ac:adf-attribute><ac:adf-content>First Decision</ac:adf-content></ac:adf-node>',
@@ -1250,7 +1234,6 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect((rendered.match(/Second Decision/g) || [])).toHaveLength(1);
   });
 
->>>>>>> Stashed changes
   test('renders panel ADF fallback nodes and generic legacy status labels', () => {
     const html = [
       '<ac:adf-extension><ac:adf-node type="panel"><ac:adf-attribute key="panel-type">note</ac:adf-attribute><ac:adf-attribute key="local-id">04797b66-f9c9-41df-a521-60c460cea8bc</ac:adf-attribute><ac:adf-fallback><div><div><p local-id="60c460cea8bc">Note 面板：用于测试备注面板类型与正文变化。</p></div></div></ac:adf-fallback></ac:adf-node></ac:adf-extension>',
@@ -1363,7 +1346,3 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect(rendered).not.toContain('data-dh-panel-type="error"');
   });
 });
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes

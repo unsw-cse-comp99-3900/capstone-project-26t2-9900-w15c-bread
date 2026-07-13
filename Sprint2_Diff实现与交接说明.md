@@ -1,14 +1,8 @@
 # Sprint 2 Diff 实现与交接说明
 
-<<<<<<< Updated upstream
-本文档说明 Sprint 2 当前版本的富文本 Diff 实现、布局修复、提及（Mention）解析、恢复选择和 Draft 预览衔接方式，供后续开发、测试和维护使用。
-
-本次功能代码主要位于前端 Diff 模块。后端 Draft API、Confluence 写回、发布流程、`manifest.yml` 权限和 Forge 部署流程没有修改。
-=======
 本文档说明 Sprint 2 当前版本的富文本 Diff 实现、布局修复、提及（Mention）解析、恢复选择、Draft 创建和当前页面写回方式，供后续开发、测试和维护使用。
 
 当前版本已吸收本地 `feature/write-back` 分支的直接写回功能，同时保留现有细粒度 Diff、布局和 Draft 创建功能。`manifest.yml` 权限和 Forge 部署流程没有修改。
->>>>>>> Stashed changes
 
 ## 1. 当前实现目标
 
@@ -55,12 +49,9 @@
 | `createLayoutBoundaryBlock` | 创建不可选择的布局开始/结束边界块。 | 保存原始 Storage 开闭标签，并保存安全渲染 wrapper。 |
 | `extractLayoutDiffBlocks` | 在相容 Layout 中插入结构边界，并逐 Cell 提取正文语义块。 | `layoutPath` 参与 block key，保证栏之间不会串配。 |
 | `extractMentionAccountIds` | 从 Storage 和 ADF Mention 中提取账号 ID。 | 支持 `ri:account-id`、ADF `id`/`accountId`。 |
-<<<<<<< Updated upstream
-=======
 | `getStorageNodeOuterHtml` | 按 Confluence Storage 规则序列化 DOM。 | 保持 Emoji、Mention、Date 等空元素为自闭合标签。 |
 | `normaliseStorageHtmlForParsing` | 在送入浏览器 HTML 解析器前临时展开 Confluence 自闭合空元素，并保护 CDATA。 | 防止 `<ri:user />` 吞入后续整页内容，也防止 HTML 代码正文被解析为空；不改变实际写回 Storage。 |
 | `normaliseCodeMacroStorageForWriteBack` | 将预览可读但写回无效的实体/注释式代码正文转换成标准 CDATA。 | 合法 CDATA 保持逐字不变，防止 `Write to Current Page` 后代码块变空。 |
->>>>>>> Stashed changes
 
 布局处理中的关键变量：
 
@@ -87,13 +78,6 @@
 | `DiffDisplayRows` | 递归渲染布局结构及其中的 Diff 行。 | 使 2/3 栏结构在预览中保持嵌套关系。 |
 | `buildDiffDisplayRows` | 创建最终显示树并准备可选择行。 | 输入为底层 `same/removed/added` blocks。 |
 | `getBlockRenderedPreviewHtml` | 获取单个 block 的预览 HTML。 | 不使用 Storage 标签直接渲染。 |
-<<<<<<< Updated upstream
-| `buildRenderedDraftPreviewHtml` | 按用户选择生成 Draft 模态框中的安全预览。 | 只用于视觉预览。 |
-| `buildDraftPreviewHtml` | 按用户选择重建 Confluence Storage HTML。 | 输出作为创建 Draft 的 `storageHtml`。 |
-
-Mention 加载流程会动态调用 `requestConfluence`，通过 `/wiki/rest/api/user?accountId=...` 获取 `displayName`。账号会去重并限制最多 100 个；接口失败时显示安全 fallback，但原 Mention Storage 不会被改写或丢失。
-
-=======
 | `prepareConfluenceHtml` 恢复预览调用 | 从最终重建的 Storage 生成 Draft 模态框预览。 | 确保预览结构与实际 Draft/写回内容一致。 |
 | `handleConfirmWriteBack` | 将同一份 Storage 发送给 `writeRecoveredPage`。 | 同时提交预览时的当前版本号。 |
 
@@ -107,7 +91,6 @@ Mention 加载流程会动态调用 `requestConfluence`，通过 `/wiki/rest/api
 
 后端仍保留未被当前 UI 调用的 `createDraft` 兼容 resolver，并新增 `writeRecoveredPage` resolver。后者使用 `api.asUser()` 重新读取当前页面，校验预览时版本号，限制请求体不超过 2 MB，然后使用 Confluence v2 Page API 写入新版本。若期间页面已被其他人更新，请求会被拒绝，避免覆盖新内容。
 
->>>>>>> Stashed changes
 ### `static/hello-world/src/styles.css`
 
 负责 Diff 边框、表格 cell 标记和 Layout Grid：
@@ -119,15 +102,9 @@ Mention 加载流程会动态调用 `requestConfluence`，通过 `/wiki/rest/api
 - 自定义三栏根据 `data-width` 生成比例，例如 `25:50:25`；
 - 小于等于 `760px` 时降为单栏，保证移动端可阅读。
 
-<<<<<<< Updated upstream
-### `static/hello-world/src/utils.test.js`
-
-当前 focused tests 共 66 个，覆盖基础分类、富文本格式、布局、Mention、列表、引用、表格、Panel、Decision、日期、图片、Storage 重建和 Diff CSS。
-=======
 ### `static/hello-world/src/utils.test.js` 与 `recoveryStorage.test.js`
 
 当前 focused tests 共 87 个，覆盖基础分类、富文本格式、布局、Mention、列表、引用、表格、Panel、Decision、日期、图片、Storage 重建、Task 混合恢复、ADF Task、raw macro 分组、写回后的内部 ID 规范化、自闭合元素解析保护、代码 CDATA 规范化与无损写回和 Diff CSS。
->>>>>>> Stashed changes
 
 ## 3. Diff 整体流程
 
@@ -278,13 +255,9 @@ removed A, removed B, added A', added B'
 
 布局结构边界永远不可选择。它们只负责在最终 Storage 中重新打开和关闭 Layout/Section/Cell，因此用户选择栏内某个表格或段落时，不会丢失外层分栏结构。
 
-<<<<<<< Updated upstream
-Draft 模态框使用 `buildRenderedDraftPreviewHtml` 展示安全渲染结果；实际创建 Draft 时使用 `buildDraftPreviewHtml` 产生的 `storageHtml`。两者不能混用，否则可能出现预览正常但写回格式损坏，或 Storage 标签被直接展示的问题。
-=======
 `buildRecoveryStorageHtml` 先产生并验证最终 `storageHtml`，Draft 模态框再使用 `prepareConfluenceHtml` 渲染这份完整 Storage。写回当前页面使用同一份 Storage，因此 Task/raw group/Layout 在预览与实际结果中保持一致。
 
 Draft 预览只保留“Back to changes”和“Write to Current Page”两个操作，不再提供“Create Confluence Draft”。直接写回会携带 `expectedVersionNumber`，后端在更新前重新读取页面；版本不一致时必须刷新并重新比较。
->>>>>>> Stashed changes
 
 ## 6. 测试与构建结果
 
@@ -292,23 +265,14 @@ Focused tests：
 
 ```powershell
 cd static/hello-world
-<<<<<<< Updated upstream
-npx.cmd react-scripts test src/utils.test.js --watchAll=false --runInBand
-=======
 npx.cmd react-scripts test src/utils.test.js src/recoveryStorage.test.js --watchAll=false --runInBand
->>>>>>> Stashed changes
 ```
 
 当前结果：
 
 ```text
-<<<<<<< Updated upstream
-Test Suites: 1 passed
-Tests:       66 passed
-=======
 Test Suites: 2 passed
 Tests:       87 passed
->>>>>>> Stashed changes
 ```
 
 Production build：
@@ -318,11 +282,7 @@ cd static/hello-world
 npm.cmd run build
 ```
 
-<<<<<<< Updated upstream
-当前构建已通过。测试仍会出现 CRA/Babel 警告和 Jest open-handle 提示，但不影响 66 个 focused tests 的通过结果。本轮最新代码没有执行 Forge deploy。
-=======
 当前构建已通过。测试仍可能出现 CRA/Babel 警告和 Jest open-handle 提示，但不影响 87 个 focused tests 的通过结果。本轮最新代码没有执行 Forge deploy。
->>>>>>> Stashed changes
 
 ## 7. 后续维护注意事项
 
@@ -336,33 +296,20 @@ npm.cmd run build
 8. 必须继续分离 `renderedHtml` 和 `storageHtml`。
 9. 修改表格兼容规则时继续保护 `rowspan`、`colspan` 和有效 cell position。
 10. 修改 Mention 预览时不能用 display name 替换原账号 Storage。
-<<<<<<< Updated upstream
-11. 后续 Diff 修改应运行 66 个 focused tests 和 production build。
-=======
 11. 后续 Diff 或写回修改应运行 87 个 focused tests 和 production build。
 12. 直接写回必须继续传递并校验 `expectedVersionNumber`，不得移除并发保护。
 13. Task/Decision 单项恢复必须经过 Storage group 重组，不能直接拼接多个单项 wrapper。
 14. Confluence 自闭合空元素只能在 DOMParser 输入中临时展开，写回 Storage 必须继续保留自闭合格式。
 15. 代码宏 CDATA 只能在 DOMParser 输入中临时编码保护，写回时必须恢复原始 `<![CDATA[...]]>`，不能写入解析令牌或 HTML 注释。
->>>>>>> Stashed changes
 
 ## 8. 本轮未修改的范围
 
 本轮没有修改：
 
-<<<<<<< Updated upstream
-- 后端 Draft resolver/API；
-- Confluence 写回和发布流程；
-=======
 - 后端 `createDraft` resolver/API；
 - Confluence 发布流程；
->>>>>>> Stashed changes
 - `manifest.yml` scopes；
 - Forge permissions；
 - Forge deployment。
 
-<<<<<<< Updated upstream
-需要特别区分：前端的 Draft Storage 重建选择和 Draft 模态框预览已经为细粒度 Layout Diff 做了调整，但最终调用的后端 Draft 创建接口没有改变。本功能实现也不需要新增运行时依赖。
-=======
 需要特别区分：原有 Draft 创建接口没有改变，但当前前端不再调用它；独立的 `writeRecoveredPage` resolver 使用 `recoveryStorage.js` 产生的 Storage 写回当前页面。本功能实现不需要新增权限或运行时依赖。
->>>>>>> Stashed changes

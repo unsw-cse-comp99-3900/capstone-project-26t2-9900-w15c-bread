@@ -1,22 +1,8 @@
 # Dynamic History
 
-<<<<<<< Updated upstream
-Dynamic History is a Confluence Forge content action app for viewing page
-version history, comparing a selected historical version with the current
-version, and creating an unpublished Confluence draft from a chosen recovery
-result.
-=======
-<<<<<<< Updated upstream
-Dynamic History is a Confluence Forge content action app for inspecting a page's
-version history. It opens from the Confluence page actions menu, fetches the
-current page's versions through a Forge resolver, and renders a timeline plus a
-rich comparison between the current page and a selected historical version.
-=======
 Dynamic History is a Confluence Forge content action app for viewing page
 version history, comparing a selected historical version with the current
 version and safely writing a chosen recovery result back to the current page.
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 This app was originally created from a Forge Custom UI template, so the frontend
 folder is still named `static/hello-world`.
@@ -26,31 +12,14 @@ folder is still named `static/hello-world`.
 Paths below are relative to the `9900` project folder.
 
 ```text
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-manifest.yml                         Forge app module, resource, scopes, runtime
-src/index.js                         Backend resolver for Confluence API access
-static/hello-world/                  Custom UI React app
-static/hello-world/src/App.js        Frontend data loading and page-level layout
-static/hello-world/src/components/   Timeline and comparison UI components
-static/hello-world/src/utils.js      Formatting, storage HTML rendering, diff helpers
-static/hello-world/src/mockData.js   Local fallback data for development preview
-static/hello-world/src/styles.css    App layout, timeline, and rich diff styles
-=======
->>>>>>> Stashed changes
 manifest.yml
   Forge app manifest. Defines the Confluence content action, Custom UI resource,
   resolver function, scopes, and runtime.
 
 src/index.js
   Backend Forge resolver. Fetches Confluence page versions, attachments, authors,
-<<<<<<< Updated upstream
-  and creates unpublished draft pages.
-=======
   retains the legacy unpublished-draft resolver and writes version-checked
   recovery updates.
->>>>>>> Stashed changes
 
 static/hello-world/src/App.js
   Frontend entry point. Loads Forge bridge data in Confluence and mock data in
@@ -62,16 +31,12 @@ static/hello-world/src/components/VersionCard.js
 
 static/hello-world/src/components/ComparisonPanel.js
   Main comparison UI. Calls the rich diff helper, renders selectable change
-<<<<<<< Updated upstream
-  blocks, opens Draft Preview, and sends selected storage HTML to createDraft.
-=======
   blocks, opens Draft Preview, and sends validated Storage HTML to the Draft or
   direct write-back resolver.
 
 static/hello-world/src/recoveryStorage.js
   Rebuilds validated Confluence Storage from block choices and safely groups
   Task/Decision items before Draft creation or direct write-back.
->>>>>>> Stashed changes
 
 static/hello-world/src/utils.js
   Core rich-text handling. Converts Confluence storage HTML into safe preview
@@ -86,16 +51,10 @@ static/hello-world/src/mockData.js
   Local mock page versions for development outside Confluence.
 
 static/hello-world/src/utils.test.js
-<<<<<<< Updated upstream
-  Focused tests for rich-text normalization, block-level recovery behavior,
-  type-specific diffs, unsupported content, and preview safety.
-=======
 static/hello-world/src/recoveryStorage.test.js
   Focused tests for rich-text normalization, block-level recovery behavior,
   type-specific diffs, Storage reconstruction, unsupported content, and preview
   safety.
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 ```
 
 ## Forge Structure
@@ -156,18 +115,6 @@ The frontend expects each version body as Confluence storage HTML:
 }
 ```
 
-<<<<<<< Updated upstream
-### createDraft
-
-Creates an unpublished Confluence page beside the source page. The frontend
-sends a reconstructed storage HTML string based on the user's selected recovery
-choices. Unsupported or complex blocks must remain as their original storage
-markup; they must not be converted into plain text.
-=======
-<<<<<<< Updated upstream
-`body.value` is Confluence storage-format HTML. The frontend sanitises and
-normalises it before rendering.
-=======
 ### createDraft
 
 Creates an unpublished Confluence page beside the source page. This legacy
@@ -181,8 +128,6 @@ The resolver re-reads the page with `asUser()` immediately before updating it
 and rejects the request when the page version no longer matches the version
 used to prepare the preview. The existing `write:page:confluence` scope covers
 both draft creation and direct write-back.
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 ## Frontend Flow
 
@@ -214,18 +159,9 @@ Keep current change
 Restore old content
 ```
 
-<<<<<<< Updated upstream
-The Draft Preview modal shows the reconstructed result first. The final create
-button calls `createDraft`; previewing alone does not write to Confluence.
-=======
-<<<<<<< Updated upstream
-`utils.js` contains the shared frontend helpers:
-=======
 The Draft Preview modal shows the reconstructed result first. Its only actions
 are `Back to changes` and `Write to Current Page`; the latter calls
 `writeRecoveredPage`. Previewing alone never writes to Confluence.
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 ## Rich Text Handling
 
@@ -400,12 +336,6 @@ HTML or JSON is retained for comparison and reconstruction. The raw inspector
 escapes this source instead of rendering it with `dangerouslySetInnerHTML`, and
 normal preview filters internal IDs and implementation metadata.
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-## Common Commands
-=======
->>>>>>> Stashed changes
 Implementation locations:
 
 ```text
@@ -585,21 +515,13 @@ other blocks to be compared separately instead of as one page-sized block.
 
 ## Draft Reconstruction Safety
 
-<<<<<<< Updated upstream
-Draft reconstruction is handled in the frontend by `ComparisonPanel.js`.
-=======
 Storage reconstruction is handled by `recoveryStorage.js` and is consumed by
 `ComparisonPanel.js` for both Draft creation and direct write-back.
->>>>>>> Stashed changes
 
 Important rule:
 
 ```text
-<<<<<<< Updated upstream
-The component chooses between oldHtml and newHtml for recovery.
-=======
 The recovery builder chooses between old and current raw Storage for each block.
->>>>>>> Stashed changes
 It should not reconstruct complex Confluence storage from rendered preview HTML.
 ```
 
@@ -609,13 +531,6 @@ storage nodes from being degraded into plain text.
 Implementation location:
 
 ```text
-<<<<<<< Updated upstream
-static/hello-world/src/components/ComparisonPanel.js
-  getBlockPreviewHtml
-  buildDraftPreviewHtml
-  buildRichTextDiffHtml call site
-  createDraft invocation
-=======
 static/hello-world/src/recoveryStorage.js
   buildRecoveryStorageHtml
 
@@ -623,7 +538,6 @@ static/hello-world/src/components/ComparisonPanel.js
   prepareConfluenceHtml recovery-preview call
   buildRichTextDiffHtml call site
   writeRecoveredPage invocation
->>>>>>> Stashed changes
 ```
 
 ## Tests
@@ -632,16 +546,10 @@ Focused tests live in:
 
 ```text
 static/hello-world/src/utils.test.js
-<<<<<<< Updated upstream
-```
-
-Current coverage includes 56 focused tests for:
-=======
 static/hello-world/src/recoveryStorage.test.js
 ```
 
 Current coverage includes 87 focused tests for:
->>>>>>> Stashed changes
 
 - the `same`/`removed`/`added` result contract and removed-then-added
   replacement order;
@@ -659,13 +567,6 @@ Current coverage includes 87 focused tests for:
 - text formatting, colours, highlights, alignment, and indentation;
 - merged table cells and storage-format cell background colours;
 - Confluence dates, panel metadata mapping, status labels, and decisions;
-<<<<<<< Updated upstream
-- code CDATA cleanup and malformed HTML code-block repair;
-- image captions, dimensions, alignment, and ADF border metadata;
-- unsupported-content fallbacks, raw storage preservation, and internal-field
-  filtering;
-- whiteboard smart-link cards and transparent container splitting.
-=======
 - code CDATA cleanup, lossless write-back, and malformed HTML code-block repair;
 - image captions, dimensions, alignment, and ADF border metadata;
 - unsupported-content fallbacks, raw storage preservation, and internal-field
@@ -675,29 +576,19 @@ Current coverage includes 87 focused tests for:
   parser-safe self-closing Confluence elements, and unsafe write-back rejection;
 - interrupted and fully changed Task groups, ADF Task Storage, and independent
   duplicate raw macro recovery groups.
->>>>>>> Stashed changes
 
 Run the focused test suite from:
 
 ```powershell
 cd static/hello-world
-<<<<<<< Updated upstream
-npx.cmd react-scripts test src/utils.test.js --watchAll=false --runInBand
-=======
 npx.cmd react-scripts test src/utils.test.js src/recoveryStorage.test.js --watchAll=false --runInBand
->>>>>>> Stashed changes
 ```
 
 Last verified result:
 
 ```text
-<<<<<<< Updated upstream
-Test Suites: 1 passed
-Tests: 56 passed
-=======
 Test Suites: 2 passed
 Tests: 87 passed
->>>>>>> Stashed changes
 ```
 
 Jest may print a warning that it did not exit immediately because of open
@@ -706,10 +597,6 @@ handles. The build also prints the existing Create React App warning about
 changes.
 
 ## Build and Deploy
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 Build the Custom UI bundle:
 
@@ -736,14 +623,6 @@ latest build.
 
 ## Recent Sprint 2 Changes
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-```powershell
-forge lint
-```
-=======
->>>>>>> Stashed changes
 This iteration added semantic Sprint 2 diff classification and display behavior
 on top of the broader manual renderer used by the team's test page.
 
@@ -786,14 +665,9 @@ on top of the broader manual renderer used by the team's test page.
   the original icon and preserves the complete panel body.
 - ADF decision lists render as readable decided/undecided rows instead of an
   unsupported-content card.
-<<<<<<< Updated upstream
-- Code macros remove CDATA wrappers, retain whitespace and line numbers, and
-  repair the malformed opening/closing markup observed in HTML code blocks.
-=======
 - Code macros remove CDATA wrappers for rendering, retain whitespace and line
   numbers, preserve the original CDATA for write-back, and repair malformed
   opening/closing markup observed in HTML code blocks.
->>>>>>> Stashed changes
 - Image rendering reads exact width and height attributes without confusing
   them with `original-width` or `original-height`. It also handles attachment
   captions, alignment, wrapping, native image dimensions, and ADF border marks.
@@ -810,10 +684,6 @@ on top of the broader manual renderer used by the team's test page.
   `data-highlight-colour`, image border marks, and exact image dimensions.
 - No npm dependencies, Forge scopes, or manifest permissions were added for
   this renderer work.
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 ## Development Notes
 
