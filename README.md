@@ -170,25 +170,19 @@ The function returns renderable preview HTML plus a structured block list:
   html: string,
   blocks: [
     {
-      type: 'same' | 'added' | 'removed' | 'modified',
+      type: 'same' | 'added' | 'removed',
       nodeType: string,
+      tag: string,
       html?: string,
       renderedHtml?: string,
       oldHtml?: string,
       newHtml?: string,
-      oldRenderedHtml?: string,
-      newRenderedHtml?: string,
       text?: string,
-      oldText?: string,
-      newText?: string,
-      inline?: Array,
       tableDiff?: object,
-      taskDiff?: object,
       supportLevel?: 'full' | 'raw',
       rawPreview?: string,
       added?: number,
       removed?: number,
-      limited?: boolean
     }
   ],
   summary: {
@@ -202,6 +196,11 @@ The function returns renderable preview HTML plus a structured block list:
   }
 }
 ```
+
+`modifiedBlocks` remains in the summary shape for compatibility with existing
+UI code, but Sprint 2 diff output does not emit `modified` blocks and this count
+is therefore `0`. A changed block is always represented by the old block as
+`removed`, followed by the new block as `added`.
 
 Important distinction:
 
@@ -217,203 +216,123 @@ This separation is intentional. The app can show a readable fallback card for a
 macro or smart link while still preserving the original Confluence storage markup
 for draft creation.
 
-## Current Diff Policy
+## Sprint 2 Diff Policy
 
-The diff policy is conservative because Confluence documents are semantic rich
-documents, not plain text files.
+The diff is deliberately block-based. Confluence pages are first rendered with
+the existing safe renderer, then extracted into semantic blocks. The old and
+current block sequences are aligned with a longest-common-subsequence comparison
+using stable semantic signatures rather than plain visible text.
 
-### Paragraphs and Headings
+### Classification and Display
 
-Paragraphs and headings are block-level comparison and recovery units.
-
-If a paragraph or heading changes, the app shows the old block and the new block
-as block-level removed/added or modified content. It does not split paragraph or
-heading content into word-level, character-level, or line-level inline diff.
-
-Reason:
+The structured result model has exactly three classifications:
 
 ```text
-Paragraphs and headings are semantic units in Confluence pages. Keeping them as
-whole recovery units makes draft reconstruction safer, especially for Chinese
-and natural-language content.
+same     equivalent content exists in both versions
+removed  content exists only in the selected historical version
+added    content exists only in the current version
 ```
+
+A replacement never creates a fourth `modified` or `changed` result type. It is
+represented as a `removed` old block and an `added` new block. Result order is
+preserved, with old content displayed before its corresponding new content.
+
+The display layer groups compatible old/new blocks into one recovery decision:
+
+- a directly adjacent `removed`/`added` pair can share one choice;
+- when the diff produces a continuous run such as three removed blocks followed
+  by three added blocks, blocks are paired in order by matching `nodeType` and
+  HTML tag;
+- each paired red/green group has one `Keep current change` and one
+  `Restore old content` action;
+- unmatched blocks remain independent, which avoids forcing one-to-many changes
+  or unrelated semantic types into the same choice.
+
+Removed rows use a red outer border and added rows use a green outer border. The
+border wraps the complete row, including the `-`/`+` gutter. Diff rows have no
+red or green fill, so original text colours, highlights, panel backgrounds,
+date backgrounds, status colours, image presentation, and table-cell
+backgrounds remain visible.
 
 Implementation locations:
 
 ```text
 static/hello-world/src/utils.js
-  canPairForInlineDiff
+  canonicalDomSignature
+  extractDiffBlocks
+  buildRichTextDiffHtml
+  buildTableReplacementBlocks
 
-static/hello-world/src/utils.js
-  buildModifiedBlockDiff
-
-static/hello-world/src/utils.js
-  buildBlockLevelModifiedDiff
-```
-
-### Lists and Tasks
-
-Lists are split by item when possible. This prevents one small list item change
-from turning the whole list into a large changed block.
-
-Task items preserve both:
-
-```text
-checkbox state
-task text
-```
-
-Task storage HTML is kept for reconstruction. The preview uses readable markers:
-
-```text
-[x] completed task
-[ ] incomplete task
-```
-
-Implementation locations:
-
-```text
-static/hello-world/src/utils.js
-  expandConfluenceTaskLists
-
-static/hello-world/src/utils.js
-  extractComparableBlocksFromPreparedNode
-
-static/hello-world/src/utils.js
-  buildTaskItemDiff
+static/hello-world/src/components/ComparisonPanel.js
+  buildChangeRunRows
+  buildDiffDisplayRows
 
 static/hello-world/src/styles.css
-  [data-dh-node-type='task_item']
-
-static/hello-world/src/styles.css
-  [data-dh-task-marker='true']
+  .dh-github-diff-part--removed
+  .dh-github-diff-part--added
 ```
 
-### Code Blocks
+### Semantic Equality Rules
 
-Confluence code macros are converted into safe preview HTML:
+The stable DOM signature includes meaningful element structure, inline marks,
+links, dimensions, spans, dates, and app rendering metadata. Attribute and CSS
+declaration order do not affect equality. Serialization-only whitespace is
+normalised, and equivalent inline tags such as `<b>`/`<strong>` and `<i>`/`<em>`
+compare as the same content.
 
-```html
-<pre data-dh-node-type="code_block"><code>...</code></pre>
-```
-
-Code content is escaped before rendering. Code blocks are compared line by line
-so indentation and whitespace remain meaningful.
-
-Implementation locations:
+Visible breaks follow a specific rule:
 
 ```text
-static/hello-world/src/utils.js
-  expandConfluenceCodeMacros
-
-static/hello-world/src/utils.js
-  buildCodeBlockDiff
+one <br> and multiple consecutive <br> elements are equivalent
+no <br> and one or more <br> elements are different
 ```
 
-### Tables
+Formatting is content for diff purposes. Changes to bold, italic, links, text
+colour, highlight colour, alignment, indentation, or other preserved semantic
+attributes make the containing block different.
 
-Tables use table-specific diff logic.
+### Type-by-Type Behavior
 
-If old and current tables have compatible row and cell structure, the app uses
-cell-level comparison.
+| Content type | Extraction unit | Diff behavior |
+| --- | --- | --- |
+| Paragraph | One complete paragraph | Text, inline formatting, links, dates, statuses, or visible-break changes produce the old paragraph as `removed` and the new paragraph as `added`. A paragraph split remains one removed block plus multiple added blocks. |
+| Heading | One complete H1-H6 heading | Compared independently from paragraphs. Text, formatting, or heading-level changes produce removed/added blocks; a heading is never matched to a paragraph. |
+| Ordered/unordered list | One complete `<ol>` or `<ul>`, including nested items | Item text, item order, nesting, or list type changes make the whole list different. Adjacent lists remain separate list blocks. |
+| Task list | One task item per block | Task text and completed/incomplete state are compared independently for each task. The original task storage HTML remains attached to that item. |
+| Blockquote | One complete blockquote | All nested paragraphs and formatting are compared as one block; an internal change replaces the whole quote. |
+| Information panel | One panel per block | Each info, note, warning, tip, success, error, or generic panel is independent. Panel type, content, and preserved styling participate in comparison. |
+| Decision list | One Decision item per block | Decision text and decided/undecided state are compared independently; changing one Decision does not replace the complete list. |
+| Date | Inline content inside its containing block | Storage dates, ADF dates, links, and `<time>` elements are normalised to semantic dates. Equivalent representations compare the same; a date change makes the whole containing paragraph or block different. |
+| Status, mention, emoji, and inline smart content | Inline content inside its containing block | Preserved semantic value and metadata participate in the containing block signature. A meaningful change replaces that containing block. |
+| Image | One image/figure per block | Images compare persistent identity and display metadata, including attachment/content IDs, filename or source, dimensions, alignment/layout, border, alt/title, rotation, and embedded caption. A manually typed paragraph below an image is a separate paragraph. |
+| Compatible table | One old table and one new table, with corresponding cells | Compatibility requires matching row count, effective column count, cell type/position, `rowspan`, and `colspan`. Only semantically changed cells receive red/green inset borders; unchanged cell styling and backgrounds are preserved. |
+| Incompatible table | One complete old table and one complete new table | Row/column count or span changes disable cell matching. The complete old and new tables are shown as removed/added rows with outer borders and no forced cell-level markers. |
+| Code block | One complete code macro/block | Escaped code text is part of the block signature. Any code-content change produces complete removed/added code blocks while preserving whitespace, line presentation, and language rendering metadata. |
+| Expand macro | One complete Expand block | The summary and nested rendered content are compared together. A change produces a removed old Expand and an added new Expand. |
+| Whiteboard or block smart-link card | One complete card | The rendered title and persistent target metadata are compared as one block while original storage remains available. |
+| Unsupported macro/extension | One raw-preserved block | Equality is based on preserved raw storage. A raw change produces removed/added fallback cards; unsupported content is never silently dropped or converted to plain text. |
+| Layout/container wrapper | Not a diff block when transparent | Ordinary block containers and Confluence layout wrappers expose their semantic children so an entire section does not become one oversized diff. Current multi-column layouts still render vertically. |
 
-If table shape is incompatible, the app uses a safer side-by-side table fallback
-instead of forcing two different structures into one table.
-
-Implementation locations:
-
-```text
-static/hello-world/src/utils.js
-  buildTableDiff
-
-static/hello-world/src/utils.js
-  buildCellLevelTableDiff
-
-static/hello-world/src/utils.js
-  buildSideBySideTableDiff
-```
-
-### Panels and Quotes
-
-Panels and blockquotes are readable block-level diffs. They are not split into
-fragile inline fragments.
-
-Known Confluence panel-like structured macros are rendered into readable preview
-blocks where possible:
-
-```text
-info
-note
-warning
-tip
-success
-error
-panel
-```
-
-Implementation locations:
-
-```text
-static/hello-world/src/utils.js
-  expandKnownStructuredMacros
-
-static/hello-world/src/utils.js
-  buildBlockLevelModifiedDiff
-
-static/hello-world/src/styles.css
-  [data-dh-node-type='panel']
-```
-
-### Unsupported Content
+### Unsupported Content Safety
 
 Unsupported content must never become blank, deleted, or silently converted into
-plain text.
-
-Normal preview shows a readable fallback card:
-
-```text
-Unsupported Confluence block
-Type: ...
-This block cannot be fully rendered by this app. Original data is preserved.
-```
-
-The raw inspector shows the original raw HTML or JSON as escaped plain text. Raw
-content is not rendered with `dangerouslySetInnerHTML`.
-
-Normal preview must not expose internal implementation fields such as:
-
-```text
-UUIDs
-macro IDs
-XML gadget URLs
-extension keys
-localIds
-statusIds
-color values
-```
+plain text. Normal preview shows a readable fallback card while the original raw
+HTML or JSON is retained for comparison and reconstruction. The raw inspector
+escapes this source instead of rendering it with `dangerouslySetInnerHTML`, and
+normal preview filters internal IDs and implementation metadata.
 
 Implementation locations:
 
 ```text
 static/hello-world/src/utils.js
   createRawFallbackHtml
-
-static/hello-world/src/utils.js
   cleanUserFacingName
-
-static/hello-world/src/utils.js
   expandUnsupportedStorageNodes
-
-static/hello-world/src/utils.js
   expandAdfNodes
-
-static/hello-world/src/utils.js
   visibleTextContent
 
 static/hello-world/src/styles.css
   [data-dh-node-type='unsupported']
-
-static/hello-world/src/styles.css
   [data-dh-raw-inspector='true']
 ```
 
@@ -597,15 +516,9 @@ Implementation location:
 
 ```text
 static/hello-world/src/components/ComparisonPanel.js
-  getSelectedBlockHtml
-
-static/hello-world/src/components/ComparisonPanel.js
-  renderDraftBlock
-
-static/hello-world/src/components/ComparisonPanel.js
+  getBlockPreviewHtml
+  buildDraftPreviewHtml
   buildRichTextDiffHtml call site
-
-static/hello-world/src/components/ComparisonPanel.js
   createDraft invocation
 ```
 
@@ -617,10 +530,19 @@ Focused tests live in:
 static/hello-world/src/utils.test.js
 ```
 
-Current coverage includes 36 focused tests for:
+Current coverage includes 56 focused tests for:
 
-- paragraph, heading, list-item, task-item, code-line, and table-cell diff
-  behavior;
+- the `same`/`removed`/`added` result contract and removed-then-added
+  replacement order;
+- whole-block paragraph, heading, list, blockquote, panel, Decision, date,
+  image, and code behavior;
+- semantic inline formatting, link, attribute-order, serialization-whitespace,
+  and visible-break comparison;
+- compatible table cell borders and incompatible table structure fallback;
+- preservation of original colours, highlights, panel/status/date styling, and
+  table-cell backgrounds inside bordered diff rows;
+- independent task items, decisions, images, and transparent container child
+  blocks;
 - same-version rendering after complex macros and media;
 - nested unordered-list markers;
 - text formatting, colours, highlights, alignment, and indentation;
@@ -643,7 +565,7 @@ Last verified result:
 
 ```text
 Test Suites: 1 passed
-Tests: 36 passed
+Tests: 56 passed
 ```
 
 Jest may print a warning that it did not exit immediately because of open
@@ -676,11 +598,29 @@ the Forge iframe loads the current files from
 `main.*.css` files, the deployed environment or browser cache is not using the
 latest build.
 
-## Recent Manual Renderer Changes
+## Recent Sprint 2 Changes
 
-This iteration replaced the earlier limited preview behavior with a broader
-manual renderer for the Confluence storage formats used by the team's Sprint 2
-test page.
+This iteration added semantic Sprint 2 diff classification and display behavior
+on top of the broader manual renderer used by the team's test page.
+
+### Diff classification and display
+
+- `utils.js` now aligns semantic blocks using canonical DOM signatures that
+  retain meaningful formatting and metadata while ignoring serialization-only
+  differences.
+- Changed content is emitted only as an old `removed` block followed by a new
+  `added` block; no new modified/changed result type was introduced.
+- Paragraphs, headings, ordinary lists, blockquotes, panels, dates, images,
+  decisions, code blocks, expands, and unsupported blocks follow the
+  type-specific rules documented above.
+- Compatible tables compare corresponding cells and mark only changed cells;
+  incompatible tables fall back to complete old/new table blocks.
+- `ComparisonPanel.js` groups compatible removed/added blocks in each continuous
+  change run so one logical red/green pair shares one Keep/Restore choice.
+- `styles.css` replaces red/green row fills with outer borders around the full
+  row and gutter while retaining original rich-content styling.
+- No dependencies, Forge scopes, manifest permissions, or backend APIs were
+  added, and this work was not deployed to Forge.
 
 ### Current-page completeness
 

@@ -468,6 +468,27 @@ function textLayoutDataAttrsFromMarkup(markup) {
   return textLayoutDataAttrs({ align, indent });
 }
 
+function normaliseGridTemplateColumns(value) {
+  const source = String(value || '').trim();
+  if (!source) return '';
+
+  const tokens = source.match(/minmax\(0,\s*(\d+(?:\.\d+)?)fr\)/gi) || [];
+  if (!tokens.length || tokens.join(' ').replace(/\s+/g, '') !== source.replace(/\s+/g, '')) {
+    return '';
+  }
+
+  const weights = tokens.map((token) => {
+    const match = /minmax\(0,\s*(\d+(?:\.\d+)?)fr\)/i.exec(token);
+    return match ? Number(match[1]) : 0;
+  });
+
+  if (weights.some((weight) => !Number.isFinite(weight) || weight <= 0 || weight > 100)) {
+    return '';
+  }
+
+  return weights.map((weight) => `minmax(0, ${weight}fr)`).join(' ');
+}
+
 function safeStyleDeclarations(styleText) {
   const declarations = [];
 
@@ -495,6 +516,8 @@ function safeStyleDeclarations(styleText) {
         safeValue = normaliseCssKeyword(value, ['top', 'middle', 'bottom', 'baseline']);
       } else if (['width', 'height', 'max-width', 'min-width', 'margin-left', 'padding-left'].includes(property)) {
         safeValue = normaliseCssLength(value);
+      } else if (property === 'grid-template-columns') {
+        safeValue = normaliseGridTemplateColumns(value);
       }
 
       if (safeValue) declarations.push(`${property}: ${safeValue}`);
@@ -754,6 +777,58 @@ function extractExactAttr(markup, attrNames) {
   return '';
 }
 
+function normaliseMentionAccountId(value) {
+  return String(value || '').trim();
+}
+
+function mentionDisplayName(accountId, fallbackText, usersByAccountId = {}) {
+  const normalisedId = normaliseMentionAccountId(accountId);
+  const resolvedName = normalisedId ? usersByAccountId[normalisedId] : '';
+  const fallbackName = cleanUserFacingName(String(fallbackText || '').replace(/^@/, ''));
+  return resolvedName || fallbackName || '';
+}
+
+function renderMention(accountId, fallbackText, usersByAccountId = {}) {
+  const normalisedId = normaliseMentionAccountId(accountId);
+  const displayName = mentionDisplayName(normalisedId, fallbackText, usersByAccountId);
+  const accountAttr = normalisedId
+    ? ` data-dh-mention-account-id="${escapeAttr(normalisedId)}"`
+    : '';
+
+  return `<span data-dh-node-type="mention"${accountAttr}>${escapeHtml(
+    displayName ? `@${displayName}` : '[Mention]'
+  )}</span>`;
+}
+
+export function extractMentionAccountIds(storageHtml) {
+  const ids = new Set();
+  const source = String(storageHtml || '');
+  const storageMentionPattern = /<ri:user\b[^>]*\/?\s*>/gi;
+  const adfMentionPattern =
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']mention["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi;
+  let match = storageMentionPattern.exec(source);
+
+  while (match) {
+    const accountId = extractAttr(match[0], [
+      'ri:account-id',
+      'account-id',
+      'ri:accountid',
+      'accountid',
+    ]);
+    if (accountId) ids.add(normaliseMentionAccountId(accountId));
+    match = storageMentionPattern.exec(source);
+  }
+
+  match = adfMentionPattern.exec(source);
+  while (match) {
+    const accountId = extractAdfAttribute(match[0], ['id', 'accountId', 'account-id']);
+    if (accountId) ids.add(normaliseMentionAccountId(accountId));
+    match = adfMentionPattern.exec(source);
+  }
+
+  return Array.from(ids);
+}
+
 function confluenceEmoticonToText(name) {
   const map = {
     'smile': '🙂',
@@ -999,16 +1074,42 @@ function renderDecisionList(markup) {
     itemMatch = itemPattern.exec(markup);
   }
 
+  if (!items.length) {
+    const renderedDecisionPattern =
+      /<div\b[^>]*data-dh-node-type=["']decision["'][^>]*>[\s\S]*?<\/div>/gi;
+    let renderedDecisionMatch = renderedDecisionPattern.exec(markup);
+
+    while (renderedDecisionMatch) {
+      items.push(renderedDecisionMatch[0]);
+      renderedDecisionMatch = renderedDecisionPattern.exec(markup);
+    }
+  }
+
   if (!items.length) return '';
 
   return `<div data-dh-node-type="decision_list">${items.join('')}</div>`;
 }
 
-function expandConfluenceLinks(html, baseUrl) {
+function expandConfluenceLinks(html, baseUrl, usersByAccountId = {}) {
   return html.replace(/<ac:link\b[\s\S]*?<\/ac:link>/gi, (match) => {
     const dateMatch = /<ri:date\b[^>]*\/?>/i.exec(match);
     if (dateMatch) {
       return renderDate(extractDateValueFromMarkup(dateMatch[0]));
+    }
+
+    const userMatch = /<ri:user\b[^>]*\/?\s*>/i.exec(match);
+    if (userMatch) {
+      const accountId = extractAttr(userMatch[0], [
+        'ri:account-id',
+        'account-id',
+        'ri:accountid',
+        'accountid',
+      ]);
+      const labelMatch =
+        /<ac:plain-text-link-body[^>]*>([\s\S]*?)<\/ac:plain-text-link-body>/i.exec(match) ||
+        /<ac:link-body[^>]*>([\s\S]*?)<\/ac:link-body>/i.exec(match);
+      const label = labelMatch ? stripTags(decodeCdata(labelMatch[1])).trim() : '';
+      return renderMention(accountId, label, usersByAccountId);
     }
 
     const bodyMatch =
@@ -1902,7 +2003,7 @@ function expandWhiteboardAnchors(html) {
   });
 }
 
-function expandAdfNodes(html) {
+function expandAdfNodes(html, usersByAccountId = {}) {
   let expanded = expandAdfMarks(html);
 
   expanded = expanded.replace(
@@ -1940,7 +2041,8 @@ function expandAdfNodes(html) {
     /<ac:adf-node\b[^>]*(?:type|ac:type)=["']mention["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi,
     (match) => {
       const displayName = cleanUserFacingName(extractAdfAttribute(match, ['text', 'displayName']));
-      return `<span data-dh-node-type="mention">${escapeHtml(displayName ? `@${displayName}` : '[Mention]')}</span>`;
+      const accountId = extractAdfAttribute(match, ['id', 'accountId', 'account-id']);
+      return renderMention(accountId, displayName, usersByAccountId);
     }
   );
 
@@ -1961,8 +2063,8 @@ function expandAdfNodes(html) {
   );
 
   expanded = expanded.replace(
-    /<ac:adf-node\b[^>]*(?:type|ac:type)=["']decisionItem["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
-    (_match, body) => renderDecision(body)
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:decision-item|decisionItem)["'][^>]*>([\s\S]*?)<\/ac:adf-node>/gi,
+    (match, body) => renderDecision(body, extractAdfAttribute(match, ['state']))
   );
 
   expanded = expanded.replace(
@@ -2068,17 +2170,273 @@ function expandKnownStructuredMacros(html) {
   );
 }
 
-function expandUnsupportedStorageNodes(html) {
+function expandUnsupportedStorageNodes(html, usersByAccountId = {}) {
   return String(html || '')
     .replace(/<ac:(?:adf-extension|bodied-extension|extension)\b[\s\S]*?<\/ac:(?:adf-extension|bodied-extension|extension)>/gi, (match) =>
       renderAdfExtension(match)
     )
-    .replace(/<ri:user\b[^>]*\/?>/gi, () => '<span data-dh-node-type="mention">[Mention]</span>')
+    .replace(/<ri:user\b[^>]*\/?>/gi, (match) => {
+      const accountId = extractAttr(match, [
+        'ri:account-id',
+        'account-id',
+        'ri:accountid',
+        'accountid',
+      ]);
+      return renderMention(accountId, '', usersByAccountId);
+    })
     .replace(/<ri:date\b[^>]*\/?>/gi, (match) => renderDate(extractDateValueFromMarkup(match)));
 }
 
-export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {}) {
+function normaliseLayoutType(value) {
+  const normalised = String(value || 'single')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  const aliases = {
+    twoequal: 'two_equal',
+    twoleftsidebar: 'two_left_sidebar',
+    tworightsidebar: 'two_right_sidebar',
+    threeequal: 'three_equal',
+    threewithsidebars: 'three_with_sidebars',
+  };
+
+  return aliases[normalised.replace(/_/g, '')] || normalised;
+}
+
+function layoutTypeUsesFixedSidebarRatio(layoutType) {
+  return [
+    'two_left_sidebar',
+    'two_right_sidebar',
+    'three_with_sidebars',
+  ].includes(layoutType);
+}
+
+function layoutTypeColumnWeights(layoutType) {
+  const columnsByType = {
+    single: ['1'],
+    two_equal: ['1', '1'],
+    two_left_sidebar: ['1', '2'],
+    two_right_sidebar: ['2', '1'],
+    three_equal: ['1', '1', '1'],
+    three_with_sidebars: ['1', '2', '1'],
+  };
+
+  return columnsByType[layoutType] || [];
+}
+
+function normaliseLayoutColumnWidth(value) {
+  const source = String(value || '').trim().replace(/%$/, '');
+  if (!/^\d+(?:\.\d+)?$/.test(source)) return '';
+
+  const width = Number(source);
+  if (!Number.isFinite(width) || width <= 0 || width > 100) return '';
+  return String(width);
+}
+
+function layoutColumnWidths(renderedCells) {
+  const widths = [];
+  const cellPattern = /<div\b[^>]*data-dh-layout-cell=["']true["'][^>]*>/gi;
+  let match = cellPattern.exec(renderedCells);
+
+  while (match) {
+    widths.push(
+      normaliseLayoutColumnWidth(
+        extractAttr(match[0], ['data-dh-layout-width'])
+      )
+    );
+    match = cellPattern.exec(renderedCells);
+  }
+
+  return widths.length && widths.every(Boolean) ? widths : [];
+}
+
+function expandConfluenceLayouts(html, renderCellBody) {
+  return String(html || '')
+    .replace(
+      /<ac:layout-cell\b([^>]*)>([\s\S]*?)<\/ac:layout-cell>/gi,
+      (_match, attributes, body) => {
+        const width = normaliseLayoutColumnWidth(
+          extractAttr(attributes, ['data-width', 'ac:width', 'width'])
+        );
+        const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
+        return `<div data-dh-layout-cell="true"${widthAttr}>${renderCellBody(body)}</div>`;
+      }
+    )
+    .replace(
+      /<ac:layout-section\b([^>]*)>([\s\S]*?)<\/ac:layout-section>/gi,
+      (_match, attributes, body) => {
+        const layoutType = normaliseLayoutType(
+          extractAttr(attributes, ['ac:type', 'type', 'data-layout', 'layout'])
+        );
+        // Confluence can retain stale data-width values on predefined sidebar
+        // layouts. Its native renderer follows the semantic layout type in that
+        // case, so only equal/custom layouts should allow widths to override it.
+        const customWidths = layoutTypeUsesFixedSidebarRatio(layoutType)
+          ? []
+          : layoutColumnWidths(body);
+        const columnWeights = customWidths.length
+          ? customWidths
+          : layoutTypeColumnWeights(layoutType);
+        const customWidthAttr = customWidths.length
+          ? ' data-dh-layout-custom-widths="true"'
+          : '';
+        const gridStyle = columnWeights.length
+          ? styleAttr([
+              `grid-template-columns: ${columnWeights
+                .map((width) => `minmax(0, ${width}fr)`)
+                .join(' ')}`,
+            ])
+          : '';
+
+        return [
+          `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
+          customWidthAttr,
+          gridStyle,
+          '>',
+          body,
+          '</div>',
+        ].join('');
+      }
+    )
+    .replace(/<ac:layout(?=[\s>])[^>]*>/gi, '<div data-dh-node-type="layout">')
+    .replace(/<\/ac:layout>/gi, '</div>');
+}
+
+function storageOpeningTag(node) {
+  const match = /^<[^>]+>/.exec(getNodeOuterHtml(node));
+  return match ? match[0] : '';
+}
+
+function layoutWrapperTag(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return '';
+  const tag = node.tagName.toLowerCase();
+  return /^ac:(layout|layout-section|layout-cell)$/.test(tag) ? tag : '';
+}
+
+function layoutSkeletonForNode(node) {
+  const tag = layoutWrapperTag(node);
+  if (!tag) return '';
+
+  const attrs = Array.from(node.attributes || [])
+    .map((attr) => `${attr.name.toLowerCase()}=${normaliseSignatureText(attr.value)}`)
+    .sort()
+    .join('|');
+  const children = Array.from(node.children || [])
+    .map(layoutSkeletonForNode)
+    .filter(Boolean)
+    .join('');
+
+  return `<${tag}[${attrs}]>${children}</${tag}>`;
+}
+
+function layoutStructureSignature(html) {
+  const parserSafeHtml = normaliseSelfClosingTimeTagsForParsing(html || '');
+  const doc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
+  return Array.from(doc.body.children)
+    .filter((node) => layoutWrapperTag(node) === 'ac:layout')
+    .map(layoutSkeletonForNode)
+    .join('');
+}
+
+function renderedLayoutBoundaryStart(node) {
+  const tag = layoutWrapperTag(node);
+  const openingTag = storageOpeningTag(node);
+
+  if (tag === 'ac:layout') {
+    return '<div data-dh-node-type="layout">';
+  }
+
+  if (tag === 'ac:layout-cell') {
+    const width = normaliseLayoutColumnWidth(
+      extractAttr(openingTag, ['data-width', 'ac:width', 'width'])
+    );
+    const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
+    return `<div data-dh-layout-cell="true"${widthAttr}>`;
+  }
+
+  if (tag === 'ac:layout-section') {
+    const layoutType = normaliseLayoutType(
+      extractAttr(openingTag, ['ac:type', 'type', 'data-layout', 'layout'])
+    );
+    const cells = Array.from(node.children || []).filter(
+      (child) => layoutWrapperTag(child) === 'ac:layout-cell'
+    );
+    const rawWidths = cells.map((cell) =>
+      normaliseLayoutColumnWidth(
+        extractAttr(storageOpeningTag(cell), ['data-width', 'ac:width', 'width'])
+      )
+    );
+    const customWidths =
+      !layoutTypeUsesFixedSidebarRatio(layoutType) &&
+      rawWidths.length &&
+      rawWidths.every(Boolean)
+        ? rawWidths
+        : [];
+    const columnWeights = customWidths.length
+      ? customWidths
+      : layoutTypeColumnWeights(layoutType);
+    const customWidthAttr = customWidths.length
+      ? ' data-dh-layout-custom-widths="true"'
+      : '';
+    const gridStyle = columnWeights.length
+      ? styleAttr([
+          `grid-template-columns: ${columnWeights
+            .map((width) => `minmax(0, ${width}fr)`)
+            .join(' ')}`,
+        ])
+      : '';
+
+    return [
+      `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
+      customWidthAttr,
+      gridStyle,
+      '>',
+    ].join('');
+  }
+
+  return '';
+}
+
+function createLayoutBoundaryBlock(path, edge, wrapperTag, storageHtml, fullRenderedHtml) {
+  return {
+    key: `layout-boundary:${path}`,
+    tag: 'layout_boundary',
+    nodeType: 'layout_boundary',
+    text: '',
+    html: storageHtml,
+    renderedHtml: '<!-- dynamic-history-layout-boundary -->',
+    fullRenderedHtml,
+    isStructuralBoundary: true,
+    layoutBoundaryEdge: edge,
+    layoutWrapperTag: wrapperTag,
+  };
+}
+
+export function prepareConfluenceHtml(
+  html,
+  baseUrl,
+  attachmentsByFilename = {},
+  usersByAccountId = {},
+  options = {}
+) {
   if (!html) return '';
+
+  // Layouts remain one atomic recovery block, but each cell is rendered in
+  // isolation. This prevents broad storage-macro patterns from matching across
+  // cell boundaries and swallowing otherwise valid content in large layouts.
+  const sourceHtml = options.skipLayouts
+    ? html
+    : expandConfluenceLayouts(html, (cellBody) =>
+        prepareConfluenceHtml(
+          cellBody,
+          baseUrl,
+          attachmentsByFilename,
+          usersByAccountId,
+          { skipLayouts: true }
+        )
+      );
 
   // Convert Confluence-only storage constructs into ordinary, sanitized HTML.
   // This is intentionally a renderer-only layer: the original storage fragments
@@ -2088,9 +2446,17 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
       expandUnsupportedStorageNodes(
         expandKnownStructuredMacros(
           expandConfluenceTaskLists(
-            expandAdfNodes(expandConfluenceLinks(expandConfluenceCodeMacros(html), baseUrl))
+            expandAdfNodes(
+              expandConfluenceLinks(
+                expandConfluenceCodeMacros(sourceHtml),
+                baseUrl,
+                usersByAccountId
+              ),
+              usersByAccountId
+            )
           )
-        )
+        ),
+        usersByAccountId
       )
     )
   )
@@ -2134,7 +2500,7 @@ export function prepareConfluenceHtml(html, baseUrl, attachmentsByFilename = {})
           });
           return renderedImage;
         }
-        return `<figure><div data-image-placeholder="true">Image attachment: ${escapeHtml(
+        return `<figure data-dh-node-type="image"><div data-image-placeholder="true">Image attachment: ${escapeHtml(
           filename
         )}</div></figure>`;
       }
@@ -2420,6 +2786,164 @@ function normaliseComparableText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function normaliseSignatureText(text) {
+  return String(text || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normaliseSignatureStyle(style) {
+  return String(style || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separatorIndex = part.indexOf(':');
+      if (separatorIndex === -1) return part.toLowerCase();
+      const name = part.slice(0, separatorIndex).trim().toLowerCase();
+      const value = part.slice(separatorIndex + 1).trim().replace(/\s+/g, ' ');
+      return `${name}:${value}`;
+    })
+    .sort()
+    .join(';');
+}
+
+function canonicalTagName(tagName) {
+  const tag = String(tagName || '').toLowerCase();
+  if (tag === 'b') return 'strong';
+  if (tag === 'i') return 'em';
+  return tag;
+}
+
+function canonicalAttributeValue(name, value) {
+  if (name === 'style') return normaliseSignatureStyle(value);
+  return normaliseSignatureText(value);
+}
+
+function shouldIncludeSignatureAttribute(name) {
+  if (!name) return false;
+  if (name === 'class') return false;
+  if (name === 'aria-hidden') return false;
+  if (name.startsWith('data-dh-raw')) return false;
+  if (name.startsWith('data-dh-task-marker')) return false;
+
+  return (
+    name === 'href' ||
+    name === 'src' ||
+    name === 'alt' ||
+    name === 'title' ||
+    name === 'datetime' ||
+    name === 'width' ||
+    name === 'height' ||
+    name === 'start' ||
+    name === 'type' ||
+    name === 'colspan' ||
+    name === 'rowspan' ||
+    name === 'style' ||
+    name.startsWith('data-dh-')
+  );
+}
+
+function canonicalDomSignature(node) {
+  if (!node) return '';
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    return normaliseSignatureText(node.textContent || '');
+  }
+
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+  const element = node;
+  if (element.matches && element.matches('[data-dh-raw-inspector], [data-dh-task-marker]')) {
+    return '';
+  }
+
+  const tag = canonicalTagName(element.tagName);
+  const attrs = Array.from(element.attributes || [])
+    .map((attr) => ({
+      name: attr.name.toLowerCase(),
+      value: attr.value,
+    }))
+    .filter((attr) => shouldIncludeSignatureAttribute(attr.name))
+    .map((attr) => `${attr.name}=${canonicalAttributeValue(attr.name, attr.value)}`)
+    .filter((attr) => !attr.endsWith('='))
+    .sort();
+
+  const childParts = [];
+  let previousWasBreak = false;
+
+  Array.from(element.childNodes || []).forEach((child) => {
+    if (child.nodeType === Node.ELEMENT_NODE && /^br$/i.test(child.tagName)) {
+      if (!previousWasBreak) childParts.push('br');
+      previousWasBreak = true;
+      return;
+    }
+
+    const signature = canonicalDomSignature(child);
+    if (!signature) return;
+    childParts.push(signature);
+    previousWasBreak = false;
+  });
+
+  return `${tag}[${attrs.join('|')}](${childParts.join('|')})`;
+}
+
+function imageRawSignature(rawHtml) {
+  if (!rawHtml || !/<(?:ac:image|img)\b/i.test(rawHtml)) return '';
+
+  const imageAttrs = [
+    'ac:width',
+    'width',
+    'ac:height',
+    'height',
+    'ac:align',
+    'align',
+    'ac:layout',
+    'layout',
+    'ac:custom-width',
+    'custom-width',
+    'ac:border',
+    'border',
+    'ac:alt',
+    'alt',
+    'ac:title',
+    'title',
+    'ac:rotation',
+    'rotation',
+  ];
+  const referenceAttrs = [
+    'ri:filename',
+    'filename',
+    'ri:attachment-id',
+    'attachment-id',
+    'ri:content-id',
+    'content-id',
+    'ri:value',
+    'value',
+    'src',
+  ];
+  const values = [];
+
+  imageAttrs.forEach((name) => {
+    const value = extractExactAttr(rawHtml, [name]);
+    if (value) values.push(`${name.toLowerCase()}=${normaliseSignatureText(value)}`);
+  });
+
+  referenceAttrs.forEach((name) => {
+    const value = extractAttr(rawHtml, [name]);
+    if (value) values.push(`${name.toLowerCase()}=${normaliseSignatureText(value)}`);
+  });
+
+  const borderMark = /<ac:adf-mark\b[^>]*(?:key|type)=["']border["'][^>]*>/i.exec(rawHtml);
+  if (borderMark) values.push(`border-mark=${normaliseSignatureText(borderMark[0])}`);
+
+  const caption = extractImageCaption(rawHtml);
+  if (caption) values.push(`caption=${normaliseSignatureText(caption)}`);
+
+  return values.sort().join('|');
+}
+
 function stableHtmlSignature(node) {
   if (node.nodeType === Node.TEXT_NODE) return normaliseBlockText(node);
   if (node.nodeType !== Node.ELEMENT_NODE) return '';
@@ -2427,21 +2951,17 @@ function stableHtmlSignature(node) {
   const element = node;
   const tag = element.tagName.toLowerCase();
   const text = normaliseBlockText(element);
-  if (text) return `${tag}:${text}`;
-
-  if (tag === 'img') {
-    return `img:${element.getAttribute('src') || element.getAttribute('alt') || element.outerHTML}`;
-  }
-
-  const img = element.querySelector && element.querySelector('img');
-  if (img) {
-    return `image-block:${img.getAttribute('src') || img.getAttribute('alt') || element.outerHTML}`;
+  if (
+    element.getAttribute('data-dh-node-type') === 'code_block' ||
+    /^pre|code$/i.test(element.tagName)
+  ) {
+    return `${canonicalTagName(tag)}:code=${text}`;
   }
 
   if (tag === 'hr') return 'hr';
   if (tag === 'br') return 'br';
 
-  return `${tag}:${element.outerHTML.replace(/\s+/g, ' ').trim()}`;
+  return `${canonicalTagName(tag)}:dom=${canonicalDomSignature(element)}`;
 }
 
 function isTextDiffableTag(tag) {
@@ -2456,6 +2976,7 @@ function getComparableNodeType(node) {
 
   const tag = node.tagName.toLowerCase();
   if (/^h[1-6]$/.test(tag)) return 'heading';
+  if (tag === 'ul' || tag === 'ol') return 'list';
   if (tag === 'li') return 'list_item';
   if (tag === 'blockquote') return 'blockquote';
   if (tag === 'td' || tag === 'th') return 'table_cell';
@@ -2490,12 +3011,15 @@ function extractBlockMeta(node, options = {}) {
   const hasNonTextMedia = Boolean(
     node.querySelector && node.querySelector('img, table, hr, iframe, video, audio')
   );
+  const rawImageSignature = nodeType === 'image' ? imageRawSignature(options.rawHtml || html) : '';
   const key =
     nodeType === 'unsupported'
       ? `unsupported:${hashString(options.rawHtml || html)}`
       : nodeType === 'task_item'
         ? `task_item:${taskStatus}:${text}`
-        : stableHtmlSignature(node);
+        : rawImageSignature
+          ? `${stableHtmlSignature(node)}:raw-image=${rawImageSignature}`
+          : stableHtmlSignature(node);
 
   return {
     key,
@@ -2596,7 +3120,12 @@ function isRawTransparentContainer(node) {
   const tag = node.tagName.toLowerCase();
 
   if (/^(p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|hr)$/i.test(tag)) return false;
-  if (/^ac:(layout|layout-section|layout-cell)$/i.test(tag)) return true;
+  // A complete Confluence layout is one recovery unit. Splitting its cells into
+  // independent blocks loses the section/cell wrappers when draft HTML is
+  // reconstructed. Nested section and cell nodes remain transparent only when
+  // encountered without their expected root layout wrapper.
+  if (/^ac:layout$/i.test(tag)) return false;
+  if (/^ac:(layout-section|layout-cell)$/i.test(tag)) return true;
   if (/^(ac|ri):/i.test(tag)) return false;
 
   return hasBlockElementChildren(node);
@@ -2619,7 +3148,7 @@ function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
 
   if (/<ac:task-list\b/i.test(rawHtml)) {
     const taskItems = [];
-    const taskRe = /<ac:task\b[^>]*>[\s\S]*?<\/ac:task>/gi;
+    const taskRe = /<ac:task(?=[\s>])[^>]*>[\s\S]*?<\/ac:task>/gi;
     let match = taskRe.exec(rawHtml);
 
     while (match) {
@@ -2640,6 +3169,22 @@ function extractRawListItemHtmls(rawHtml, listTag, expectedCount) {
   return items.map((item) => wrapListItemHtml(listTag, item.outerHTML));
 }
 
+function extractRawDecisionItemHtmls(rawHtml, expectedCount) {
+  if (!rawHtml) return [];
+
+  const decisionItems = [];
+  const decisionRe =
+    /<ac:adf-node\b[^>]*(?:type|ac:type)=["'](?:decision-item|decisionItem)["'][^>]*>[\s\S]*?<\/ac:adf-node>/gi;
+  let match = decisionRe.exec(rawHtml);
+
+  while (match) {
+    decisionItems.push(`<ac:adf-node type="decision-list">${match[0]}</ac:adf-node>`);
+    match = decisionRe.exec(rawHtml);
+  }
+
+  return decisionItems.length === expectedCount ? decisionItems : [];
+}
+
 function extractComparableBlocksFromPreparedNode(node, rawHtml) {
   if (isTransparentContainer(node)) {
     return Array.from(node.childNodes)
@@ -2647,7 +3192,34 @@ function extractComparableBlocksFromPreparedNode(node, rawHtml) {
       .flatMap((child) => extractComparableBlocksFromPreparedNode(child, getNodeOuterHtml(child)));
   }
 
-  if (node.nodeType === Node.ELEMENT_NODE && /^(ul|ol)$/i.test(node.tagName)) {
+  if (
+    node.nodeType === Node.ELEMENT_NODE &&
+    node.getAttribute('data-dh-node-type') === 'decision_list'
+  ) {
+    const decisions = Array.from(node.children).filter(
+      (child) => child.getAttribute('data-dh-node-type') === 'decision'
+    );
+    const rawDecisionHtmls = extractRawDecisionItemHtmls(rawHtml, decisions.length);
+
+    if (decisions.length) {
+      return decisions.map((decision) => {
+        const renderedHtml = getNodeOuterHtml(decision);
+        const reconstructionHtml = rawDecisionHtmls.length ? rawDecisionHtmls.shift() : renderedHtml;
+
+        return extractBlockMeta(decision, {
+          html: reconstructionHtml,
+          renderedHtml,
+          rawHtml: reconstructionHtml,
+        });
+      });
+    }
+  }
+
+  if (
+    node.nodeType === Node.ELEMENT_NODE &&
+    /^(ul|ol)$/i.test(node.tagName) &&
+    node.getAttribute('data-dh-node-type') === 'task_list'
+  ) {
     const listTag = node.tagName.toLowerCase();
     const items = Array.from(node.children).filter((child) => /^li$/i.test(child.tagName));
 
@@ -2677,22 +3249,124 @@ function extractComparableBlocksFromPreparedNode(node, rawHtml) {
   ];
 }
 
-function extractDiffBlocks(html, baseUrl, attachmentsByFilename) {
+function extractPreparedBlocksFromRawNode(
+  rawNode,
+  baseUrl,
+  attachmentsByFilename,
+  usersByAccountId,
+  keyPrefix = ''
+) {
+  const rawHtml = getNodeOuterHtml(rawNode);
+  const prepared = prepareConfluenceHtml(
+    rawHtml,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId
+  );
+  const preparedDoc = new DOMParser().parseFromString(prepared, 'text/html');
+
+  return Array.from(preparedDoc.body.childNodes)
+    .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
+    .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml))
+    .map((block) => ({
+      ...block,
+      key: keyPrefix ? `${keyPrefix}:${block.key}` : block.key,
+      layoutPath: keyPrefix || '',
+    }));
+}
+
+function extractLayoutDiffBlocks(
+  layoutNode,
+  baseUrl,
+  attachmentsByFilename,
+  usersByAccountId,
+  layoutIndex
+) {
+  function walkWrapper(node, path) {
+    const tag = layoutWrapperTag(node);
+    if (!tag) return [];
+
+    const blocks = [
+      createLayoutBoundaryBlock(
+        `${path}:start`,
+        'start',
+        tag,
+        storageOpeningTag(node),
+        renderedLayoutBoundaryStart(node)
+      ),
+    ];
+
+    let wrapperIndex = 0;
+    Array.from(node.childNodes || []).forEach((child) => {
+      const childTag = layoutWrapperTag(child);
+      if (childTag) {
+        blocks.push(...walkWrapper(child, `${path}:${childTag}:${wrapperIndex}`));
+        wrapperIndex++;
+        return;
+      }
+
+      if (tag !== 'ac:layout-cell') return;
+
+      const rawNodes = collectRawBlockNodes(child);
+      rawNodes.forEach((rawNode) => {
+        blocks.push(
+          ...extractPreparedBlocksFromRawNode(
+            rawNode,
+            baseUrl,
+            attachmentsByFilename,
+            usersByAccountId,
+            path
+          )
+        );
+      });
+    });
+
+    blocks.push(
+      createLayoutBoundaryBlock(`${path}:end`, 'end', tag, `</${tag}>`, '</div>')
+    );
+    return blocks;
+  }
+
+  return walkWrapper(layoutNode, `layout:${layoutIndex}`);
+}
+
+function extractDiffBlocks(
+  html,
+  baseUrl,
+  attachmentsByFilename,
+  usersByAccountId = {},
+  options = {}
+) {
   const parserSafeHtml = normaliseSelfClosingTimeTagsForParsing(html || '');
   const rawDoc = new DOMParser().parseFromString(parserSafeHtml, 'text/html');
-  const rawBlocks = Array.from(rawDoc.body.childNodes)
+  let layoutIndex = 0;
+
+  return Array.from(rawDoc.body.childNodes)
     .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-    .flatMap(collectRawBlockNodes);
+    .flatMap((node) => {
+      if (
+        options.splitCompatibleLayouts &&
+        layoutWrapperTag(node) === 'ac:layout'
+      ) {
+        const blocks = extractLayoutDiffBlocks(
+          node,
+          baseUrl,
+          attachmentsByFilename,
+          usersByAccountId,
+          layoutIndex
+        );
+        layoutIndex++;
+        return blocks;
+      }
 
-  return rawBlocks
-    .flatMap((rawNode) => {
-      const rawHtml = getNodeOuterHtml(rawNode);
-      const prepared = prepareConfluenceHtml(rawHtml, baseUrl, attachmentsByFilename);
-      const preparedDoc = new DOMParser().parseFromString(prepared, 'text/html');
-
-      return Array.from(preparedDoc.body.childNodes)
-        .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
-        .flatMap((node) => extractComparableBlocksFromPreparedNode(node, rawHtml));
+      return collectRawBlockNodes(node).flatMap((rawNode) =>
+        extractPreparedBlocksFromRawNode(
+          rawNode,
+          baseUrl,
+          attachmentsByFilename,
+          usersByAccountId
+        )
+      );
     })
     .filter((block) => block.html);
 }
@@ -2711,6 +3385,10 @@ function createDiffSummary(overrides = {}) {
 }
 
 function renderDiffBlock(block) {
+  if (block.isStructuralBoundary) {
+    return block.fullRenderedHtml || '';
+  }
+
   if (block.type === 'same') return block.renderedHtml || block.html;
 
   const html =
@@ -2735,6 +3413,11 @@ function makeSameBlock(block) {
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    fullRenderedHtml: block.fullRenderedHtml,
+    isStructuralBoundary: block.isStructuralBoundary,
+    layoutPath: block.layoutPath,
+    layoutBoundaryEdge: block.layoutBoundaryEdge,
+    layoutWrapperTag: block.layoutWrapperTag,
   };
 }
 
@@ -2749,6 +3432,11 @@ function makeAddedBlock(block) {
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    fullRenderedHtml: block.fullRenderedHtml,
+    isStructuralBoundary: block.isStructuralBoundary,
+    layoutPath: block.layoutPath,
+    layoutBoundaryEdge: block.layoutBoundaryEdge,
+    layoutWrapperTag: block.layoutWrapperTag,
     added: 1,
     removed: 0,
   };
@@ -2765,6 +3453,11 @@ function makeRemovedBlock(block) {
     taskStatus: block.taskStatus,
     supportLevel: block.supportLevel,
     rawPreview: block.rawPreview,
+    fullRenderedHtml: block.fullRenderedHtml,
+    isStructuralBoundary: block.isStructuralBoundary,
+    layoutPath: block.layoutPath,
+    layoutBoundaryEdge: block.layoutBoundaryEdge,
+    layoutWrapperTag: block.layoutWrapperTag,
     added: 0,
     removed: 1,
   };
@@ -2778,7 +3471,7 @@ function buildDiffResult(blocks, summaryOverrides = {}) {
   // future component-based rendering. Keeping both outputs avoids a risky UI
   // rewrite while making the diff result easier for the frontend to consume.
   blocks.forEach((block) => {
-    if (block.type === 'same') summary.unchangedBlocks++;
+    if (block.type === 'same' && !block.isStructuralBoundary) summary.unchangedBlocks++;
     if (block.type === 'added') summary.addedBlocks++;
     if (block.type === 'removed') summary.removedBlocks++;
     if (block.type === 'modified') summary.modifiedBlocks++;
@@ -3128,29 +3821,71 @@ function extractTableRows(html) {
   const doc = new DOMParser().parseFromString(html || '', 'text/html');
   const table = doc.body.querySelector('table');
   if (!table) return [];
+  const occupied = [];
+  let effectiveColumnCount = 0;
 
-  return Array.from(table.querySelectorAll('tr')).map((row, rowIndex) => {
+  const rows = Array.from(table.querySelectorAll('tr')).map((row, rowIndex) => {
+    let effectiveColIndex = 0;
+    occupied[rowIndex] = occupied[rowIndex] || [];
+
     const cells = Array.from(row.children)
       .filter((cell) => /^(td|th)$/i.test(cell.tagName))
-      .map((cell, colIndex) => ({
-        rowIndex,
-        colIndex,
-        tag: cell.tagName.toLowerCase(),
-        text: normaliseBlockText(cell),
-        html: cell.innerHTML,
-      }));
+      .map((cell, cellIndex) => {
+        while (occupied[rowIndex][effectiveColIndex]) effectiveColIndex++;
+
+        const rowspan = Math.max(1, Number.parseInt(cell.getAttribute('rowspan') || '1', 10) || 1);
+        const colspan = Math.max(1, Number.parseInt(cell.getAttribute('colspan') || '1', 10) || 1);
+        const colIndex = effectiveColIndex;
+
+        for (let r = rowIndex; r < rowIndex + rowspan; r++) {
+          occupied[r] = occupied[r] || [];
+          for (let c = colIndex; c < colIndex + colspan; c++) {
+            occupied[r][c] = true;
+          }
+        }
+
+        effectiveColIndex += colspan;
+        effectiveColumnCount = Math.max(effectiveColumnCount, colIndex + colspan);
+
+        return {
+          rowIndex,
+          cellIndex,
+          colIndex,
+          tag: cell.tagName.toLowerCase(),
+          rowspan,
+          colspan,
+          text: normaliseBlockText(cell),
+          html: cell.innerHTML,
+          signature: canonicalDomSignature(cell),
+        };
+      });
 
     return { rowIndex, cells };
   });
+
+  rows.effectiveColumnCount = effectiveColumnCount;
+  return rows;
 }
 
 function haveSameTableShape(oldRows, currentRows) {
   if (!oldRows.length || !currentRows.length) return false;
   if (oldRows.length !== currentRows.length) return false;
+  if (oldRows.effectiveColumnCount !== currentRows.effectiveColumnCount) return false;
 
   return oldRows.every((oldRow, rowIndex) => {
     const currentRow = currentRows[rowIndex];
-    return currentRow && oldRow.cells.length === currentRow.cells.length;
+    if (!currentRow || oldRow.cells.length !== currentRow.cells.length) return false;
+
+    return oldRow.cells.every((oldCell, cellIndex) => {
+      const currentCell = currentRow.cells[cellIndex];
+      return (
+        currentCell &&
+        oldCell.tag === currentCell.tag &&
+        oldCell.colIndex === currentCell.colIndex &&
+        oldCell.rowspan === currentCell.rowspan &&
+        oldCell.colspan === currentCell.colspan
+      );
+    });
   });
 }
 
@@ -3220,6 +3955,87 @@ function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
     removed,
     limited,
   };
+}
+
+function getChangedCompatibleTableCells(oldRows, currentRows) {
+  const changedCells = [];
+
+  oldRows.forEach((oldRow, rowIndex) => {
+    const currentRow = currentRows[rowIndex];
+    if (!currentRow) return;
+
+    oldRow.cells.forEach((oldCell, cellIndex) => {
+      const currentCell = currentRow.cells[cellIndex];
+      if (!currentCell || oldCell.signature === currentCell.signature) return;
+
+      changedCells.push({
+        rowIndex,
+        cellIndex,
+        colIndex: oldCell.colIndex,
+        oldText: oldCell.text,
+        newText: currentCell.text,
+      });
+    });
+  });
+
+  return changedCells;
+}
+
+function renderTableWithChangedCells(block, changedCells, changeType) {
+  const doc = new DOMParser().parseFromString(block.renderedHtml || block.html || '', 'text/html');
+  const table = doc.body.querySelector('table');
+  if (!table) return block.renderedHtml || block.html || '';
+
+  table.classList.add('dh-table-diff', 'dh-table-diff--cell-level');
+  changedCells.forEach((changedCell) => {
+    const row = table.querySelectorAll('tr')[changedCell.rowIndex];
+    if (!row) return;
+
+    const cell = Array.from(row.children).filter((child) => /^(td|th)$/i.test(child.tagName))[
+      changedCell.cellIndex
+    ];
+    if (!cell) return;
+
+    cell.classList.add('dh-table-cell-diff', `dh-table-cell-diff--${changeType}`);
+  });
+
+  return table.outerHTML;
+}
+
+function buildTableReplacementBlocks(oldBlock, currentBlock) {
+  const oldRows = extractTableRows(oldBlock.renderedHtml || oldBlock.html);
+  const currentRows = extractTableRows(currentBlock.renderedHtml || currentBlock.html);
+  const removedBlock = makeRemovedBlock(oldBlock);
+  const addedBlock = makeAddedBlock(currentBlock);
+
+  if (haveSameTableShape(oldRows, currentRows)) {
+    const changedCells = getChangedCompatibleTableCells(oldRows, currentRows);
+
+    if (changedCells.length) {
+      removedBlock.renderedHtml = renderTableWithChangedCells(oldBlock, changedCells, 'removed');
+      addedBlock.renderedHtml = renderTableWithChangedCells(currentBlock, changedCells, 'added');
+    }
+
+    removedBlock.tableDiff = {
+      mode: 'cell_level',
+      changedCells,
+      rows: currentRows.length,
+      cells: countTableCells(currentRows),
+    };
+    addedBlock.tableDiff = removedBlock.tableDiff;
+    return [removedBlock, addedBlock];
+  }
+
+  removedBlock.tableDiff = {
+    mode: 'structure',
+    reason: 'table shape changed',
+    oldRows: oldRows.length,
+    currentRows: currentRows.length,
+    oldCells: countTableCells(oldRows),
+    currentCells: countTableCells(currentRows),
+  };
+  addedBlock.tableDiff = removedBlock.tableDiff;
+  return [removedBlock, addedBlock];
 }
 
 function buildSideBySideTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
@@ -3352,44 +4168,24 @@ function buildTaskItemDiff(oldBlock, currentBlock) {
   };
 }
 
-function canCoalesceReplacementBlocks(removedBlock, addedBlock) {
+function canDecorateTableReplacement(removedBlock, addedBlock) {
   if (!removedBlock || !addedBlock) return false;
   if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
-
-  // A replacement should occupy the same structural role in the page. This
-  // prevents an adjacent paragraph and image, for example, from becoming one
-  // decision merely because the LCS traversal emitted them next to each other.
-  if (
-    removedBlock.nodeType !== addedBlock.nodeType ||
-    removedBlock.tag !== addedBlock.tag
-  ) {
-    return false;
-  }
-
-  return (
-    isTextDiffableTag(removedBlock.tag) ||
-    removedBlock.nodeType === 'table' ||
-    removedBlock.nodeType === 'code_block'
-  );
+  return removedBlock.nodeType === 'table' && addedBlock.nodeType === 'table';
 }
 
-function coalesceReplacementBlocks(blocks) {
-  const coalesced = [];
+function decorateTableReplacementBlocks(blocks) {
+  const decorated = [];
 
   for (let index = 0; index < blocks.length; index++) {
     const removedBlock = blocks[index];
     const addedBlock = blocks[index + 1];
 
-    if (!canCoalesceReplacementBlocks(removedBlock, addedBlock)) {
-      coalesced.push(removedBlock);
+    if (!canDecorateTableReplacement(removedBlock, addedBlock)) {
+      decorated.push(removedBlock);
       continue;
     }
 
-    // The LCS algorithm represents a low-similarity edit, such as changing
-    // "456456" to "123456", as one removal followed by one addition. Rebuild
-    // those two output blocks as a single internal modification so the UI can
-    // present one atomic old-versus-current choice while still displaying only
-    // GitHub-style "-" and "+" rows.
     const oldComparableBlock = {
       tag: removedBlock.tag,
       nodeType: removedBlock.nodeType,
@@ -3413,16 +4209,39 @@ function coalesceReplacementBlocks(blocks) {
       canInlineDiff: isTextDiffableTag(addedBlock.tag),
     };
 
-    coalesced.push(buildModifiedBlockDiff(oldComparableBlock, currentComparableBlock));
+    decorated.push(...buildTableReplacementBlocks(oldComparableBlock, currentComparableBlock));
     index++;
   }
 
-  return coalesced;
+  return decorated;
 }
 
-export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename = {}) {
-  const oldBlocks = extractDiffBlocks(oldHtml, baseUrl, attachmentsByFilename);
-  const currentBlocks = extractDiffBlocks(currentHtml, baseUrl, attachmentsByFilename);
+export function buildRichTextDiffHtml(
+  oldHtml,
+  currentHtml,
+  baseUrl,
+  attachmentsByFilename = {},
+  usersByAccountId = {}
+) {
+  const oldLayoutStructure = layoutStructureSignature(oldHtml);
+  const currentLayoutStructure = layoutStructureSignature(currentHtml);
+  const splitCompatibleLayouts = Boolean(
+    oldLayoutStructure && oldLayoutStructure === currentLayoutStructure
+  );
+  const oldBlocks = extractDiffBlocks(
+    oldHtml,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId,
+    { splitCompatibleLayouts }
+  );
+  const currentBlocks = extractDiffBlocks(
+    currentHtml,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId,
+    { splitCompatibleLayouts }
+  );
   const oldCount = oldBlocks.length;
   const currentCount = currentBlocks.length;
   const maxCells = 120000;
@@ -3464,19 +4283,6 @@ export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachments
       blocks.push(makeSameBlock(currentBlocks[j]));
       i++;
       j++;
-    } else if (
-      canPairForInlineDiff(oldBlocks[i], currentBlocks[j]) &&
-      dp[i + 1][j + 1] >= Math.max(dp[i + 1][j], dp[i][j + 1])
-    ) {
-      // Only substitute the two blocks when moving diagonally does not discard
-      // a better exact match later in either version. Without this guard, an
-      // inserted paragraph that resembles the following unchanged paragraph
-      // can be mistaken for a replacement.
-      const modified = buildModifiedBlockDiff(oldBlocks[i], currentBlocks[j]);
-      blocks.push(modified);
-      limited = limited || modified.limited;
-      i++;
-      j++;
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
       blocks.push(makeRemovedBlock(oldBlocks[i]));
       i++;
@@ -3496,7 +4302,7 @@ export function buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachments
     j++;
   }
 
-  return buildDiffResult(coalesceReplacementBlocks(blocks), { limited });
+  return buildDiffResult(decorateTableReplacementBlocks(blocks), { limited });
 }
 
 export function countWords(text) {
