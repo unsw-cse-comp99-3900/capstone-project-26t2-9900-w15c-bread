@@ -30,6 +30,7 @@ function App() {
   const [data, setData] = useState(null);
   const [usingMock, setUsingMock] = useState(false);
   const [selectedNumber, setSelectedNumber] = useState(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +44,8 @@ function App() {
       };
     }
 
+    setLoading(true);
+
     loadForgeBridge()
       .then(({ invoke }) => withTimeout(invoke('getPageVersions'), 15000))
       .then((result) => {
@@ -54,15 +57,33 @@ function App() {
       .catch(() => {
         // Not in Confluence / resolver error -> show mock data so the UI is still visible.
         if (cancelled) return;
-        setData(mockData);
-        setUsingMock(true);
+        // During a post-write refresh, retain the real page data rather than
+        // replacing it with mock content if the refresh request is transiently
+        // unavailable. The modal already reports the completed write result.
+        if (refreshToken === 0) {
+          setData(mockData);
+          setUsingMock(true);
+        }
         setLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshToken]);
+
+  const handlePageUpdated = (updatedPage) => {
+    setRefreshToken((current) => current + 1);
+
+    // If the PUT succeeded before Confluence's version read model caught up,
+    // refresh once more after the normal consistency window so the timeline
+    // replaces the old Current entry without requiring the user to reopen the app.
+    if (updatedPage && updatedPage.versionConfirmed === false) {
+      setTimeout(() => {
+        setRefreshToken((current) => current + 1);
+      }, 2000);
+    }
+  };
 
   const handleClose = () => {
     if (isLocalDevelopment()) return;
@@ -123,6 +144,7 @@ function App() {
             attachmentsByFilename={data ? data.attachmentsByFilename : {}}
             currentVersion={currentVersion}
             selectedVersion={selectedVersion}
+            onPageUpdated={handlePageUpdated}
           />
         </main>
       </div>

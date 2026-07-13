@@ -1586,6 +1586,17 @@ body {
   background: #0747a6;
 }
 
+.dh-draft-modal__footer .dh-write-back-button {
+  border-color: var(--dh-blue);
+  background: var(--dh-blue);
+  color: #fff;
+  font-weight: 600;
+}
+
+.dh-draft-modal__footer .dh-write-back-button:hover:not(:disabled) {
+  background: #0747a6;
+}
+
 @media (max-width: 980px) {
   .dh-inline-selection-toolbar {
     align-items: flex-start;

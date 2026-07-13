@@ -7,6 +7,7 @@ import {
   prepareConfluenceHtml,
   storageToPlainText,
 } from '../utils';
+import { buildRecoveryStorageHtml } from '../recoveryStorage';
 
 const CHANGE_BLOCK_TYPES = new Set(['added', 'removed', 'modified']);
 
@@ -179,6 +180,7 @@ function fallbackTextHtml(text) {
   return paragraph.outerHTML;
 }
 
+<<<<<<< Updated upstream
 function getBlockPreviewHtml(block, selected) {
   if (!block) return '';
 
@@ -247,16 +249,67 @@ function buildDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()
     .join('');
 }
 
+<<<<<<< Updated upstream
 function buildRenderedDraftPreviewHtml(blocks, blockChoices, blockChoiceKeys = new Map()) {
   return (blocks || [])
     .map((block, index) => {
       const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
       const choice = blockChoices.get(choiceKey);
       return getBlockRenderedPreviewHtml(block, choice !== 'old');
+=======
+=======
+function getBlockRenderedPreviewHtml(block, selected) {
+  if (!block) return '';
+
+  if (block.isStructuralBoundary) {
+    return block.fullRenderedHtml || '';
+  }
+
+  if (block.type === 'same') {
+    return block.renderedHtml || block.html || '';
+  }
+
+  if (block.type === 'added') {
+    return selected ? block.renderedHtml || fallbackTextHtml(block.text) : '';
+  }
+
+  if (block.type === 'removed') {
+    return selected ? '' : block.renderedHtml || fallbackTextHtml(block.text);
+  }
+
+  if (block.type === 'modified') {
+    return selected
+      ? block.newRenderedHtml || block.renderedHtml || fallbackTextHtml(block.newText)
+      : block.oldRenderedHtml || fallbackTextHtml(block.oldText);
+  }
+
+  return block.renderedHtml || fallbackTextHtml(block.text);
+}
+
+export function buildRecoveryPreviewHtml(
+  blocks,
+  blockChoices = new Map(),
+  blockChoiceKeys = new Map()
+) {
+  return (blocks || [])
+    .map((block, index) => {
+      const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
+      const useCurrent = (blockChoices.get(choiceKey) || 'current') !== 'old';
+
+      // Preview the already-rendered Diff unit exactly once. The write-back
+      // Storage intentionally contains both an ADF Decision and its fallback;
+      // rendering that reconstructed Storage here was the post-merge change
+      // that made two Decisions appear as four in Draft Preview.
+      return getBlockRenderedPreviewHtml(block, useCurrent);
+>>>>>>> Stashed changes
     })
     .join('');
 }
 
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 function getDiffBlockHtml(block) {
   return (
     block.renderedHtml ||
@@ -493,6 +546,7 @@ function ComparisonPanel({
   attachmentsByFilename,
   currentVersion,
   selectedVersion,
+  onPageUpdated,
 }) {
   if (!selectedVersion) {
     return (
@@ -514,6 +568,7 @@ function ComparisonPanel({
       attachmentsByFilename={attachmentsByFilename}
       currentVersion={currentVersion}
       selectedVersion={selectedVersion}
+      onPageUpdated={onPageUpdated}
     />
   );
 }
@@ -525,14 +580,15 @@ function ComparisonPanelContent({
   attachmentsByFilename,
   currentVersion,
   selectedVersion,
+  onPageUpdated,
 }) {
   const [blockChoices, setBlockChoices] = useState(new Map());
   const [activeBlockKey, setActiveBlockKey] = useState(null);
   const [draftPreview, setDraftPreview] = useState(null);
-  const [draftCreation, setDraftCreation] = useState({
+  const [writeBack, setWriteBack] = useState({
     status: 'idle',
     error: '',
-    draft: null,
+    page: null,
   });
   const [mentionUsersByAccountId, setMentionUsersByAccountId] = useState({});
 
@@ -691,21 +747,24 @@ function ComparisonPanelContent({
     setBlockChoices(new Map());
     setActiveBlockKey(null);
     setDraftPreview(null);
-    setDraftCreation({ status: 'idle', error: '', draft: null });
+    setWriteBack({ status: 'idle', error: '', page: null });
   }, [selectableBlocks, selectedVersion.number, currentVersion && currentVersion.number]);
 
   useEffect(() => {
     if (!draftPreview) return undefined;
 
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape' && draftCreation.status !== 'loading') {
+      if (
+        event.key === 'Escape' &&
+        writeBack.status !== 'loading'
+      ) {
         setDraftPreview(null);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [draftCreation.status, draftPreview]);
+  }, [draftPreview, writeBack.status]);
 
   const handleChooseBlockVersion = (key, choice) => {
     setBlockChoices((previous) => {
@@ -725,18 +784,48 @@ function ComparisonPanelContent({
     setActiveBlockKey(null);
   };
 
+<<<<<<< Updated upstream
   const previewHtml = useMemo(
+<<<<<<< Updated upstream
     () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices, diffDisplay.blockChoiceKeys),
     [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
   );
   const renderedPreviewHtml = useMemo(
     () =>
       buildRenderedDraftPreviewHtml(
+=======
+    () => buildDraftPreviewHtml(richDiff.blocks || [], blockChoices),
+    [blockChoices, richDiff.blocks]
+=======
+  const recoveryStorage = useMemo(
+    () =>
+      buildRecoveryStorageHtml(
+>>>>>>> Stashed changes
         richDiff.blocks || [],
         blockChoices,
         diffDisplay.blockChoiceKeys
       ),
     [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+  );
+  const renderedPreviewHtml = useMemo(
+    () =>
+      recoveryStorage.error
+        ? ''
+        : buildRecoveryPreviewHtml(
+            richDiff.blocks || [],
+            blockChoices,
+            diffDisplay.blockChoiceKeys
+          ),
+    [
+      blockChoices,
+      diffDisplay.blockChoiceKeys,
+      recoveryStorage.error,
+      richDiff.blocks,
+    ]
+>>>>>>> Stashed changes
   );
 
   const diffSummary = richDiff.summary || {
@@ -756,46 +845,76 @@ function ComparisonPanelContent({
         blockIndices: row.blocks.map(({ index }) => index),
         choice: blockChoices.get(row.key) || 'current',
       })),
+<<<<<<< Updated upstream
       previewHtml: renderedPreviewHtml,
       storageHtml: previewHtml,
+=======
+<<<<<<< Updated upstream
+      previewHtml,
+=======
+      previewHtml: renderedPreviewHtml,
+      storageHtml: recoveryStorage.html,
+      storageError: recoveryStorage.error,
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
       createdAt: new Date().toISOString(),
     };
 
-    setDraftCreation({ status: 'idle', error: '', draft: null });
+    setWriteBack({ status: 'idle', error: '', page: null });
     setDraftPreview(draft);
   };
 
-  const handleConfirmCreateDraft = async () => {
-    if (!draftPreview || draftCreation.status === 'loading') return;
+  const handleConfirmWriteBack = async () => {
+    if (
+      !draftPreview ||
+      draftPreview.storageError ||
+      writeBack.status === 'loading'
+    ) return;
 
-    setDraftCreation({ status: 'loading', error: '', draft: null });
+    setWriteBack({ status: 'loading', error: '', page: null });
 
     try {
       const { invoke } = await import('@forge/bridge');
-      const createdDraft = await invoke('createDraft', {
+      const updatedPage = await invoke('writeRecoveredPage', {
         pageId,
+<<<<<<< Updated upstream
         bodyValue: draftPreview.storageHtml,
+=======
+<<<<<<< Updated upstream
+        bodyValue: draftPreview.previewHtml,
+=======
+        bodyValue: draftPreview.storageHtml,
+        expectedVersionNumber: draftPreview.currentVersionNumber,
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
       });
 
-      if (!createdDraft || !createdDraft.id) {
-        throw new Error('Confluence did not return the created draft details.');
+      if (updatedPage && updatedPage.ok === false) {
+        throw new Error(
+          updatedPage.error || 'Confluence rejected the recovered page update.'
+        );
       }
 
-      setDraftCreation({
-        status: 'success',
-        error: '',
-        draft: createdDraft,
-      });
+      if (!updatedPage || !updatedPage.id || !updatedPage.versionNumber) {
+        throw new Error('Confluence did not return the updated page details.');
+      }
+
+      setWriteBack({ status: 'success', error: '', page: updatedPage });
+      if (typeof onPageUpdated === 'function') {
+        onPageUpdated(updatedPage);
+      }
     } catch (error) {
-      setDraftCreation({
+      setWriteBack({
         status: 'error',
         error: error && error.message
           ? error.message
-          : 'Confluence could not create the draft.',
-        draft: null,
+          : 'Confluence could not write the recovered content.',
+        page: null,
       });
     }
   };
+
+  const operationIsLoading = writeBack.status === 'loading';
 
   return (
     <div className="dh-compare">
@@ -1024,7 +1143,7 @@ function ComparisonPanelContent({
           onMouseDown={(event) => {
             if (
               event.target === event.currentTarget &&
-              draftCreation.status !== 'loading'
+              !operationIsLoading
             ) {
               setDraftPreview(null);
             }
@@ -1049,7 +1168,7 @@ function ComparisonPanelContent({
               <button
                 aria-label="Close draft preview"
                 className="dh-draft-modal__close"
-                disabled={draftCreation.status === 'loading'}
+                disabled={operationIsLoading}
                 onClick={() => setDraftPreview(null)}
                 type="button"
               >
@@ -1074,56 +1193,53 @@ function ComparisonPanelContent({
 
             <footer className="dh-draft-modal__footer">
               <div className="dh-draft-modal__result" aria-live="polite">
-                {draftCreation.status === 'idle'
-                  ? 'Review the result, then create an unpublished Confluence draft.'
-                  : null}
-                {draftCreation.status === 'loading'
-                  ? 'Creating the Confluence draft…'
-                  : null}
-                {draftCreation.status === 'error' ? (
+                {draftPreview.storageError ? (
                   <span className="dh-draft-modal__result--error">
-                    {draftCreation.error}
+                    {draftPreview.storageError}
                   </span>
                 ) : null}
-                {draftCreation.status === 'success' ? (
+                {!draftPreview.storageError &&
+                writeBack.status === 'idle'
+                  ? 'Review the result, then write it to the current page.'
+                  : null}
+                {writeBack.status === 'loading'
+                  ? 'Writing recovered content to the current page…'
+                  : null}
+                {writeBack.status === 'error' ? (
+                  <span className="dh-draft-modal__result--error">
+                    {writeBack.error}
+                  </span>
+                ) : null}
+                {writeBack.status === 'success' ? (
                   <span className="dh-draft-modal__result--success">
-                    Draft “{draftCreation.draft.title}” was created.
+                    Current page updated to v{writeBack.page.versionNumber}.
                   </span>
                 ) : null}
               </div>
 
               <div className="dh-draft-modal__footer-actions">
                 <button
-                  disabled={draftCreation.status === 'loading'}
+                  disabled={operationIsLoading}
                   type="button"
                   onClick={() => setDraftPreview(null)}
                 >
                   Back to changes
                 </button>
 
-                {draftCreation.status === 'success' ? (
-                  draftCreation.draft.url ? (
-                    <a
-                      className="dh-primary-button"
-                      href={draftCreation.draft.url}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Open Confluence draft
-                    </a>
-                  ) : null
-                ) : (
-                  <button
-                    className="dh-primary-button"
-                    disabled={draftCreation.status === 'loading'}
-                    onClick={handleConfirmCreateDraft}
-                    type="button"
-                  >
-                    {draftCreation.status === 'loading'
-                      ? 'Creating…'
-                      : 'Create Confluence Draft'}
-                  </button>
-                )}
+                <button
+                  className="dh-write-back-button"
+                  disabled={
+                    operationIsLoading ||
+                    writeBack.status === 'success' ||
+                    Boolean(draftPreview.storageError)
+                  }
+                  onClick={handleConfirmWriteBack}
+                  type="button"
+                >
+                  {writeBack.status === 'loading'
+                    ? 'Writing…'
+                    : 'Write to Current Page'}
+                </button>
               </div>
             </footer>
           </section>
