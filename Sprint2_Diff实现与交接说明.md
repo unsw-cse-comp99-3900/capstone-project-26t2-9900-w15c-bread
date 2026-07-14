@@ -1,315 +1,435 @@
 # Sprint 2 Diff 实现与交接说明
 
-本文档说明 Sprint 2 当前版本的富文本 Diff 实现、布局修复、提及（Mention）解析、恢复选择、Draft 创建和当前页面写回方式，供后续开发、测试和维护使用。
+本文档以 2026-07-14 的当前仓库代码为准，说明富文本渲染、语义 Diff、
+Keep/Restore、Preview Draft、Storage 重建和当前页面写回的真实实现。
 
-当前版本已吸收本地 `feature/write-back` 分支的直接写回功能，同时保留现有细粒度 Diff、布局和 Draft 创建功能。`manifest.yml` 权限和 Forge 部署流程没有修改。
+需要先明确两点：
 
-## 1. 当前实现目标
+1. 比较页和 Preview Draft 使用项目内的手动 Storage renderer，不调用
+   Content Body Conversion API，也不使用 `AdfRenderer`。
+2. 当前 UI 的 **Preview Draft** 是写回前的预览；最终按钮会更新当前页面，
+   并不会创建未发布的 Confluence Draft。后端旧的 `createDraft` resolver
+   仍保留，但前端没有调用它。
 
-当前实现将 Confluence Storage HTML 转换为语义块进行比较，并遵循以下原则：
+## 1. 当前行为概览
 
-1. Diff 结果只使用 `same`、`removed`、`added` 三种类型。
-2. “修改”由旧块 `removed` 和新块 `added` 表示，不新增 `modified` 或 `changed` 类型。
-3. 用户应按最小可安全恢复的语义块进行 Keep/Restore，而不是把整页或整个布局作为一次选择。
-4. 布局结构相容时，保留 Layout/Section/Cell 包装结构，并对栏内段落、列表、表格等内容分别 Diff。
-5. 布局结构不相容时，回退为整个 Layout 的旧版本和新版本，避免恢复后生成错误 Storage 格式。
-6. 显示预览 HTML 与用于创建 Draft 的 Storage HTML 分离：预览只负责安全渲染，Storage 重建必须保留 Confluence 原始标签。
-7. 原内容的颜色、高亮、Panel 背景、日期样式、Status 颜色和表格单元格背景继续保留。
-8. Diff 使用红色/绿色外边框和 `-/+` gutter，不使用整行红绿背景覆盖原样式。
+页面比较方向为：
 
-## 2. 修改文件与主要职责
+```text
+选择的历史版本  ->  当前版本
+```
+
+底层页面级 Diff 结果只使用：
+
+```text
+same / removed / added
+```
+
+修改内容表示为旧块 `removed` 加新块 `added`。UI 可以把类型和标签相容的
+旧、新块组合为同一个选择，但不会改写底层结果顺序。
+
+用户操作粒度为可安全恢复的完整语义块：
+
+- 点击变化块后显示 `Keep current change` 和 `Restore old content`；
+- 选择后显示完整选中内容、选择状态和 `Undo`；
+- 未明确选择的变化默认使用当前版本；
+- Preview Draft 只预览，不会发起写操作；
+- `Write to Current Page` 将重建的 Storage 写为当前页面的新版本。
+
+## 2. 关键文件与职责
 
 ### `static/hello-world/src/utils.js`
 
-负责 Storage HTML 预处理、语义块提取、稳定签名、LCS 对齐、表格单元格标记、布局结构保护和 Mention ID 提取。
+负责 Storage 解析保护、手动渲染与 sanitization、语义块提取、语义签名、
+LCS 对齐、分栏渲染、逻辑表格网格匹配和 Diff 结果生成。
 
-主要函数如下：
+关键函数：
 
-| 函数 | 用途 | 重要参数或变量 |
-| --- | --- | --- |
-| `prepareConfluenceHtml` | 将 Storage HTML 转换为可分析和安全显示的 HTML。 | `html` 为原始 Storage；`options` 可提供用户映射等渲染信息。 |
-| `canonicalDomSignature` | 生成 DOM 语义签名，比较文本、结构、格式和持久化属性。 | `node` 为目标 DOM；会忽略属性顺序、仅显示 class 等无意义差异。 |
-| `stableHtmlSignature` | 对无法细分的内容生成稳定签名。 | 用于 unsupported/raw-preserved 内容。 |
-| `imageRawSignature` | 提取图片的附件、尺寸、布局、边框、caption 等持久化信息。 | 避免只比较图片可见占位内容。 |
-| `getComparableNodeType` | 判断节点应按 paragraph、heading、table、panel 等哪一种类型比较。 | 返回值参与配对和 LCS key 生成。 |
-| `extractBlockMeta` | 从节点提取 `nodeType`、tag、Storage HTML、渲染 HTML 和签名信息。 | 结果是后续 Diff block 的基础数据。 |
-| `extractComparableBlocksFromPreparedNode` | 递归提取普通语义块。 | `context` 中保存布局路径，防止不同栏中的相同内容错误匹配。 |
-| `extractDiffBlocks` | 页面级语义块提取入口。 | 在布局相容时调用布局专用提取；否则按普通规则或整体布局回退。 |
-| `makeSameBlock` | 创建 `same` block。 | 保留可显示 HTML 和可恢复 Storage。 |
-| `makeRemovedBlock` | 创建旧版本 `removed` block。 | 用于删除或修改前内容。 |
-| `makeAddedBlock` | 创建新版本 `added` block。 | 用于新增或修改后内容。 |
-| `buildRichTextDiffHtml` | Diff 主入口：提取两侧 blocks、执行 LCS、输出三类结果。 | `oldHtml`、`currentHtml` 为两个版本；`options` 可携带用户信息。 |
-| `buildTableReplacementBlocks` | 建立旧表格和新表格的替换块。 | 仅在相邻表格可作为一组变化时使用。 |
-| `decorateTableReplacementBlocks` | 对结构相容表格的变化单元格添加红/绿 inset border。 | 不改变原单元格背景和 Storage。 |
-| `normaliseLayoutType` | 统一 Layout 类型别名。 | 支持 camelCase、连字符和下划线写法。 |
-| `layoutTypeColumnWeights` | 返回标准布局的栏宽权重。 | 支持 `1:1`、`1:2`、`2:1`、`1:1:1`、`1:2:1` 等比例。 |
-| `normaliseGridTemplateColumns` | 只接受安全的 CSS Grid 列定义。 | 防止任意 style 注入预览。 |
-| `expandConfluenceLayouts` | 将 Layout 的每个 Cell 独立转换为渲染结构。 | 避免跨 Cell 的正则/解析吞掉后续栏内容。 |
-| `layoutStructureSignature` | 只比较 Layout、Section、Cell 的结构和持久化属性，不比较栏内正文。 | 用于判断能否进行布局内细粒度 Diff。 |
-| `createLayoutBoundaryBlock` | 创建不可选择的布局开始/结束边界块。 | 保存原始 Storage 开闭标签，并保存安全渲染 wrapper。 |
-| `extractLayoutDiffBlocks` | 在相容 Layout 中插入结构边界，并逐 Cell 提取正文语义块。 | `layoutPath` 参与 block key，保证栏之间不会串配。 |
-| `extractMentionAccountIds` | 从 Storage 和 ADF Mention 中提取账号 ID。 | 支持 `ri:account-id`、ADF `id`/`accountId`。 |
-| `getStorageNodeOuterHtml` | 按 Confluence Storage 规则序列化 DOM。 | 保持 Emoji、Mention、Date 等空元素为自闭合标签。 |
-| `normaliseStorageHtmlForParsing` | 在送入浏览器 HTML 解析器前临时展开 Confluence 自闭合空元素，并保护 CDATA。 | 防止 `<ri:user />` 吞入后续整页内容，也防止 HTML 代码正文被解析为空；不改变实际写回 Storage。 |
-| `normaliseCodeMacroStorageForWriteBack` | 将预览可读但写回无效的实体/注释式代码正文转换成标准 CDATA。 | 合法 CDATA 保持逐字不变，防止 `Write to Current Page` 后代码块变空。 |
-
-布局处理中的关键变量：
-
-- `splitCompatibleLayouts`：旧、新页面的布局骨架完全相容时为 `true`，允许栏内细粒度 Diff。
-- `layoutPath`：记录 block 所在 Layout/Section/Cell 路径，阻止 LCS 将不同栏的相同文本互相匹配。
-- `storageHtml`：恢复和创建 Draft 时使用的原始 Confluence Storage 片段。
-- `renderedHtml`：仅用于界面预览的安全 HTML。
-- `structuralBoundary`：标记 Layout/Section/Cell 开始或结束的不可选择 block。
+| 函数 | 当前职责 |
+| --- | --- |
+| `normaliseStorageHtmlForParsing` | 在送入浏览器 `DOMParser` 前保护代码 CDATA，并临时展开可能吞掉后续内容的 Confluence 自闭合节点。只影响解析输入，不直接改写原 Storage。 |
+| `prepareConfluenceHtml` | 将支持的 Storage/ADF 内容转换为安全预览 HTML，并通过标签、属性、URL、样式和 `data-dh-*` 白名单清理输出。 |
+| `normaliseCodeMacroStorageForWriteBack` | 把预览可读但写回不合法的代码正文恢复为有效 CDATA；已经合法的 CDATA 保持不变。 |
+| `canonicalDomSignature` | 对标签、嵌套、格式、日期、链接、图片和渲染 metadata 生成稳定语义签名。 |
+| `layoutStructureSignature` | 比较 Layout/Section/Cell 的类型、breakout、顺序和栏宽结构，不包含栏内正文。 |
+| `extractLayoutDiffBlocks` | 在布局签名相同时生成不可选择的布局边界，并按 Cell 提取正文块。 |
+| `extractDiffBlocks` | 页面级语义块提取入口；布局相容时走布局专用路径，否则按完整块安全处理。 |
+| `extractTableRows` | 建立考虑 `rowspan`/`colspan` 占位的逻辑表格网格。 |
+| `analyseTableCompatibility` | 判断表格能否生成单表、单元格级比较，或是否必须整表回退。 |
+| `buildCellLevelTableComparison` | 在一张比较表中渲染修改单元格和末端行列变化。 |
+| `buildTableReplacementBlocks` | 保留完整旧/新表格恢复块，同时为 UI 附加可选的单表 comparison HTML。 |
+| `buildRichTextDiffHtml` | Diff 主入口：提取旧/新块、执行 LCS、生成 `same/removed/added` 并装饰相邻表格替换。 |
 
 ### `static/hello-world/src/components/ComparisonPanel.js`
 
-负责加载 Mention 用户信息、组织 Diff 行、生成 Keep/Restore 选择，以及分别构建显示预览和 Draft Storage。
+负责显示、选择、预览和写回流程。
 
-主要函数如下：
+| 函数 | 当前职责 |
+| --- | --- |
+| `buildChangeRunRows` | 在连续变化区间内按 `nodeType` 和 HTML tag 配对相容的 removed/added 块。 |
+| `buildDiffDisplayRows` | 生成显示行、共享 choice key，并重建相容布局的嵌套显示树。 |
+| `getGitHubStyleDiffParts` | 普通变化显示红/绿行；带 `cell_level` 数据的旧/新表格对只显示一张 comparison table。 |
+| `DiffDisplayRows` | 递归渲染布局 wrapper、未变化内容、未决变化和已选择内容。 |
+| `getBlockRenderedPreviewHtml` | 按 current/old 选择返回一个块的安全显示 HTML。 |
+| `buildRecoveryPreviewHtml` | 将已选择的渲染块各输出一次，避免 ADF 节点和 fallback 在预览中重复。 |
+| `handlePreviewDraft` | 固化当前 choice、预览 HTML、重建 Storage 和预览时的当前版本号。 |
+| `handleConfirmWriteBack` | 调用 `writeRecoveredPage`，成功后触发版本列表刷新。 |
 
-| 函数 | 用途 | 重要参数或变量 |
-| --- | --- | --- |
-| `canShareChoice` | 判断一个 removed block 和 added block 能否共享一次 Keep/Restore。 | 要求语义类型和实际 HTML tag 相容。 |
-| `createChangeDisplayRow` | 创建单个变化行或一对变化行。 | `choiceKey` 是用户选择的稳定键。 |
-| `buildChangeRunRows` | 扫描连续变化区间，并按顺序配对相容的旧、新 blocks。 | 未匹配块继续保持独立选择。 |
-| `nestStructuralDisplayRows` | 根据布局边界块重建嵌套的 Layout/Section/Cell 显示树。 | 边界本身不产生 Keep/Restore。 |
-| `collectSelectableDisplayRows` | 从嵌套树递归收集真正可选择的变化行。 | 避免结构 wrapper 被当作内容选择。 |
-| `getLayoutWrapperProps` | 从安全渲染 wrapper 中读取布局类型、宽度和 grid 属性。 | 只透传允许的 `data-*` 和已校验样式。 |
-| `DiffDisplayRows` | 递归渲染布局结构及其中的 Diff 行。 | 使 2/3 栏结构在预览中保持嵌套关系。 |
-| `buildDiffDisplayRows` | 创建最终显示树并准备可选择行。 | 输入为底层 `same/removed/added` blocks。 |
-| `getBlockRenderedPreviewHtml` | 获取单个 block 的预览 HTML。 | 不使用 Storage 标签直接渲染。 |
-| `prepareConfluenceHtml` 恢复预览调用 | 从最终重建的 Storage 生成 Draft 模态框预览。 | 确保预览结构与实际 Draft/写回内容一致。 |
-| `handleConfirmWriteBack` | 将同一份 Storage 发送给 `writeRecoveredPage`。 | 同时提交预览时的当前版本号。 |
-
-Mention 加载流程会动态调用 `requestConfluence`，通过 `/wiki/rest/api/user?accountId=...` 获取 `displayName`。账号会去重并限制最多 100 个；接口失败时显示安全 fallback，但原 Mention Storage 不会被改写或丢失。
+Mention 预览会从两个版本提取 account ID，前端最多查询 100 个用户的
+`displayName`。查询失败时使用安全 fallback，但比较和写回仍保留原 account ID。
 
 ### `static/hello-world/src/recoveryStorage.js`
 
-负责根据用户选择重建可写回的 Storage HTML。它默认保留当前版本，只有明确选择 `old` 才恢复历史块；同时会跨中断合并 Task/Decision 单项、保留列表 wrapper 属性、去重 raw Storage group、保留布局边界，并在原始 Storage 缺失或仅剩 unsupported 占位内容时禁止写回。
+`buildRecoveryStorageHtml` 根据 choice 选择原始旧/当前 Storage：
+
+- 未选择时默认 current；
+- 明确选择 `old` 才恢复历史块；
+- Task 与 Decision item 会重新组合为有效组，避免重复 wrapper/fallback；
+- 相容布局的 Layout/Section/Cell 开闭边界会被保留；
+- self-closing Mention/Emoji 等 Storage 继续保持正确边界；
+- code macro 在最终输出时执行 CDATA 规范化；
+- unsupported 内容缺少可恢复 raw Storage 时返回错误，不允许把占位卡写回。
 
 ### `src/index.js`
 
-后端仍保留未被当前 UI 调用的 `createDraft` 兼容 resolver，并新增 `writeRecoveredPage` resolver。后者使用 `api.asUser()` 重新读取当前页面，校验预览时版本号，限制请求体不超过 2 MB，然后使用 Confluence v2 Page API 写入新版本。若期间页面已被其他人更新，请求会被拒绝，避免覆盖新内容。
+当前定义三个 resolver：
+
+| Resolver | 状态与用途 |
+| --- | --- |
+| `getPageVersions` | 当前 UI 使用。分页读取版本、live current Storage、附件和作者。版本与附件各最多读取 1,000 项。 |
+| `writeRecoveredPage` | 当前 UI 使用。用 `asUser()` 重读当前页、检查预览版本号、限制 2 MB Storage，再 PUT 新版本。 |
+| `createDraft` | 旧兼容接口。当前 UI 不调用。 |
 
 ### `static/hello-world/src/styles.css`
 
-负责 Diff 边框、表格 cell 标记和 Layout Grid：
+负责：
 
-- removed 为红色外边框，added 为绿色外边框；
-- diff 行背景透明，保留原内容背景；
-- 相容表格的变化 cell 使用红/绿 inset border；
-- 标准布局使用 CSS Grid 显示对应栏宽；
-- 自定义三栏根据 `data-width` 生成比例，例如 `25:50:25`；
-- 小于等于 `760px` 时降为单栏，保证移动端可阅读。
+- 普通 removed/added 行的红绿外边框和 `-/+` gutter；
+- 保留正文、Panel、Status 和单元格原背景，不使用整行红绿填充；
+- 表格修改单元格的 previous/current 红绿边框；
+- 末端新增/删除行列的连续外围框；
+- 标准分栏 Grid、自定义栏宽 Flex 比例和移动端单栏布局；
+- 手动 renderer 的标题、列表、Panel、Decision、日期、代码、图片等样式。
 
-### `static/hello-world/src/utils.test.js` 与 `recoveryStorage.test.js`
-
-当前 focused tests 共 87 个，覆盖基础分类、富文本格式、布局、Mention、列表、引用、表格、Panel、Decision、日期、图片、Storage 重建、Task 混合恢复、ADF Task、raw macro 分组、写回后的内部 ID 规范化、自闭合元素解析保护、代码 CDATA 规范化与无损写回和 Diff CSS。
-
-## 3. Diff 整体流程
+## 3. Diff 数据流程
 
 ```text
-旧 Storage HTML                         新 Storage HTML
-       |                                      |
-       +---- 提取 Mention account IDs --------+
-       |              |                       |
-       |       请求 displayName               |
-       v                                      v
-prepareConfluenceHtml                prepareConfluenceHtml
-       |                                      |
-       +------ layoutStructureSignature ------+
-                       |
-          +------------+-------------+
-          |                          |
-     布局结构相容                 布局结构不相容
-          |                          |
- 插入结构边界并逐 Cell 提取       整个 Layout 安全回退
-          |                          |
-          +---------- semantic blocks --------+
-                             |
-                            LCS
-                             |
-                  same / removed / added
-                             |
-               表格 cell diff decoration
-                             |
-            嵌套 Layout 显示 + Keep/Restore
-                             |
-          +------------------+------------------+
-          |                                     |
-  rendered preview HTML                 reconstructed Storage HTML
+old Storage                              current Storage
+     |                                         |
+     +------ normaliseStorageHtmlForParsing ---+
+     |                                         |
+     +--------- layoutStructureSignature ------+
+                         |
+             +-----------+-----------+
+             |                       |
+       签名完全相同                签名不同
+             |                       |
+   按 Layout/Section/Cell       完整 Layout 安全块
+   边界与栏内语义块提取
+             |                       |
+             +------ semantic blocks +
+                         |
+                canonical signature
+                         |
+                        LCS
+                         |
+             same / removed / added
+                         |
+        相邻 table replacement UI decoration
+                         |
+        +----------------+----------------+
+        |                                 |
+ comparison rendered HTML          recoverable raw Storage
 ```
 
-### 3.1 语义块提取
+`buildRichTextDiffHtml` 的 LCS 矩阵安全阈值为：
 
-页面不会作为一个完整字符串直接比较。当前可提取的顶层或独立语义块包括：
+```text
+old block count * current block count <= 120000
+```
+
+超过阈值时不会分配完整矩阵，而是返回标记为 `limited` 的当前侧安全结果，
+比较页会显示提示。这是资源保护，不代表已经执行完整 Diff。
+
+## 4. 语义块与相等规则
+
+当前主要语义单位包括：
 
 ```text
 paragraph, heading, list, task_item, blockquote, table,
 panel, decision, image, code_block, expand, whiteboard_card,
-unsupported，以及 layout structural boundary
+unsupported, layout boundary
 ```
 
-普通容器可以透明展开。Confluence Layout 不能简单丢弃 wrapper，而是通过开始/结束边界保留结构，再提取每个 Cell 内的语义内容。
+相等签名保留可见或可恢复的语义，例如：
 
-### 3.2 语义签名
+- 标签和嵌套结构；
+- bold、italic、underline、strike、sub/sup、inline code；
+- 链接、文字颜色、高亮、alignment、indentation；
+- Date、Status、Mention、Emoji metadata；
+- 图片身份、尺寸、位置、边框和 caption；
+- 表格 cell、span、背景和内容；
+- renderer 生成的持久化 `data-dh-*` 属性；
+- 相容布局内 block 的 `layoutPath`。
 
-`canonicalDomSignature` 比较完整 DOM 语义，而不是只比较 `textContent`。签名保留：
+签名忽略属性顺序、CSS declaration 顺序、普通序列化空白以及
+`<b>/<strong>`、`<i>/<em>` 等等价表达。
 
-- DOM 标签和嵌套结构；
-- bold、italic、link、颜色和高亮；
-- 日期、Status、Mention、Emoji 等 inline 语义；
-- 图片、表格和 renderer 生成的持久化 `data-dh-*` 信息；
-- block 所在布局路径。
+可见换行规则仍为：双方都至少有一个连续 `<br>` 时视为等价；从无换行变为
+有换行仍产生 Diff。
 
-签名忽略属性顺序、CSS declaration 顺序、仅显示 class、普通序列化空白，以及 `<b>/<strong>`、`<i>/<em>` 等等价表示。
+## 5. 内容类型处理
 
-### 3.3 LCS 对齐与分类
-
-| 情况 | 输出 |
+| 类型 | 比较粒度与现状 |
 | --- | --- |
-| 旧、新 block 的语义 key 相同 | `same` |
-| 旧 block 无法对齐 | `removed` |
-| 新 block 无法对齐 | `added` |
-| 同一位置内容改变 | 旧 `removed` + 新 `added` |
+| Paragraph / Heading | 完整段落或标题。文本、格式或 inline metadata 改动产生 removed/added，不做字词级 staging。 |
+| Ordered / Unordered list | 完整列表，包括嵌套结构。普通列表不按 item 恢复。 |
+| Task | item 级比较；写回时重新组合 Task Storage。 |
+| Decision | item 级比较；决定状态和文本参与签名，写回时重建完整 extension/fallback。 |
+| Blockquote | 完整引用块。 |
+| Panel | 一个 Panel 一个块；类型来自 Storage metadata，不根据正文词语猜测。 |
+| Code / Expand | 完整块；代码保留空白和语言 metadata，Expand 比较 summary 与正文。 |
+| Date / Status / Mention / Emoji | 作为 containing block 的 inline 语义参与比较。 |
+| Image | 独立块；附件/URL、尺寸、alignment/layout、边框、alt/title、rotation 和内嵌 caption 参与比较。 |
+| Whiteboard / smart card | 完整 card；显示安全卡片，保留目标 metadata 和 raw Storage。 |
+| Unsupported | 完整 raw-preserved 块；正常视图显示安全 fallback，恢复继续使用原 Storage。 |
 
-`summary.modifiedBlocks` 仅为兼容旧数据结构而保留，当前主流程不输出 `modified` block，因此应为 `0`。
+## 6. 手动渲染器现状
 
-## 4. 当前内容类型及处理方式
+### 6.1 Sanitizer
 
-### 4.1 段落与标题
+`prepareConfluenceHtml` 不会直接把原始 Storage 交给页面。它只允许已知安全的
+HTML 标签和属性，并对 URL scheme、CSS property/value 和 app metadata 做限制。
+原始 unsupported 数据只能作为转义文本出现在 raw inspector 中。
 
-段落以完整 `<p>` 为单位，标题以完整 H1-H6 为单位。文本、格式、颜色、高亮、链接或 inline 语义变化会输出旧块和新块，不做词级或字符级高亮。不同 heading level 不强制配成同一选择。
+### 6.2 Panel
 
-### 4.2 换行与缩进
+ADF Panel 使用 `panel-type` 等属性；structured macro 使用 `ac:name`。可见正文
+即使以 “Info” 或 “Warning” 开头，也不会改变类型。
 
-连续一个或多个 `<br>` 视为等价可见换行；从无换行变为有换行仍产生 Diff。段落缩进信息参与签名，原 Storage 会被保留；预览中的缩进距离由 renderer/CSS 表示，不应用于改写 Storage。
-
-### 4.3 普通列表、Task 与 Decision
-
-普通 `<ol>/<ul>` 以整个列表为单位，只区分完全相同和存在差异。Task 和 Decision 则按 item 独立比较，单个 item 的文本或状态变化不会使整个列表都变化。
-
-### 4.4 Blockquote、Panel、Code 与 Expand
-
-这些内容均以完整 block 为单位比较。Panel 类型和背景、Code 空白与行结构、Expand 标题与内容都参与签名；Diff 外边框不会覆盖其原样式。
-
-### 4.5 Date、Status、Mention、Emoji 与 Smart Content
-
-这些节点作为 containing block 的 inline 语义参与比较：
-
-- Date 会统一 Storage、ADF、date link 和 `<time>` 的日期语义；
-- Status 的 label 和颜色参与比较；
-- Mention 使用 account ID 比较，并尝试通过 Confluence API 显示 `@displayName`；
-- Mention API 失败时保留账号 fallback 和原 Storage；
-- Emoji 的语义信息参与 Diff，原 Storage 可完整重建；部分 ADF Emoji 的手工预览仍依赖 renderer，不能据此认定 Storage 丢失；
-- Inline Smart Content 的持久化 metadata 变化会使 containing block 变化。
-
-### 4.6 Image
-
-图片独立比较附件 ID、content ID、文件名、src、宽高、alignment、layout、custom width、border、alt、title、rotation 和 caption。图片下方手工输入的普通段落仍是独立 paragraph。
-
-### 4.7 Table
-
-结构相容要求 row 数、有效 column 数、cell 数、`td/th`、有效位置、`rowspan` 和 `colspan` 一致。相容时仍输出完整旧表和新表，但只给变化 cell 加红/绿 inset border；结构不相容时回退为整表替换，不强行配对 cell。
-
-多个表格不会合并成一个选择。例如同一布局 Cell 内依次存在表格 1、2、3，只有表格 2 改动时，结果为：
+目标站点的 legacy structured macro 映射为：
 
 ```text
-表格 1: same
-表格 2 旧版: removed
-表格 2 新版: added
-表格 3: same
+info -> info
+tip -> success
+note -> warning
+warning -> error
+panel -> custom/panel
+success -> success
+error -> error
 ```
 
-因此用户只需要选择是否保留/恢复表格 2。
+Panel 图标当前被隐藏，开头使用粗体类型文字；原正文不因与类型文字重复而删除。
+Custom Panel 可以继续使用 Storage 中已清理的背景色。
 
-### 4.8 Confluence Layout
+### 6.3 Code
 
-当前支持以下标准布局：
+预览会移除 `<![CDATA[...]]>` 外壳，保留内部代码、换行和行号，不执行代码。
+对测试页中出现过的异常 HTML CDATA 开闭标签有定向修复。写回使用原始或规范化
+CDATA，而不是预览 DOM。
 
-| 布局 | 栏宽 |
+### 6.4 Image
+
+图片宽高从显示尺寸属性读取，不误用 `original-width`/`original-height`。
+renderer 支持 attachment/URL、水平位置、wrap、caption 和
+`<ac:adf-mark key="border">`。caption 作为 figure 内标题显示；图片下方手工输入
+的普通段落仍单独比较。
+
+### 6.5 Layout 显示
+
+标准类型使用：
+
+| Storage type | 显示比例 |
 | --- | --- |
-| 单栏 | `1` |
-| 两栏等宽 | `1:1` |
-| 左窄右宽 | `1:2` |
-| 左宽右窄 | `2:1` |
-| 三栏等宽 | `1:1:1` |
-| 左右侧栏 + 中间主栏 | `1:2:1` |
-| 自定义三栏 | 按安全的 `data-width`，例如 `25:50:25` |
+| `single` | 1 栏 |
+| `two_equal` | `1:1` |
+| `two_left_sidebar` | `1:2` |
+| `two_right_sidebar` | `2:1` |
+| `three_equal` | `1:1:1` |
+| `three_with_sidebars` | `1:2:1` |
 
-Layout type 的语义优先于可能过期的 `data-width`。布局骨架相容时，Layout/Section/Cell 只作为不可选择的结构边界，栏内每个语义块独立 Diff。布局类型、栏数、Cell 顺序或宽度结构改变时，整体 Layout 回退为 removed/added，以保证恢复后的标签嵌套和栏宽不会损坏。
+若每个 Cell 都有合法的 `data-width`/`ac:width`/`width`，实际栏宽优先于 type。
+宽度会四舍五入为 1..100 的安全 `data-dh-layout-weight`，由 CSS Flex 按相对比例
+显示。例如 33.33/66.67 约等于 33/67，25/50/25 保持 1:2:1。
 
-### 4.9 Whiteboard、Block Smart Link 与 Unsupported
+视口宽度不超过 760 px 时，所有分栏按设计改为纵向单栏。
 
-Whiteboard/Smart Link card 以完整 card 比较并保留目标 metadata。Unsupported macro 或 extension 使用原始 Storage 稳定签名比较；预览只显示安全 fallback，但恢复时继续使用原 Storage，不渲染或泄漏内部实现字段。
+## 7. Table Diff 当前规则
 
-## 5. Keep/Restore 与 Storage 重建
+### 7.1 逻辑网格
 
-连续变化区间可能为：
+`extractTableRows` 记录每个 cell 的：
+
+```text
+rowIndex, cellIndex, logical colIndex, td/th,
+rowspan, colspan, sectionTag, content signature, backgroundColor
+```
+
+合并单元格会占用其覆盖的每个逻辑坐标，因此后续 cell 不会仅因 DOM index
+相同而错配。
+
+### 7.2 单表、单元格级显示
+
+以下情况可使用 `cell_level`：
+
+- 行列和 cell 几何完全对应；
+- 匹配的 `rowspan`/`colspan` 完全一致；
+- 只在最下方追加/删除完整行；
+- 只在最右侧追加/删除完整列；
+- 上述末端行列变化同时发生，包括一个方向增加、另一个方向删除；
+- 公共逻辑区域没有出现会表明中间插入的稳定轴位移。
+
+UI 此时只显示一张表：
+
+- unchanged cell 只出现一次；
+- modified cell 内上下显示 old/current，各自保留自己的 cell background，并由
+  红框/绿框贴合该区域；
+- 末端新增/删除行列只画整个变化区域的外围框，不为每格显示加减号；
+- 同时变化行列形成 L 形外围框，右下交叉不会重复画框；
+- 一个方向增、另一个方向减时，比较用合成表会加入一个中性空角，该角不属于
+  old/current 任一版本，也不会标红或标绿。
+
+### 7.3 整表 fallback
+
+以下情况不做启发式映射：
+
+- 中间插入或删除行/列；
+- `rowspan` 或 `colspan` 改变；
+- 重复起始逻辑坐标；
+- 合并单元格跨越新旧边界；
+- 其他无法可靠确定 cell 对应关系的结构。
+
+fallback 继续显示完整旧表 removed 和完整新表 added。
+
+无论 UI 使用哪种显示，恢复粒度仍是整张表。单表 comparison HTML 只是
+`tableDiff.comparisonHtml`，底层仍保存完整 removed/added 表格 Storage。
+
+## 8. Layout Diff 与已知限制
+
+只有旧、新 `layoutStructureSignature` 完全相同，才会设置
+`splitCompatibleLayouts=true`。签名包含：
+
+- Layout/Section/Cell wrapper 顺序；
+- Section type；
+- breakout mode；
+- Cell 的已存栏宽。
+
+签名不包含栏内正文，所以相同结构中的段落、列表、Panel、表格等可以独立 Diff。
+每个块的 `layoutPath` 防止不同栏中相同文本被 LCS 错配。结构边界只负责显示和
+Storage 重建，不可单独选择。
+
+当前明确限制：
+
+- 只改栏宽会改变结构签名；
+- 增删栏或调整栏顺序也会改变结构签名；
+- 上述情况会回退为完整 Layout removed/added，并共享一次完整 Layout 的
+  Keep/Restore；
+- 当前没有栏级结构 staging，不能只恢复一栏的宽度、位置或存在状态。
+
+这与“普通相容布局中的栏内内容细粒度 Diff”是两个不同问题。后续若要支持栏级
+结构恢复，必须先定义稳定 Cell identity、移动与增删的匹配规则，并确保重建的
+Layout Storage 标签仍合法，不能只在 UI 上拆红绿框。
+
+## 9. Keep/Restore、Preview 与写回
+
+### 9.1 显示配对
+
+连续变化可能是：
 
 ```text
 removed A, removed B, added A', added B'
 ```
 
-显示层按旧 block 顺序，为每个 removed block 寻找第一个尚未使用且类型/tag 相容的 added block。成功配对后共享一次 Keep/Restore；多余、类型不相容或被 `same` 分隔的 block 维持独立选择。
+`buildChangeRunRows` 依次为 removed 块查找尚未使用、且 `nodeType` 与 tag
+相同的 added 块。成功配对的块共享 choice；无法可靠配对的块保持独立。
 
-布局结构边界永远不可选择。它们只负责在最终 Storage 中重新打开和关闭 Layout/Section/Cell，因此用户选择栏内某个表格或段落时，不会丢失外层分栏结构。
+### 9.2 Preview
 
-`buildRecoveryStorageHtml` 先产生并验证最终 `storageHtml`，Draft 模态框再使用 `prepareConfluenceHtml` 渲染这份完整 Storage。写回当前页面使用同一份 Storage，因此 Task/raw group/Layout 在预览与实际结果中保持一致。
+`buildRecoveryPreviewHtml` 使用每个 Diff block 已经生成的安全显示 HTML，按 choice
+各输出一次。它不会再次渲染完整重建 Storage，因此不会把 Decision 的 ADF 节点和
+fallback 重复显示。
 
-Draft 预览只保留“Back to changes”和“Write to Current Page”两个操作，不再提供“Create Confluence Draft”。直接写回会携带 `expectedVersionNumber`，后端在更新前重新读取页面；版本不一致时必须刷新并重新比较。
+同时，`buildRecoveryStorageHtml` 独立生成用于写回的 Storage。预览 HTML 与
+Storage HTML 不能互相替代。
 
-## 6. 测试与构建结果
+### 9.3 写回
 
-Focused tests：
+`writeRecoveredPage`：
+
+1. 接收 `pageId`、`bodyValue`、`expectedVersionNumber`；
+2. 用 `asUser()` 重读 live current page；
+3. 若版本号已变化则拒绝；
+4. 使用 live title、parent、space 和下一版本号执行 PUT；
+5. 返回新版本号，前端刷新 timeline。
+
+这个并发检查不能删除，否则用户可能覆盖 Preview 之后出现的新编辑。
+
+## 10. 测试与构建
+
+前端 `package.json` 当前没有 `test` script，使用已安装的 React Scripts：
 
 ```powershell
 cd static/hello-world
-npx.cmd react-scripts test src/utils.test.js src/recoveryStorage.test.js --watchAll=false --runInBand
+node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --runInBand
 ```
 
-当前结果：
-
-```text
-Test Suites: 2 passed
-Tests:       87 passed
-```
-
-Production build：
+生产构建：
 
 ```powershell
 cd static/hello-world
 npm.cmd run build
 ```
 
-当前构建已通过。测试仍可能出现 CRA/Babel 警告和 Jest open-handle 提示，但不影响 87 个 focused tests 的通过结果。本轮最新代码没有执行 Forge deploy。
+2026-07-14 实际验证结果：
 
-## 7. 后续维护注意事项
+```text
+PASS src/utils.test.js
+PASS src/recoveryStorage.test.js
 
-1. 不要新增 `modified`/`changed` Diff 类型。
-2. 不要把普通列表改为 item 级 Diff；当前只有 Task 和 Decision 按 item 提取。
-3. 不要为了修复布局显示而删除 Layout Storage wrapper；应继续使用结构边界。
-4. 修改布局签名时，必须区分“结构属性”和“Cell 内正文”，否则会重新退化为整个布局一次选择。
-5. block key 必须保留 `layoutPath`，否则不同栏的相同文本可能被 LCS 错配。
-6. 布局结构不相容时必须安全回退，不能强行复用旧 wrapper 包装新栏内容。
-7. UI 配对只能影响显示行和 choice key，不能改变底层 `same/removed/added` blocks。
-8. 必须继续分离 `renderedHtml` 和 `storageHtml`。
-9. 修改表格兼容规则时继续保护 `rowspan`、`colspan` 和有效 cell position。
-10. 修改 Mention 预览时不能用 display name 替换原账号 Storage。
-11. 后续 Diff 或写回修改应运行 87 个 focused tests 和 production build。
-12. 直接写回必须继续传递并校验 `expectedVersionNumber`，不得移除并发保护。
-13. Task/Decision 单项恢复必须经过 Storage group 重组，不能直接拼接多个单项 wrapper。
-14. Confluence 自闭合空元素只能在 DOMParser 输入中临时展开，写回 Storage 必须继续保留自闭合格式。
-15. 代码宏 CDATA 只能在 DOMParser 输入中临时编码保护，写回时必须恢复原始 `<![CDATA[...]]>`，不能写入解析令牌或 HTML 注释。
+Test Suites: 2 passed, 2 total
+Tests:       106 passed, 106 total
+Production build: compiled successfully
+```
 
-## 8. 本轮未修改的范围
+已知非阻断输出：
 
-本轮没有修改：
+- Jest 报告进程一秒后仍存在 open handle；
+- Create React App/Babel 报告未显式声明的 private-property plugin；
+- build 报告 Browserslist 数据较旧和 Node `fs.F_OK` deprecation。
 
-- 后端 `createDraft` resolver/API；
-- Confluence 发布流程；
-- `manifest.yml` scopes；
-- Forge permissions；
-- Forge deployment。
+这些警告目前不会使测试或 build 失败，但依赖升级时应单独处理，不能误写为本次
+renderer/Diff 的功能错误。
 
-需要特别区分：原有 Draft 创建接口没有改变，但当前前端不再调用它；独立的 `writeRecoveredPage` resolver 使用 `recoveryStorage.js` 产生的 Storage 写回当前页面。本功能实现不需要新增权限或运行时依赖。
+## 11. 维护约束
+
+1. 不要在页面级结果中引入新的 `modified/changed` 类型，除非同步修改 UI、统计、
+   recovery 和全部测试。
+2. 不要把 renderer HTML 当作可写回 Storage。
+3. 不要用可见文字推测 Panel 类型；必须使用 Storage metadata。
+4. 不要把 Mention display name 写回代替 account ID。
+5. 不要丢弃 unsupported raw Storage，即使视觉 fallback 不完整。
+6. 普通列表保持 whole-list Diff；Task/Decision item 恢复必须经过组重建。
+7. 表格匹配必须继续使用逻辑坐标，并验证 span/几何；不可靠时必须整表回退。
+8. table cell-level 只改变显示粒度，不能暗中变成 cell-level recovery。
+9. `layoutPath` 和结构边界不能从相容布局的提取/重建流程中删除。
+10. Layout 结构不相容时，在没有完整栏级恢复设计前继续保守回退。
+11. 保留写回的 `expectedVersionNumber` 校验、2 MB 限制和 `asUser()`。
+12. 修改 renderer、Diff 或 recovery 后运行 106 项 focused tests 和 production build；
+    测试数变化时同时更新本说明和 README。
+
+## 12. 安装与部署提示
+
+根目录和 `static/hello-world` 是两个 npm 项目。只有新 clone、`node_modules` 缺失，
+或对应 dependency 文件变化时才需要重新安装：
+
+```powershell
+# repo root
+npm.cmd install --legacy-peer-deps
+
+cd static/hello-world
+npm.cmd install --legacy-peer-deps
+```
+
+Forge deploy 前先在 `static/hello-world` build，再回到 Forge app 根目录。根据项目
+规范，运行 Forge 命令前先执行 `pwd` 确认目录，并先运行 `forge lint`。代码改动
+不要求 reinstall；只有 scope/permission 变化才需要 deploy 后 upgrade install。
