@@ -408,6 +408,105 @@ describe('type-specific diff safety', () => {
     expect(contentBlocks[3].text).toContain('stable third');
   });
 
+  test('column width changes stay local instead of replacing the complete layout', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="50"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="35"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="65"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, currentHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+    const widthSection = result.blocks.find((block) => block.layoutWidthChange);
+    const changedCells = result.blocks.filter((block) => block.layoutColumnWidthChange);
+
+    expect(contentBlocks).toMatchObject([
+      { type: 'same', nodeType: 'paragraph', text: 'Left' },
+      { type: 'same', nodeType: 'paragraph', text: 'Right' },
+    ]);
+    expect(widthSection.layoutWidthChange).toEqual({
+      oldWidths: ['50', '50'],
+      newWidths: ['35', '65'],
+      changedColumnIndexes: [0, 1],
+    });
+    expect(changedCells.map((block) => block.layoutColumnWidthChange)).toEqual([
+      { oldWidth: '50', newWidth: '35' },
+      { oldWidth: '50', newWidth: '65' },
+    ]);
+    expect(result.blocks.some((block) => block.nodeType === 'layout')).toBe(false);
+    expect(result.summary.added).toBe(1);
+    expect(result.summary.removed).toBe(1);
+  });
+
+  test('column widths and inner content produce independent local changes', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="50"><p>Old left text</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>Stable right text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="40"><p>Current left text</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="60"><p>Stable right text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, currentHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+
+    expect(contentBlocks.map((block) => block.type)).toEqual([
+      'removed',
+      'added',
+      'same',
+    ]);
+    expect(contentBlocks.map((block) => block.nodeType)).toEqual([
+      'paragraph',
+      'paragraph',
+      'paragraph',
+    ]);
+    expect(result.blocks.some((block) => block.nodeType === 'layout')).toBe(false);
+    expect(result.summary.added).toBe(2);
+    expect(result.summary.removed).toBe(2);
+  });
+
+  test('one resized layout does not disable child diffing in another layout', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="50"><p>First left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>First right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+      '<ac:layout><ac:layout-section ac:type="single">',
+      '<ac:layout-cell><p>Old second layout text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="30"><p>First left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="70"><p>First right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+      '<ac:layout><ac:layout-section ac:type="single">',
+      '<ac:layout-cell><p>Current second layout text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, currentHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+
+    expect(contentBlocks.map((block) => block.type)).toEqual([
+      'same',
+      'same',
+      'removed',
+      'added',
+    ]);
+    expect(result.blocks.some((block) => block.nodeType === 'layout')).toBe(false);
+    expect(result.blocks.filter((block) => block.layoutWidthChange)).toHaveLength(1);
+  });
+
   test('layout structure changes fall back to complete layout recovery blocks', () => {
     const oldHtml = [
       '<ac:layout><ac:layout-section ac:type="two_equal">',

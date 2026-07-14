@@ -31,10 +31,54 @@ function blockIsOmitted(block, useCurrent) {
   );
 }
 
+function selectLayoutCellOpeningTag(block, useCurrent) {
+  const currentTag = block.newRawHtml || block.newHtml || block.html || '';
+  const oldTag = block.oldRawHtml || block.oldHtml || block.html || '';
+
+  if (useCurrent || !block.layoutColumnWidthChange) return currentTag;
+  if (!currentTag) return oldTag;
+
+  // A column-width choice must change only the width metadata. Reusing the
+  // complete historical opening tag could also restore stale local IDs or
+  // editor bookkeeping attributes that have nothing to do with the user's
+  // decision. Start from the live/current tag, remove its width attribute,
+  // and copy only the historical width attribute when one existed.
+  const widthAttributePattern =
+    /\s+(?:data-width|ac:width|width)\s*=\s*(?:"[^"]*"|'[^']*')/gi;
+  const oldWidthAttribute =
+    oldTag.match(/\s+(?:data-width|ac:width|width)\s*=\s*(?:"[^"]*"|'[^']*')/i)?.[0] || '';
+  const tagWithoutCurrentWidth = currentTag.replace(widthAttributePattern, '');
+
+  return tagWithoutCurrentWidth.replace(
+    /(\s*\/?>)$/,
+    `${oldWidthAttribute}$1`
+  );
+}
+
 export function getSelectedBlockStorageHtml(block, useCurrent) {
   if (!block) return '';
 
   if (block.type === 'same') {
+    if (
+      block.isStructuralBoundary &&
+      block.layoutWrapperTag === 'ac:layout-cell' &&
+      block.layoutBoundaryEdge === 'start' &&
+      block.layoutColumnWidthChange
+    ) {
+      return selectLayoutCellOpeningTag(block, useCurrent);
+    }
+
+    if (
+      block.isStructuralBoundary &&
+      block.layoutWrapperTag === 'ac:layout-section' &&
+      block.layoutBoundaryEdge === 'start' &&
+      block.layoutWidthChange
+    ) {
+      // Widths live on child layout-cell tags. Keep the current section tag so
+      // restoring widths does not roll back unrelated section/local-id data.
+      return block.newRawHtml || block.newHtml || block.html || '';
+    }
+
     return useCurrent
       ? block.newRawHtml || block.newHtml || block.html || ''
       : block.oldRawHtml || block.oldHtml || block.html || '';

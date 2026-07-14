@@ -2559,12 +2559,12 @@ function layoutSkeletonForNode(node) {
     }
   }
 
-  if (tag === 'ac:layout-cell') {
-    const width = normaliseLayoutColumnWidth(
-      extractAttr(openingTag, ['data-width', 'ac:width', 'width'])
-    );
-    if (width) attrs.push(`width=${width}`);
-  }
+  // Column widths are deliberately excluded from the compatibility skeleton.
+  // Dragging one Confluence divider changes presentation metadata on the
+  // existing cells; it does not add, remove, or reorder the cells themselves.
+  // Widths are compared separately after compatible layout wrappers have been
+  // aligned, which lets the UI show one local width decision instead of
+  // falling back to a removed/added block for the complete page layout.
 
   const children = Array.from(node.children || [])
     .map(layoutSkeletonForNode)
@@ -2631,7 +2631,46 @@ function renderedLayoutBoundaryStart(node) {
   return '';
 }
 
-function createLayoutBoundaryBlock(path, edge, wrapperTag, storageHtml, fullRenderedHtml) {
+function layoutBoundaryMetadata(node) {
+  const tag = layoutWrapperTag(node);
+  if (!tag) return {};
+
+  if (tag === 'ac:layout-cell') {
+    return {
+      layoutColumnWidth: normaliseLayoutColumnWidth(
+        extractAttr(storageOpeningTag(node), ['data-width', 'ac:width', 'width'])
+      ),
+    };
+  }
+
+  if (tag === 'ac:layout-section') {
+    const cells = Array.from(node.children || []).filter(
+      (child) => layoutWrapperTag(child) === 'ac:layout-cell'
+    );
+
+    return {
+      // Keep an entry for every cell, including cells without an explicit
+      // width. A transition from Confluence's template default to stored
+      // custom widths is a real layout change and must remain detectable.
+      layoutColumnWidths: cells.map((cell) =>
+        normaliseLayoutColumnWidth(
+          extractAttr(storageOpeningTag(cell), ['data-width', 'ac:width', 'width'])
+        )
+      ),
+    };
+  }
+
+  return {};
+}
+
+function createLayoutBoundaryBlock(
+  path,
+  edge,
+  wrapperTag,
+  storageHtml,
+  fullRenderedHtml,
+  metadata = {}
+) {
   return {
     key: `layout-boundary:${path}`,
     tag: 'layout_boundary',
@@ -2641,8 +2680,10 @@ function createLayoutBoundaryBlock(path, edge, wrapperTag, storageHtml, fullRend
     renderedHtml: '<!-- dynamic-history-layout-boundary -->',
     fullRenderedHtml,
     isStructuralBoundary: true,
+    layoutPath: path,
     layoutBoundaryEdge: edge,
     layoutWrapperTag: wrapperTag,
+    ...metadata,
   };
 }
 
@@ -3716,7 +3757,8 @@ function extractLayoutDiffBlocks(
         'start',
         tag,
         storageOpeningTag(node),
-        renderedLayoutBoundaryStart(node)
+        renderedLayoutBoundaryStart(node),
+        layoutBoundaryMetadata(node)
       ),
     ];
 
@@ -3833,6 +3875,35 @@ function renderDiffBlock(block) {
 }
 
 function makeSameBlock(currentBlock, oldBlock = currentBlock) {
+  const oldLayoutColumnWidths = oldBlock.layoutColumnWidths || [];
+  const newLayoutColumnWidths = currentBlock.layoutColumnWidths || [];
+  const layoutWidthsAreComparable =
+    oldLayoutColumnWidths.length > 0 &&
+    oldLayoutColumnWidths.length === newLayoutColumnWidths.length;
+  const changedColumnIndexes = layoutWidthsAreComparable
+    ? newLayoutColumnWidths
+        .map((width, index) => (width !== oldLayoutColumnWidths[index] ? index : -1))
+        .filter((index) => index >= 0)
+    : [];
+  const layoutWidthChange = changedColumnIndexes.length
+    ? {
+        oldWidths: oldLayoutColumnWidths,
+        newWidths: newLayoutColumnWidths,
+        changedColumnIndexes,
+      }
+    : null;
+  const oldLayoutColumnWidth = oldBlock.layoutColumnWidth || '';
+  const newLayoutColumnWidth = currentBlock.layoutColumnWidth || '';
+  const layoutColumnWidthChange =
+    currentBlock.layoutWrapperTag === 'ac:layout-cell' &&
+    currentBlock.layoutBoundaryEdge === 'start' &&
+    oldLayoutColumnWidth !== newLayoutColumnWidth
+      ? {
+          oldWidth: oldLayoutColumnWidth,
+          newWidth: newLayoutColumnWidth,
+        }
+      : null;
+
   return {
     type: 'same',
     tag: currentBlock.tag,
@@ -3855,10 +3926,23 @@ function makeSameBlock(currentBlock, oldBlock = currentBlock) {
     storageGroupKey: currentBlock.storageGroupKey || oldBlock.storageGroupKey,
     storageGroupKind: currentBlock.storageGroupKind || oldBlock.storageGroupKind,
     fullRenderedHtml: currentBlock.fullRenderedHtml,
+    oldFullRenderedHtml: oldBlock.fullRenderedHtml,
+    newFullRenderedHtml: currentBlock.fullRenderedHtml,
     isStructuralBoundary: currentBlock.isStructuralBoundary,
     layoutPath: currentBlock.layoutPath,
     layoutBoundaryEdge: currentBlock.layoutBoundaryEdge,
     layoutWrapperTag: currentBlock.layoutWrapperTag,
+    oldLayoutColumnWidths,
+    newLayoutColumnWidths,
+    layoutWidthChange,
+    oldLayoutColumnWidth,
+    newLayoutColumnWidth,
+    layoutColumnWidthChange,
+    // The existing summary represents one replacement as one removal plus one
+    // addition. Preserve that contract for a width-vector replacement while
+    // keeping the structural boundary itself aligned as a `same` block.
+    added: layoutWidthChange ? 1 : 0,
+    removed: layoutWidthChange ? 1 : 0,
   };
 }
 

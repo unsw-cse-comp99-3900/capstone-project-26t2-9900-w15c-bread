@@ -219,8 +219,9 @@ shows a limited-comparison warning.
   containing block different.
 - Compatible adjacent old/new blocks with the same semantic type and HTML tag
   share one Keep/Restore decision.
-- Recovery remains block-level. Table cells and layout wrappers are not
-  independently staged.
+- Recovery remains block-level. Table cells are not independently staged.
+  Compatible layout sections additionally expose one atomic column-width
+  choice, separate from their child-content choices.
 
 Unresolved changes display red/green outer borders and `-`/`+` gutters without
 red/green fills, so original content backgrounds remain visible. Clicking a
@@ -274,15 +275,26 @@ stack into one column.
 
 For diff and recovery, a layout is split into non-selectable Layout/Section/Cell
 boundaries plus independently selectable child blocks only when the old and
-current layout structure signatures are identical. The signature includes the
-layout type, breakout mode, cell count/order and stored cell widths, but excludes
-cell body content. `layoutPath` prevents equal text in different columns from
-being matched together.
+current layout compatibility signatures are identical. The signature includes
+the layout type, breakout mode and cell count/order, but excludes cell body
+content and stored widths. `layoutPath` prevents equal text in different columns
+from being matched together.
 
-Known limitation: changing a column width, adding/removing/reordering columns,
-or otherwise changing the layout structure signature causes the complete layout
-to fall back to old/current blocks and one whole-layout recovery choice. The
-current code does not safely stage those structural changes per column.
+Stored width vectors are compared separately for compatible sections. A resized
+section renders one compact old/current ratio decision and outlines only the
+affected columns; unchanged child content is not placed inside a removed/added
+page frame. All affected cells in the section share one atomic choice so recovery
+cannot mix incompatible ratios. Restoring old widths changes only the width
+attributes on current cell opening tags, preserving current local IDs and other
+editor metadata. Content choices inside those cells remain independent. An
+unresolved width change and its affected columns use the same red visual language
+as removed content; choosing current widths resolves it in green, while restoring
+historical widths remains red.
+
+Adding/removing/reordering columns, changing the layout type or breakout mode,
+or otherwise changing the compatibility signature still falls back to complete
+old/current layout blocks. Those genuinely structural changes do not yet support
+per-column staging.
 
 ## Recovery and Preview Safety
 
@@ -332,11 +344,11 @@ cd static/hello-world
 npm.cmd run build
 ```
 
-Last verified on 2026-07-14:
+Last verified on 2026-07-15:
 
 ```text
 Test Suites: 2 passed, 2 total
-Tests:       106 passed, 106 total
+Tests:       111 passed, 111 total
 Production build: compiled successfully
 ```
 
