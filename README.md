@@ -1,700 +1,379 @@
 # Dynamic History
 
-Dynamic History is a Confluence Forge content action app for viewing page
-version history, comparing a selected historical version with the current
-version and safely writing a chosen recovery result back to the current page.
+Dynamic History is a Confluence Forge content action for viewing page version
+history, comparing a selected historical version with the current page, choosing
+which changed blocks to keep, and writing the reconstructed result back as a new
+version of the current page.
 
-This app was originally created from a Forge Custom UI template, so the frontend
-folder is still named `static/hello-world`.
+The repository is an existing Forge Custom UI app. Its React frontend remains in
+the template-generated `static/hello-world` directory.
 
-## Project Map
+## Current User Flow
 
-Paths below are relative to the `9900` project folder.
+1. Open **Dynamic History** from a Confluence page content action.
+2. Select a version from the left-hand timeline.
+3. Compare that version with the newest/current version.
+4. Click a changed block to reveal **Keep current change** and
+   **Restore old content**.
+5. After choosing, use **Undo** to clear that choice if necessary.
+6. Open **Preview Draft** to inspect the reconstructed result.
+7. Use **Write to Current Page** to create a new current-page version.
+
+Previewing is read-only. The page is updated only after the final write button is
+pressed. Despite the modal name, the current frontend does not create an
+unpublished Confluence draft.
+
+## Repository Map
+
+Paths are relative to the repository root.
 
 ```text
 manifest.yml
-  Forge app manifest. Defines the Confluence content action, Custom UI resource,
-  resolver function, scopes, and runtime.
+  Forge content-action module, Custom UI resource, resolver, runtime and scopes.
 
 src/index.js
-  Backend Forge resolver. Fetches Confluence page versions, attachments, authors,
-  retains the legacy unpublished-draft resolver and writes version-checked
-  recovery updates.
+  Forge resolver for page versions, attachments, authors, legacy draft creation,
+  and version-checked current-page write-back.
 
 static/hello-world/src/App.js
-  Frontend entry point. Loads Forge bridge data in Confluence and mock data in
-  local development.
+  Frontend data loading, local mock fallback and top-level page state.
 
 static/hello-world/src/components/Timeline.js
 static/hello-world/src/components/VersionCard.js
-  Version timeline UI.
+  Version timeline.
 
 static/hello-world/src/components/ComparisonPanel.js
-  Main comparison UI. Calls the rich diff helper, renders selectable change
-  blocks, opens Draft Preview, and sends validated Storage HTML to the Draft or
-  direct write-back resolver.
-
-static/hello-world/src/recoveryStorage.js
-  Rebuilds validated Confluence Storage from block choices and safely groups
-  Task/Decision items before Draft creation or direct write-back.
+  Comparison UI, change grouping, Keep/Restore/Undo state, preview modal and
+  write-back invocation.
 
 static/hello-world/src/utils.js
-  Core rich-text handling. Converts Confluence storage HTML into safe preview
-  HTML, splits content into semantic blocks, builds type-specific diffs, and
-  keeps raw storage HTML available for draft reconstruction.
+  Storage-format renderer, sanitizer, semantic block extraction, signatures,
+  LCS diff, layout handling and table comparison.
+
+static/hello-world/src/recoveryStorage.js
+  Reconstructs valid Confluence Storage from whole-block choices.
 
 static/hello-world/src/styles.css
-  Layout, timeline, rich preview, diff, unsupported fallback, task, panel, and
-  whiteboard card styles.
-
-static/hello-world/src/mockData.js
-  Local mock page versions for development outside Confluence.
+  App, renderer, diff, table and layout presentation.
 
 static/hello-world/src/utils.test.js
 static/hello-world/src/recoveryStorage.test.js
-  Focused tests for rich-text normalization, block-level recovery behavior,
-  type-specific diffs, Storage reconstruction, unsupported content, and preview
-  safety.
+  Renderer, diff and Storage reconstruction regression tests.
 ```
 
-## Forge Structure
+## Forge Configuration
 
-`manifest.yml` defines one `confluence:contentAction` named `Dynamic History`.
-The module serves the Custom UI bundle from:
+`manifest.yml` declares one `confluence:contentAction` and serves the built
+frontend from `static/hello-world/build`.
 
-```text
-static/hello-world/build
-```
-
-The backend resolver is declared in:
+Current runtime and scopes:
 
 ```text
-src/index.js
-```
+nodejs24.x, arm64, 256 MB
 
-Current scopes:
-
-```text
 read:page:confluence
 read:attachment:confluence
 read:confluence-user
 write:page:confluence
 ```
 
-The resolver uses `api.asUser().requestConfluence(...)` for Confluence REST API
-calls so access follows the invoking user's Confluence permissions.
+The backend uses `api.asUser().requestConfluence(...)`, so Confluence evaluates
+requests with the invoking user's permissions.
 
-## Backend Flow
+## Backend Resolvers
 
-`src/index.js` exposes two important resolver actions.
+### `getPageVersions`
 
-### getPageVersions
+Returns the data required by the frontend:
 
-Fetches the page data needed by the frontend:
+- the current page title and live Storage body;
+- historical versions in newest-first order, including Storage bodies;
+- attachment download URLs indexed by filename;
+- author display names where available; and
+- the page/base URL metadata used by the renderer.
 
-1. Current page metadata and title.
-2. The live current-page storage body from the page-by-id endpoint.
-3. All page versions, newest first.
-4. Storage-format body HTML for each historical version.
-5. Page attachments, used to resolve image attachment macros.
-6. Author display names where available.
+Version fetching follows cursor pagination with a safety cap of 1,000 versions.
+Attachment fetching also has a 1,000-item safety cap. The newest timeline entry
+uses the live page-by-id Storage body when available, because it is more reliable
+for complex current pages than the versions listing alone.
 
-The newest version uses the live current-page body when it is available. This
-avoids incomplete current-vs-current previews when the versions response omits
-or truncates complex storage content. Historical versions continue to use the
-versions endpoint.
+### `writeRecoveredPage`
 
-The frontend expects each version body as Confluence storage HTML:
+Writes reconstructed Storage directly to the current page. Before the PUT it:
+
+- validates the page ID and non-empty Storage string;
+- rejects payloads larger than 2 MB;
+- re-reads the live page with `asUser()`;
+- verifies that its version still equals `expectedVersionNumber`; and
+- increments the page version with a recovery message.
+
+If another edit has created a newer version since Preview Draft was prepared,
+the resolver rejects the write instead of overwriting that edit.
+
+### `createDraft` (legacy)
+
+The resolver can still create an unpublished page named with a
+`— Restored draft` suffix. It is retained for compatibility, but the current
+frontend has no invocation of `createDraft`.
+
+## Frontend Data Flow
+
+Inside Confluence, `App.js` loads `@forge/bridge` and invokes
+`getPageVersions`. On `localhost` or when the bridge cannot initially be reached,
+the app uses `mockData.js` so the UI can be developed locally.
+
+The comparison direction is:
+
+```text
+selected historical version  ->  current version
+```
+
+Therefore `removed` means content from the selected historical version, while
+`added` means content in the current version.
+
+Selecting the current version compares the live body with itself through the
+same renderer. It should show a zero-change full-page preview rather than a
+shortened alternate path.
+
+## Manual Storage Renderer
+
+Both the comparison page and Preview Draft use the app's manual renderer. The
+current implementation does **not** call the Confluence Content Body Conversion
+API and does not use `AdfRenderer`.
+
+The main renderer is:
 
 ```js
-{
-  body: {
-    representation: 'storage',
-    value: '<p>...</p>'
-  }
-}
+prepareConfluenceHtml(storageHtml, baseUrl, attachmentsByFilename, usersByAccountId)
 ```
 
-### createDraft
+It converts supported Storage/ADF constructs into ordinary preview HTML, then
+sanitizes the result with explicit allowlists for tags, attributes, URLs, styles
+and app-owned `data-dh-*` metadata. Display HTML is never used as the source of
+truth for recovery; original Storage fragments are retained separately.
 
-Creates an unpublished Confluence page beside the source page. This legacy
-backend resolver remains available for compatibility, but the current Preview
-Draft UI does not invoke it.
+Current renderer coverage includes:
 
-### writeRecoveredPage
+- paragraphs, H1-H6 headings, links, rules, hard breaks and blockquotes;
+- bold, italic, underline, strike, subscript, superscript, inline code, text
+  colour, highlight, alignment and indentation;
+- ordered, unordered, nested and task lists;
+- tables with headers, cell backgrounds, alignment, `rowspan` and `colspan`;
+- ADF and structured-macro panels, including stored/custom backgrounds;
+- decisions and decided/undecided state;
+- dates, statuses, mentions, emoji and supported smart-link metadata;
+- code macros with compact line presentation, language metadata and CDATA
+  cleanup for preview/write-back;
+- attached and external images with dimensions, alignment/wrapping, captions
+  and ADF borders;
+- Expand content using `<details>/<summary>`;
+- Confluence multi-column layouts; and
+- readable cards for whiteboards and unsupported Storage.
 
-Writes the same validated recovery Storage HTML directly to the current page.
-The resolver re-reads the page with `asUser()` immediately before updating it
-and rejects the request when the page version no longer matches the version
-used to prepare the preview. The existing `write:page:confluence` scope covers
-both draft creation and direct write-back.
+Panel type is derived from ADF attributes or the structured macro name, never
+from visible body text. The target site's legacy macro mapping is intentionally
+preserved (`tip -> success`, `note -> warning`, `warning -> error`). Panel icons
+are hidden and a bold type label is rendered before the original body.
 
-## Frontend Flow
+Unsupported nodes render a safe fallback card and escaped raw inspector while
+retaining the original Storage for comparison and recovery. They must not be
+silently dropped or reconstructed from the fallback card.
 
-`static/hello-world/src/App.js`:
-
-1. Loads `@forge/bridge` only inside Confluence.
-2. Calls `invoke('getPageVersions')`.
-3. Falls back to `mockData` during local preview.
-4. Tracks the selected historical version.
-5. Renders the timeline and `ComparisonPanel`.
-
-`ComparisonPanel.js` compares:
-
-```text
-selected historical version -> current version
-```
-
-So:
-
-- added content means it exists in the current version but not in the selected
-  historical version;
-- removed content means it existed in the selected historical version but no
-  longer exists in the current version.
-
-For changed blocks, the user can choose:
-
-```text
-Keep current change
-Restore old content
-```
-
-The Draft Preview modal shows the reconstructed result first. Its only actions
-are `Back to changes` and `Write to Current Page`; the latter calls
-`writeRecoveredPage`. Previewing alone never writes to Confluence.
-
-## Rich Text Handling
+## Diff Model
 
 The main entry point is:
 
 ```js
-buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename)
+buildRichTextDiffHtml(oldHtml, currentHtml, baseUrl, attachmentsByFilename, usersByAccountId)
 ```
 
-Location:
+The active page-level result contract uses only:
 
 ```text
-static/hello-world/src/utils.js
-  buildRichTextDiffHtml
+same
+removed
+added
 ```
 
-The function returns renderable preview HTML plus a structured block list:
+A replacement is represented as the old block followed by the new block. The
+summary still contains `modifiedBlocks` for compatibility, but the current
+page-level pipeline does not emit `modified` result blocks.
 
-```js
-{
-  html: string,
-  blocks: [
-    {
-      type: 'same' | 'added' | 'removed',
-      nodeType: string,
-      tag: string,
-      html?: string,
-      renderedHtml?: string,
-      oldHtml?: string,
-      newHtml?: string,
-      text?: string,
-      tableDiff?: object,
-      supportLevel?: 'full' | 'raw',
-      rawPreview?: string,
-      added?: number,
-      removed?: number,
-    }
-  ],
-  summary: {
-    added: number,
-    removed: number,
-    addedBlocks: number,
-    removedBlocks: number,
-    modifiedBlocks: number,
-    unchangedBlocks: number,
-    limited: boolean
-  }
-}
-```
+The renderer first extracts semantic blocks and generates canonical DOM
+signatures. Signatures retain meaningful structure, formatting, dates, links,
+image metadata and renderer attributes while ignoring serialization-only
+differences such as attribute order and equivalent `<b>/<strong>` or
+`<i>/<em>` tags. The old and current block sequences are aligned with LCS.
 
-`modifiedBlocks` remains in the summary shape for compatibility with existing
-UI code, but Sprint 2 diff output does not emit `modified` blocks and this count
-is therefore `0`. A changed block is always represented by the old block as
-`removed`, followed by the new block as `added`.
+If `oldBlockCount * currentBlockCount` exceeds 120,000, the function returns a
+limited current-side result rather than allocating an unsafe LCS matrix. The UI
+shows a limited-comparison warning.
 
-Important distinction:
+### Comparison and Selection Granularity
+
+- Paragraphs, headings, ordinary lists, blockquotes, panels, code blocks,
+  expands, images and unsupported blocks are complete comparison units.
+- Task and Decision items are extracted independently, then reconstructed into
+  valid list/group Storage.
+- Inline date, status, mention, emoji and formatting changes make their
+  containing block different.
+- Compatible adjacent old/new blocks with the same semantic type and HTML tag
+  share one Keep/Restore decision.
+- Recovery remains block-level. Table cells and layout wrappers are not
+  independently staged.
+
+Unresolved changes display red/green outer borders and `-`/`+` gutters without
+red/green fills, so original content backgrounds remain visible. Clicking a
+change reveals its actions. A resolved block displays the selected complete
+content, its status, and an Undo button.
+
+## Table Diff
+
+Table matching uses logical grid coordinates rather than raw `<td>` indexes.
+`rowspan` and `colspan` occupy all of their logical slots, preventing later cells
+from shifting during matching.
+
+When mapping is reliable, the comparison UI renders one table:
+
+- unchanged cells appear once;
+- a modified cell contains previous and current regions with red and green
+  borders, preserving each version's own cell background;
+- a complete row appended/removed at the bottom or a complete column
+  appended/removed on the right is outlined as one structural region;
+- simultaneous terminal row/column changes are rendered as one L-shaped region;
+- opposite terminal changes use a neutral synthetic corner where neither
+  source table has a real cell; and
+- structural row/column regions omit `-`/`+` markers so narrow cells are not
+  widened or covered.
+
+The app falls back to complete old/current table rows when correspondence is
+ambiguous, including middle row/column insertion, span changes, duplicate
+logical coordinates, or other incompatible grid geometry.
+
+Cell-level display does not change recovery granularity. The underlying old and
+current complete table blocks still share one Keep/Restore choice.
+
+## Confluence Layouts
+
+The renderer supports standard layout types:
 
 ```text
-html / oldHtml / newHtml
-  Storage HTML used for reconstruction and draft creation.
-
-renderedHtml / oldRenderedHtml / newRenderedHtml
-  Safe readable preview HTML used only for display.
+single
+two_equal
+two_left_sidebar
+two_right_sidebar
+three_equal
+three_with_sidebars
 ```
 
-This separation is intentional. The app can show a readable fallback card for a
-macro or smart link while still preserving the original Confluence storage markup
-for draft creation.
+When every cell provides a valid stored width, those widths take precedence over
+the original layout type. Widths are converted to validated integer flex weights
+from 1 to 100, so manually resized layouts such as 25/75 or 25/50/25 keep their
+relative proportions. At viewport widths up to 760 px, layouts intentionally
+stack into one column.
 
-## Sprint 2 Diff Policy
+For diff and recovery, a layout is split into non-selectable Layout/Section/Cell
+boundaries plus independently selectable child blocks only when the old and
+current layout structure signatures are identical. The signature includes the
+layout type, breakout mode, cell count/order and stored cell widths, but excludes
+cell body content. `layoutPath` prevents equal text in different columns from
+being matched together.
 
-The diff is deliberately block-based. Confluence pages are first rendered with
-the existing safe renderer, then extracted into semantic blocks. The old and
-current block sequences are aligned with a longest-common-subsequence comparison
-using stable semantic signatures rather than plain visible text.
+Known limitation: changing a column width, adding/removing/reordering columns,
+or otherwise changing the layout structure signature causes the complete layout
+to fall back to old/current blocks and one whole-layout recovery choice. The
+current code does not safely stage those structural changes per column.
 
-### Classification and Display
+## Recovery and Preview Safety
 
-The structured result model has exactly three classifications:
+`buildRecoveryStorageHtml` defaults every unresolved change to the current
+version. Only an explicit `old` choice restores historical Storage.
 
-```text
-same     equivalent content exists in both versions
-removed  content exists only in the selected historical version
-added    content exists only in the current version
+The recovery layer:
+
+- selects original old/current Storage rather than rendered HTML;
+- preserves layout boundary tags for compatible layouts;
+- rebuilds Task and Decision groups without duplicate wrappers/fallback items;
+- preserves self-closing Confluence references and valid code CDATA;
+- normalizes preview-readable malformed code Storage before write-back; and
+- stops with an error if required raw Storage is unavailable.
+
+Preview Draft uses the already-rendered selected diff blocks exactly once. This
+avoids rendering both an ADF node and its Storage fallback as duplicate visible
+content. The separate reconstructed Storage string is the value sent to
+`writeRecoveredPage`.
+
+## Install, Test and Build
+
+A fresh clone has two npm projects. Install each one when `node_modules` is
+missing or its dependency files changed:
+
+```powershell
+# Repository root: Forge resolver dependencies
+npm.cmd install --legacy-peer-deps
+
+# Custom UI dependencies
+cd static/hello-world
+npm.cmd install --legacy-peer-deps
 ```
 
-A replacement never creates a fourth `modified` or `changed` result type. It is
-represented as a `removed` old block and an `added` new block. Result order is
-preserved, with old content displayed before its corresponding new content.
-
-The display layer groups compatible old/new blocks into one recovery decision:
-
-- a directly adjacent `removed`/`added` pair can share one choice;
-- when the diff produces a continuous run such as three removed blocks followed
-  by three added blocks, blocks are paired in order by matching `nodeType` and
-  HTML tag;
-- each paired red/green group has one `Keep current change` and one
-  `Restore old content` action;
-- unmatched blocks remain independent, which avoids forcing one-to-many changes
-  or unrelated semantic types into the same choice.
-
-Removed rows use a red outer border and added rows use a green outer border. The
-border wraps the complete row, including the `-`/`+` gutter. Diff rows have no
-red or green fill, so original text colours, highlights, panel backgrounds,
-date backgrounds, status colours, image presentation, and table-cell
-backgrounds remain visible.
-
-Implementation locations:
-
-```text
-static/hello-world/src/utils.js
-  canonicalDomSignature
-  extractDiffBlocks
-  buildRichTextDiffHtml
-  buildTableReplacementBlocks
-
-static/hello-world/src/components/ComparisonPanel.js
-  buildChangeRunRows
-  buildDiffDisplayRows
-
-static/hello-world/src/styles.css
-  .dh-github-diff-part--removed
-  .dh-github-diff-part--added
-```
-
-### Semantic Equality Rules
-
-The stable DOM signature includes meaningful element structure, inline marks,
-links, dimensions, spans, dates, and app rendering metadata. Attribute and CSS
-declaration order do not affect equality. Serialization-only whitespace is
-normalised, and equivalent inline tags such as `<b>`/`<strong>` and `<i>`/`<em>`
-compare as the same content.
-
-Visible breaks follow a specific rule:
-
-```text
-one <br> and multiple consecutive <br> elements are equivalent
-no <br> and one or more <br> elements are different
-```
-
-Formatting is content for diff purposes. Changes to bold, italic, links, text
-colour, highlight colour, alignment, indentation, or other preserved semantic
-attributes make the containing block different.
-
-### Type-by-Type Behavior
-
-| Content type | Extraction unit | Diff behavior |
-| --- | --- | --- |
-| Paragraph | One complete paragraph | Text, inline formatting, links, dates, statuses, or visible-break changes produce the old paragraph as `removed` and the new paragraph as `added`. A paragraph split remains one removed block plus multiple added blocks. |
-| Heading | One complete H1-H6 heading | Compared independently from paragraphs. Text, formatting, or heading-level changes produce removed/added blocks; a heading is never matched to a paragraph. |
-| Ordered/unordered list | One complete `<ol>` or `<ul>`, including nested items | Item text, item order, nesting, or list type changes make the whole list different. Adjacent lists remain separate list blocks. |
-| Task list | One task item per block | Task text and completed/incomplete state are compared independently for each task. The original task storage HTML remains attached to that item. |
-| Blockquote | One complete blockquote | All nested paragraphs and formatting are compared as one block; an internal change replaces the whole quote. |
-| Information panel | One panel per block | Each info, note, warning, tip, success, error, or generic panel is independent. Panel type, content, and preserved styling participate in comparison. |
-| Decision list | One Decision item per block | Decision text and decided/undecided state are compared independently; changing one Decision does not replace the complete list. |
-| Date | Inline content inside its containing block | Storage dates, ADF dates, links, and `<time>` elements are normalised to semantic dates. Equivalent representations compare the same; a date change makes the whole containing paragraph or block different. |
-| Status, mention, emoji, and inline smart content | Inline content inside its containing block | Preserved semantic value and metadata participate in the containing block signature. A meaningful change replaces that containing block. |
-| Image | One image/figure per block | Images compare persistent identity and display metadata, including attachment/content IDs, filename or source, dimensions, alignment/layout, border, alt/title, rotation, and embedded caption. A manually typed paragraph below an image is a separate paragraph. |
-| Compatible table | One old table and one new table, with corresponding cells | Compatibility requires matching row count, effective column count, cell type/position, `rowspan`, and `colspan`. Only semantically changed cells receive red/green inset borders; unchanged cell styling and backgrounds are preserved. |
-| Incompatible table | One complete old table and one complete new table | Row/column count or span changes disable cell matching. The complete old and new tables are shown as removed/added rows with outer borders and no forced cell-level markers. |
-| Code block | One complete code macro/block | Escaped code text is part of the block signature. Any code-content change produces complete removed/added code blocks while preserving whitespace, line presentation, and language rendering metadata. |
-| Expand macro | One complete Expand block | The summary and nested rendered content are compared together. A change produces a removed old Expand and an added new Expand. |
-| Whiteboard or block smart-link card | One complete card | The rendered title and persistent target metadata are compared as one block while original storage remains available. |
-| Unsupported macro/extension | One raw-preserved block | Equality is based on preserved raw storage. A raw change produces removed/added fallback cards; unsupported content is never silently dropped or converted to plain text. |
-| Layout/container wrapper | Not a diff block when transparent | Ordinary block containers and Confluence layout wrappers expose their semantic children so an entire section does not become one oversized diff. Current multi-column layouts still render vertically. |
-
-### Unsupported Content Safety
-
-Unsupported content must never become blank, deleted, or silently converted into
-plain text. Normal preview shows a readable fallback card while the original raw
-HTML or JSON is retained for comparison and reconstruction. The raw inspector
-escapes this source instead of rendering it with `dangerouslySetInnerHTML`, and
-normal preview filters internal IDs and implementation metadata.
-
-Implementation locations:
-
-```text
-static/hello-world/src/utils.js
-  createRawFallbackHtml
-  cleanUserFacingName
-  expandUnsupportedStorageNodes
-  expandAdfNodes
-  visibleTextContent
-
-static/hello-world/src/styles.css
-  [data-dh-node-type='unsupported']
-  [data-dh-raw-inspector='true']
-```
-
-## Confluence Storage Normalization
-
-Preview rendering starts with:
-
-```text
-prepareConfluenceHtml
-```
-
-Location:
-
-```text
-static/hello-world/src/utils.js
-  prepareConfluenceHtml
-```
-
-It expands a safe subset of Confluence storage HTML into display HTML:
-
-```text
-Confluence links
-image attachments, dimensions, alignment, captions, and borders
-code macros and line numbers
-task lists
-panel-like macros
-ADF marks for formatting, colour, alignment, and indentation
-ADF status, emoji, mention, date, task, decision, smart link nodes
-unsupported macros/extensions
-whiteboard smart links
-```
-
-After expansion, it sanitizes tags and attributes before returning preview HTML.
-Allowed data attributes are used only for app-specific rendering and diff
-classification.
-
-## Manual Renderer Coverage
-
-The comparison page and Draft Preview use the app's manual storage-format
-renderer. They do not depend on the Confluence Content Body Conversion API.
-Storage HTML and display HTML remain separate so the renderer can improve the
-preview without changing the content used for recovery or draft creation.
-
-The current manual renderer covers the team's required insert elements:
-
-- text marks, including bold, italic, underline, strike-through, subscript,
-  superscript, text colour, and highlight colour;
-- headings H1-H6, paragraphs, blockquotes, horizontal rules, hard breaks, and
-  links;
-- ordered and unordered lists, including nested lists and empty parent bullets;
-- tables, including headers, `rowspan`, `colspan`, cell alignment, and cell
-  background colours such as `data-highlight-colour="#b3bac5"`;
-- Confluence information panels represented as structured macros or ADF panel
-  extensions, with type and colour derived from storage metadata rather than
-  visible text;
-- decision lists and their decided/undecided state;
-- Confluence dates from storage macros, ADF nodes, links, and `<time>` elements;
-- attached images with resolved URLs, width, height, alignment, wrapping,
-  captions, and ADF border marks.
-
-The renderer also includes the following enhanced support:
-
-- Expand/Collapse macros using native `<details>` and `<summary>` preview
-  markup;
-- text alignment and level-based indentation without cumulative nested ADF
-  offsets;
-- code blocks with language metadata, compact numbered lines, CDATA cleanup,
-  and repairs for malformed HTML code-block wrappers;
-- status labels with their stored label and colour;
-- safe readable cards for unsupported content while preserving the original
-  storage markup for reconstruction.
-
-Known limitation: Confluence `ac:layout`, `ac:layout-section`, and
-`ac:layout-cell` wrappers are currently treated as transparent containers so
-their child content can be diffed independently. As a result, multi-column page
-layouts are displayed vertically. Restoring columns requires preserving layout
-group metadata through block extraction and reassembling the rendered blocks;
-this has not yet been implemented.
-
-## Whiteboard Cards
-
-Whiteboard links are rendered as readable Confluence-style cards in preview.
-
-If storage contains a title, the card uses that title, for example:
-
-```text
-Untitled whiteboard 2026-06-30
-```
-
-If storage does not contain a title, the card uses:
-
-```text
-Untitled whiteboard
-```
-
-The preview does not show the raw whiteboard URL as normal text. The original
-link or ADF smart-link storage remains available for reconstruction.
-
-Implementation locations:
-
-```text
-static/hello-world/src/utils.js
-  isWhiteboardUrl
-
-static/hello-world/src/utils.js
-  cleanWhiteboardTitle
-
-static/hello-world/src/utils.js
-  renderWhiteboardCard
-
-static/hello-world/src/utils.js
-  expandConfluenceLinks
-
-static/hello-world/src/utils.js
-  expandWhiteboardAnchors
-
-static/hello-world/src/utils.js
-  expandAdfNodes
-
-static/hello-world/src/styles.css
-  [data-dh-node-type='whiteboard_card']
-
-static/hello-world/src/styles.css
-  [data-dh-whiteboard-icon='true']
-
-static/hello-world/src/styles.css
-  [data-dh-whiteboard-product='true']
-
-static/hello-world/src/styles.css
-  [data-dh-whiteboard-open='true']
-```
-
-## Block Extraction and Big Diff Prevention
-
-One issue fixed during this work was Confluence layout or wrapper markup causing
-large page sections to be treated as one giant diff block.
-
-The current logic treats layout wrappers and ordinary containers as transparent
-when they contain semantic child blocks.
-
-Implementation locations:
-
-```text
-static/hello-world/src/utils.js
-  hasBlockElementChildren
-
-static/hello-world/src/utils.js
-  isTransparentContainer
-
-static/hello-world/src/utils.js
-  isRawTransparentContainer
-
-static/hello-world/src/utils.js
-  collectRawBlockNodes
-
-static/hello-world/src/utils.js
-  extractComparableBlocksFromPreparedNode
-
-static/hello-world/src/utils.js
-  extractDiffBlocks
-```
-
-This allows tables, tasks, panels, whiteboard cards, headings, paragraphs, and
-other blocks to be compared separately instead of as one page-sized block.
-
-## Draft Reconstruction Safety
-
-Storage reconstruction is handled by `recoveryStorage.js` and is consumed by
-`ComparisonPanel.js` for both Draft creation and direct write-back.
-
-Important rule:
-
-```text
-The recovery builder chooses between old and current raw Storage for each block.
-It should not reconstruct complex Confluence storage from rendered preview HTML.
-```
-
-This protects unsupported macros, extensions, whiteboards, and other complex
-storage nodes from being degraded into plain text.
-
-Implementation location:
-
-```text
-static/hello-world/src/recoveryStorage.js
-  buildRecoveryStorageHtml
-
-static/hello-world/src/components/ComparisonPanel.js
-  prepareConfluenceHtml recovery-preview call
-  buildRichTextDiffHtml call site
-  writeRecoveredPage invocation
-```
-
-## Tests
-
-Focused tests live in:
-
-```text
-static/hello-world/src/utils.test.js
-static/hello-world/src/recoveryStorage.test.js
-```
-
-Current coverage includes 87 focused tests for:
-
-- the `same`/`removed`/`added` result contract and removed-then-added
-  replacement order;
-- whole-block paragraph, heading, list, blockquote, panel, Decision, date,
-  image, and code behavior;
-- semantic inline formatting, link, attribute-order, serialization-whitespace,
-  and visible-break comparison;
-- compatible table cell borders and incompatible table structure fallback;
-- preservation of original colours, highlights, panel/status/date styling, and
-  table-cell backgrounds inside bordered diff rows;
-- independent task items, decisions, images, and transparent container child
-  blocks;
-- same-version rendering after complex macros and media;
-- nested unordered-list markers;
-- text formatting, colours, highlights, alignment, and indentation;
-- merged table cells and storage-format cell background colours;
-- Confluence dates, panel metadata mapping, status labels, and decisions;
-- code CDATA cleanup, lossless write-back, and malformed HTML code-block repair;
-- image captions, dimensions, alignment, and ADF border metadata;
-- unsupported-content fallbacks, raw storage preservation, and internal-field
-  filtering;
-- whiteboard smart-link cards and transparent container splitting;
-- grouped Task/Decision Storage reconstruction, layout-boundary recovery,
-  parser-safe self-closing Confluence elements, and unsafe write-back rejection;
-- interrupted and fully changed Task groups, ADF Task Storage, and independent
-  duplicate raw macro recovery groups.
-
-Run the focused test suite from:
+The frontend package currently has no `test` script, so run the focused suite
+through the installed React Scripts binary:
 
 ```powershell
 cd static/hello-world
-npx.cmd react-scripts test src/utils.test.js src/recoveryStorage.test.js --watchAll=false --runInBand
+node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --runInBand
 ```
 
-Last verified result:
-
-```text
-Test Suites: 2 passed
-Tests: 87 passed
-```
-
-Jest may print a warning that it did not exit immediately because of open
-handles. The build also prints the existing Create React App warning about
-`babel-preset-react-app`. Those warnings were not introduced by the rich-text
-changes.
-
-## Build and Deploy
-
-Build the Custom UI bundle:
+Build the deployable Custom UI resource:
 
 ```powershell
 cd static/hello-world
-npm run build
+npm.cmd run build
 ```
 
-Deploy to the `jzm-dev` Forge environment from the Forge app root:
+Last verified on 2026-07-14:
+
+```text
+Test Suites: 2 passed, 2 total
+Tests:       106 passed, 106 total
+Production build: compiled successfully
+```
+
+The test run currently prints a Jest open-handle notice and the known Create
+React App/Babel warning. The production build also reports old Browserslist data
+and the same Babel warning; these warnings do not fail the commands.
+
+## Forge Validation and Deployment
+
+Run Forge commands from the repository root. Confirm the directory first:
 
 ```powershell
-forge deploy --non-interactive -e jzm-dev
+pwd
+forge lint
+forge deploy --non-interactive -e development
 ```
 
-`npm install --legacy-peer-deps` is not required every time. Use it only when
-dependencies are missing, `node_modules` was removed, or `package.json` /
-`package-lock.json` dependencies changed.
+Only reinstall/upgrade when scopes or permissions changed, for example:
 
-The generated asset hashes change after each build. After deploying, verify that
-the Forge iframe loads the current files from
-`static/hello-world/build/static/`. If it still loads older `main.*.js` or
-`main.*.css` files, the deployed environment or browser cache is not using the
-latest build.
+```powershell
+forge install --non-interactive --upgrade --site <site-url> --product confluence --environment development
+```
 
-## Recent Sprint 2 Changes
+Code-only changes still require rebuilding `static/hello-world` before a normal
+deploy because Forge serves the generated `build` directory. During an active
+Forge tunnel, code changes are hot reloaded; manifest changes require redeploying
+and restarting the tunnel.
 
-This iteration added semantic Sprint 2 diff classification and display behavior
-on top of the broader manual renderer used by the team's test page.
+## Maintenance Rules
 
-### Diff classification and display
-
-- `utils.js` now aligns semantic blocks using canonical DOM signatures that
-  retain meaningful formatting and metadata while ignoring serialization-only
-  differences.
-- Changed content is emitted only as an old `removed` block followed by a new
-  `added` block; no new modified/changed result type was introduced.
-- Paragraphs, headings, ordinary lists, blockquotes, panels, dates, images,
-  decisions, code blocks, expands, and unsupported blocks follow the
-  type-specific rules documented above.
-- Compatible tables compare corresponding cells and mark only changed cells;
-  incompatible tables fall back to complete old/new table blocks.
-- `ComparisonPanel.js` groups compatible removed/added blocks in each continuous
-  change run so one logical red/green pair shares one Keep/Restore choice.
-- `styles.css` replaces red/green row fills with outer borders around the full
-  row and gutter while retaining original rich-content styling.
-- No dependencies, Forge scopes, manifest permissions, or backend APIs were
-  added, and this work was not deployed to Forge.
-
-### Current-page completeness
-
-- `src/index.js` now requests the live page with `body-format=storage` and uses
-  that body for the newest version when available.
-- `ComparisonPanel.js` sends current-vs-current previews through the same
-  semantic block renderer as normal comparisons. This prevents complex content
-  near the end of a page from disappearing while keeping a zero-change summary.
-
-### Storage normalization and rendering
-
-- `utils.js` now normalizes safe text colours, highlights, table backgrounds,
-  status colours, alignment, indentation, dates, and CSS lengths into explicit
-  `data-dh-*` rendering metadata.
-- Nested list structure and empty parent bullets are retained instead of being
-  collapsed onto the first child item.
-- Panel type is selected from ADF attributes or structured-macro names, not from
-  the visible panel text. The preview uses a bold textual type label in place of
-  the original icon and preserves the complete panel body.
-- ADF decision lists render as readable decided/undecided rows instead of an
-  unsupported-content card.
-- Code macros remove CDATA wrappers for rendering, retain whitespace and line
-  numbers, preserve the original CDATA for write-back, and repair malformed
-  opening/closing markup observed in HTML code blocks.
-- Image rendering reads exact width and height attributes without confusing
-  them with `original-width` or `original-height`. It also handles attachment
-  captions, alignment, wrapping, native image dimensions, and ADF border marks.
-- The sanitizer explicitly permits only the tags, attributes, URLs, styles, and
-  app metadata needed by these renderers.
-
-### Styling and verification
-
-- `styles.css` adds Confluence-like presentation for headings, nested lists,
-  tables, panels, decisions, dates, statuses, expands, code blocks, colours,
-  indentation, and image figures.
-- `utils.test.js` contains regression cases based on the actual storage markup
-  observed during testing, including malformed CDATA, ADF panels and decisions,
-  `data-highlight-colour`, image border marks, and exact image dimensions.
-- No npm dependencies, Forge scopes, or manifest permissions were added for
-  this renderer work.
-
-## Development Notes
-
-- Build `static/hello-world` before Forge deploy because Forge serves the
-  generated `static/hello-world/build` resource.
-- Use `api.asUser()` for user-facing Confluence REST API access.
-- Do not use `--no-verify` for deploy unless explicitly requested.
-- If scopes or permissions in `manifest.yml` change, redeploy and then reinstall
-  or upgrade the app.
-- Keep `mockData.js` aligned with the resolver response shape.
-- Do not move draft reconstruction into the visual preview layer.
-- Do not use `dangerouslySetInnerHTML` for raw storage display.
-- Unsupported content must remain recoverable even when preview rendering is
-  incomplete.
+- Keep display HTML and recoverable Storage separate.
+- Do not render raw Storage directly with `dangerouslySetInnerHTML`.
+- Keep unsupported content recoverable even when its visual fallback is limited.
+- Preserve `layoutPath`, logical table coordinates and span checks when changing
+  matching behavior.
+- UI grouping may share a choice key, but must not mutate the underlying
+  `same`/`removed`/`added` result order.
+- Keep write-back version checking and `asUser()` permission enforcement.
+- Run both focused test suites and the production build after renderer, diff or
+  recovery changes.
