@@ -291,15 +291,11 @@ function getLayoutWrapperProps(block) {
     'data-dh-layout-custom-widths',
     'data-dh-layout-cell',
     'data-dh-layout-width',
+    'data-dh-layout-weight',
   ].forEach((name) => {
     const value = element.getAttribute(name);
     if (value !== null) props[name] = value;
   });
-
-  const gridTemplateColumns = element.style && element.style.gridTemplateColumns;
-  if (gridTemplateColumns) {
-    props.style = { gridTemplateColumns };
-  }
 
   return props;
 }
@@ -925,7 +921,7 @@ function ComparisonPanelContent({
                             title="Undo this content choice"
                             type="button"
                           >
-                            ↶
+                            Undo
                           </button>
                         </div>
                         {resolvedHtml ? (

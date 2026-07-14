@@ -425,46 +425,42 @@ describe('type-specific diff safety', () => {
     expect(result.blocks[1].newHtml).toContain('ac:type="two_left_sidebar"');
   });
 
-  test('layout case 3 renders a narrow left sidebar and wide right content column', () => {
+  test('layout case 3 preserves a Confluence single layout with a 33/67 ratio', () => {
     const layout = [
-      '<ac:layout><ac:layout-section ac:type="twoLeftSidebar" ac:breakout-mode="full-width">',
-      '<ac:layout-cell data-width="50"><p>Left sidebar</p></ac:layout-cell>',
-      '<ac:layout-cell data-width="50"><p>Main content</p></ac:layout-cell>',
+      '<ac:layout><ac:layout-section ac:type="single" ac:breakout-mode="full-width">',
+      '<ac:layout-cell data-width="33.33"><p>Left sidebar</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="66.67"><p>Main content</p></ac:layout-cell>',
       '</ac:layout-section></ac:layout>',
     ].join('');
     const rendered = prepareConfluenceHtml(layout, '');
     const css = require('fs').readFileSync(require('path').join(__dirname, 'styles.css'), 'utf8');
 
-    expect(rendered).toContain('data-dh-layout-type="two_left_sidebar"');
+    expect(rendered).toContain('data-dh-layout-type="single"');
     expect(rendered).toContain('Left sidebar');
     expect(rendered).toContain('Main content');
-    expect(rendered).not.toContain('data-dh-layout-custom-widths="true"');
-    expect(rendered).toContain(
-      'grid-template-columns: minmax(0, 1fr) minmax(0, 2fr)'
-    );
-    expect(css).toMatch(
-      /\[data-dh-layout-type='two_left_sidebar'\]\s*{[^}]*minmax\(0, 1fr\) minmax\(0, 2fr\)/
-    );
+    expect(rendered).toContain('data-dh-layout-custom-widths="true"');
+    expect(rendered).toContain('data-dh-layout-weight="33"');
+    expect(rendered).toContain('data-dh-layout-weight="67"');
+    expect(css).toMatch(/data-dh-layout-weight='33'[^}]*flex-grow:\s*33/);
+    expect(css).toMatch(/data-dh-layout-weight='67'[^}]*flex-grow:\s*67/);
   });
 
-  test('layout case 4 renders a wide left content column and narrow right sidebar', () => {
+  test('layout case 4 preserves a Confluence single layout with a 67/33 ratio', () => {
     const layout = [
-      '<ac:layout><ac:layout-section ac:type="two-right-sidebar" ac:breakout-mode="full-width">',
-      '<ac:layout-cell data-width="50"><p>Main content</p></ac:layout-cell>',
-      '<ac:layout-cell data-width="50"><p>Right sidebar</p></ac:layout-cell>',
+      '<ac:layout><ac:layout-section ac:type="single" ac:breakout-mode="full-width">',
+      '<ac:layout-cell data-width="66.67"><p>Main content</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="33.33"><p>Right sidebar</p></ac:layout-cell>',
       '</ac:layout-section></ac:layout>',
     ].join('');
     const rendered = prepareConfluenceHtml(layout, '');
     const css = require('fs').readFileSync(require('path').join(__dirname, 'styles.css'), 'utf8');
 
-    expect(rendered).toContain('data-dh-layout-type="two_right_sidebar"');
-    expect(rendered).not.toContain('data-dh-layout-custom-widths="true"');
-    expect(rendered).toContain(
-      'grid-template-columns: minmax(0, 2fr) minmax(0, 1fr)'
-    );
-    expect(css).toMatch(
-      /\[data-dh-layout-type='two_right_sidebar'\]\s*{[^}]*minmax\(0, 2fr\) minmax\(0, 1fr\)/
-    );
+    expect(rendered).toContain('data-dh-layout-type="single"');
+    expect(rendered).toContain('data-dh-layout-custom-widths="true"');
+    expect(rendered).toContain('data-dh-layout-weight="67"');
+    expect(rendered).toContain('data-dh-layout-weight="33"');
+    expect(css).toMatch(/data-dh-layout-weight='67'[^}]*flex-grow:\s*67/);
+    expect(css).toMatch(/data-dh-layout-weight='33'[^}]*flex-grow:\s*33/);
   });
 
   test('layout case 5 renders narrow sidebars around a wide middle column', () => {
@@ -479,9 +475,26 @@ describe('type-specific diff safety', () => {
     const css = require('fs').readFileSync(require('path').join(__dirname, 'styles.css'), 'utf8');
 
     expect(rendered).toContain('data-dh-layout-type="three_with_sidebars"');
+    expect(rendered).not.toContain('data-dh-layout-custom-widths="true"');
+    expect(rendered).not.toContain('data-dh-layout-weight=');
     expect(css).toMatch(
       /\[data-dh-layout-type='three_with_sidebars'\]\s*{[^}]*minmax\(0, 1fr\) minmax\(0, 2fr\) minmax\(0, 1fr\)/
     );
+  });
+
+  test('manually resized two-equal layouts use the stored 25/75 ratio', () => {
+    const layout = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="25"><p>Quarter</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="75"><p>Three quarters</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const rendered = prepareConfluenceHtml(layout, '');
+
+    expect(rendered).toContain('data-dh-layout-type="two_equal"');
+    expect(rendered).toContain('data-dh-layout-custom-widths="true"');
+    expect(rendered).toContain('data-dh-layout-weight="25"');
+    expect(rendered).toContain('data-dh-layout-weight="75"');
   });
 
   test('layout case 6 preserves custom 25 50 25 column widths', () => {
@@ -497,9 +510,8 @@ describe('type-specific diff safety', () => {
     expect(rendered).toContain('data-dh-layout-custom-widths="true"');
     expect(rendered).toContain('data-dh-layout-width="25"');
     expect(rendered).toContain('data-dh-layout-width="50"');
-    expect(rendered).toContain(
-      'grid-template-columns: minmax(0, 25fr) minmax(0, 50fr) minmax(0, 25fr)'
-    );
+    expect(rendered.match(/data-dh-layout-weight="25"/g)).toHaveLength(2);
+    expect(rendered).toContain('data-dh-layout-weight="50"');
   });
 
   test('extracts and resolves storage and ADF mention account ids', () => {

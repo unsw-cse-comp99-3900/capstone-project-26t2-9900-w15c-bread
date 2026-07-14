@@ -1039,9 +1039,436 @@ body {
   min-width: 0;
 }
 
+/*
+ * A Confluence layout type records the template the author originally chose,
+ * but it is not always the final column ratio. For example, a two-column
+ * section can still be reported as `single` after the divider is dragged to
+ * 33/67. The renderer marks those sections as custom-width and gives every
+ * cell a validated integer weight. These external rules consume the weights
+ * without copying arbitrary storage markup into a style attribute.
+ */
+.dh-rich-page [data-dh-layout-section='true'][data-dh-layout-custom-widths='true'] {
+  display: flex;
+  align-items: stretch;
+}
+
+.dh-rich-page [data-dh-layout-section='true'][data-dh-layout-custom-widths='true'] > [data-dh-layout-cell='true'] {
+  flex-basis: 0;
+  flex-shrink: 1;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='1'] {
+  flex-grow: 1;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='2'] {
+  flex-grow: 2;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='3'] {
+  flex-grow: 3;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='4'] {
+  flex-grow: 4;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='5'] {
+  flex-grow: 5;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='6'] {
+  flex-grow: 6;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='7'] {
+  flex-grow: 7;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='8'] {
+  flex-grow: 8;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='9'] {
+  flex-grow: 9;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='10'] {
+  flex-grow: 10;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='11'] {
+  flex-grow: 11;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='12'] {
+  flex-grow: 12;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='13'] {
+  flex-grow: 13;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='14'] {
+  flex-grow: 14;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='15'] {
+  flex-grow: 15;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='16'] {
+  flex-grow: 16;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='17'] {
+  flex-grow: 17;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='18'] {
+  flex-grow: 18;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='19'] {
+  flex-grow: 19;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='20'] {
+  flex-grow: 20;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='21'] {
+  flex-grow: 21;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='22'] {
+  flex-grow: 22;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='23'] {
+  flex-grow: 23;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='24'] {
+  flex-grow: 24;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='25'] {
+  flex-grow: 25;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='26'] {
+  flex-grow: 26;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='27'] {
+  flex-grow: 27;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='28'] {
+  flex-grow: 28;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='29'] {
+  flex-grow: 29;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='30'] {
+  flex-grow: 30;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='31'] {
+  flex-grow: 31;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='32'] {
+  flex-grow: 32;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='33'] {
+  flex-grow: 33;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='34'] {
+  flex-grow: 34;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='35'] {
+  flex-grow: 35;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='36'] {
+  flex-grow: 36;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='37'] {
+  flex-grow: 37;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='38'] {
+  flex-grow: 38;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='39'] {
+  flex-grow: 39;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='40'] {
+  flex-grow: 40;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='41'] {
+  flex-grow: 41;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='42'] {
+  flex-grow: 42;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='43'] {
+  flex-grow: 43;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='44'] {
+  flex-grow: 44;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='45'] {
+  flex-grow: 45;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='46'] {
+  flex-grow: 46;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='47'] {
+  flex-grow: 47;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='48'] {
+  flex-grow: 48;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='49'] {
+  flex-grow: 49;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='50'] {
+  flex-grow: 50;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='51'] {
+  flex-grow: 51;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='52'] {
+  flex-grow: 52;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='53'] {
+  flex-grow: 53;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='54'] {
+  flex-grow: 54;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='55'] {
+  flex-grow: 55;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='56'] {
+  flex-grow: 56;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='57'] {
+  flex-grow: 57;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='58'] {
+  flex-grow: 58;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='59'] {
+  flex-grow: 59;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='60'] {
+  flex-grow: 60;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='61'] {
+  flex-grow: 61;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='62'] {
+  flex-grow: 62;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='63'] {
+  flex-grow: 63;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='64'] {
+  flex-grow: 64;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='65'] {
+  flex-grow: 65;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='66'] {
+  flex-grow: 66;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='67'] {
+  flex-grow: 67;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='68'] {
+  flex-grow: 68;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='69'] {
+  flex-grow: 69;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='70'] {
+  flex-grow: 70;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='71'] {
+  flex-grow: 71;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='72'] {
+  flex-grow: 72;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='73'] {
+  flex-grow: 73;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='74'] {
+  flex-grow: 74;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='75'] {
+  flex-grow: 75;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='76'] {
+  flex-grow: 76;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='77'] {
+  flex-grow: 77;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='78'] {
+  flex-grow: 78;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='79'] {
+  flex-grow: 79;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='80'] {
+  flex-grow: 80;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='81'] {
+  flex-grow: 81;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='82'] {
+  flex-grow: 82;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='83'] {
+  flex-grow: 83;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='84'] {
+  flex-grow: 84;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='85'] {
+  flex-grow: 85;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='86'] {
+  flex-grow: 86;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='87'] {
+  flex-grow: 87;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='88'] {
+  flex-grow: 88;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='89'] {
+  flex-grow: 89;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='90'] {
+  flex-grow: 90;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='91'] {
+  flex-grow: 91;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='92'] {
+  flex-grow: 92;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='93'] {
+  flex-grow: 93;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='94'] {
+  flex-grow: 94;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='95'] {
+  flex-grow: 95;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='96'] {
+  flex-grow: 96;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='97'] {
+  flex-grow: 97;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='98'] {
+  flex-grow: 98;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='99'] {
+  flex-grow: 99;
+}
+
+.dh-rich-page [data-dh-layout-custom-widths='true'] > [data-dh-layout-weight='100'] {
+  flex-grow: 100;
+}
+
 @media (max-width: 760px) {
   .dh-rich-page [data-dh-layout-section='true'] {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .dh-rich-page [data-dh-layout-section='true'][data-dh-layout-custom-widths='true'] {
+    flex-direction: column;
+  }
+
+  .dh-rich-page [data-dh-layout-section='true'][data-dh-layout-custom-widths='true'] > [data-dh-layout-cell='true'] {
+    flex-basis: auto;
+    flex-grow: 0;
   }
 }
 
@@ -1340,16 +1767,18 @@ body {
 
 .dh-resolved-change-block__undo {
   flex: 0 0 auto;
-  width: 28px;
+  min-width: 48px;
   height: 28px;
-  padding: 0;
+  padding: 0 8px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--dh-text);
   cursor: pointer;
-  font-size: 20px;
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .dh-resolved-change-block__undo:hover {

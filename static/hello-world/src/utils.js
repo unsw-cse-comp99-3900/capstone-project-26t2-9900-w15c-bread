@@ -2439,27 +2439,6 @@ function normaliseLayoutType(value) {
   return aliases[normalised.replace(/_/g, '')] || normalised;
 }
 
-function layoutTypeUsesFixedSidebarRatio(layoutType) {
-  return [
-    'two_left_sidebar',
-    'two_right_sidebar',
-    'three_with_sidebars',
-  ].includes(layoutType);
-}
-
-function layoutTypeColumnWeights(layoutType) {
-  const columnsByType = {
-    single: ['1'],
-    two_equal: ['1', '1'],
-    two_left_sidebar: ['1', '2'],
-    two_right_sidebar: ['2', '1'],
-    three_equal: ['1', '1', '1'],
-    three_with_sidebars: ['1', '2', '1'],
-  };
-
-  return columnsByType[layoutType] || [];
-}
-
 function normaliseLayoutColumnWidth(value) {
   const source = String(value || '').trim().replace(/%$/, '');
   if (!/^\d+(?:\.\d+)?$/.test(source)) return '';
@@ -2467,6 +2446,21 @@ function normaliseLayoutColumnWidth(value) {
   const width = Number(source);
   if (!Number.isFinite(width) || width <= 0 || width > 100) return '';
   return String(width);
+}
+
+function layoutColumnWeight(value) {
+  const normalisedWidth = normaliseLayoutColumnWidth(value);
+  if (!normalisedWidth) return '';
+
+  const width = Number(normalisedWidth);
+  if (!Number.isFinite(width)) return '';
+
+  // External CSS cannot safely consume an arbitrary numeric data attribute as
+  // a flex-grow value. Round the validated Confluence width to one of the
+  // predeclared 1..100 weight selectors instead. Flex weights are relative, so
+  // 25/75 remains exactly 1:3 and 33.33/66.67 becomes the visually equivalent
+  // 33/67 without relying on an inline style that Forge CSP may discard.
+  return String(Math.max(1, Math.min(100, Math.round(width))));
 }
 
 function layoutColumnWidths(renderedCells) {
@@ -2495,7 +2489,11 @@ function expandConfluenceLayouts(html, renderCellBody) {
           extractAttr(attributes, ['data-width', 'ac:width', 'width'])
         );
         const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
-        return `<div data-dh-layout-cell="true"${widthAttr}>${renderCellBody(body)}</div>`;
+        const weight = layoutColumnWeight(width);
+        const weightAttr = weight
+          ? ` data-dh-layout-weight="${escapeAttr(weight)}"`
+          : '';
+        return `<div data-dh-layout-cell="true"${widthAttr}${weightAttr}>${renderCellBody(body)}</div>`;
       }
     )
     .replace(
@@ -2504,30 +2502,19 @@ function expandConfluenceLayouts(html, renderCellBody) {
         const layoutType = normaliseLayoutType(
           extractAttr(attributes, ['ac:type', 'type', 'data-layout', 'layout'])
         );
-        // Confluence can retain stale data-width values on predefined sidebar
-        // layouts. Its native renderer follows the semantic layout type in that
-        // case, so only equal/custom layouts should allow widths to override it.
-        const customWidths = layoutTypeUsesFixedSidebarRatio(layoutType)
-          ? []
-          : layoutColumnWidths(body);
-        const columnWeights = customWidths.length
-          ? customWidths
-          : layoutTypeColumnWeights(layoutType);
+        // The semantic type describes the template the user started from, but
+        // Confluence can keep that type after the user drags a column divider.
+        // Complete Cell widths therefore take precedence for every layout type.
+        // The fixed type selectors remain the safe fallback when widths are
+        // missing or incomplete.
+        const customWidths = layoutColumnWidths(body);
         const customWidthAttr = customWidths.length
           ? ' data-dh-layout-custom-widths="true"'
-          : '';
-        const gridStyle = columnWeights.length
-          ? styleAttr([
-              `grid-template-columns: ${columnWeights
-                .map((width) => `minmax(0, ${width}fr)`)
-                .join(' ')}`,
-            ])
           : '';
 
         return [
           `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
           customWidthAttr,
-          gridStyle,
           '>',
           body,
           '</div>',
@@ -2609,7 +2596,11 @@ function renderedLayoutBoundaryStart(node) {
       extractAttr(openingTag, ['data-width', 'ac:width', 'width'])
     );
     const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
-    return `<div data-dh-layout-cell="true"${widthAttr}>`;
+    const weight = layoutColumnWeight(width);
+    const weightAttr = weight
+      ? ` data-dh-layout-weight="${escapeAttr(weight)}"`
+      : '';
+    return `<div data-dh-layout-cell="true"${widthAttr}${weightAttr}>`;
   }
 
   if (tag === 'ac:layout-section') {
@@ -2625,29 +2616,14 @@ function renderedLayoutBoundaryStart(node) {
       )
     );
     const customWidths =
-      !layoutTypeUsesFixedSidebarRatio(layoutType) &&
-      rawWidths.length &&
-      rawWidths.every(Boolean)
-        ? rawWidths
-        : [];
-    const columnWeights = customWidths.length
-      ? customWidths
-      : layoutTypeColumnWeights(layoutType);
+      rawWidths.length && rawWidths.every(Boolean) ? rawWidths : [];
     const customWidthAttr = customWidths.length
       ? ' data-dh-layout-custom-widths="true"'
-      : '';
-    const gridStyle = columnWeights.length
-      ? styleAttr([
-          `grid-template-columns: ${columnWeights
-            .map((width) => `minmax(0, ${width}fr)`)
-            .join(' ')}`,
-        ])
       : '';
 
     return [
       `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
       customWidthAttr,
-      gridStyle,
       '>',
     ].join('');
   }
