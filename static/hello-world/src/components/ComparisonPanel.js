@@ -241,10 +241,46 @@ function getDiffBlockHtml(block) {
 
 function getGitHubStyleDiffParts(blockOrBlocks) {
   if (Array.isArray(blockOrBlocks)) {
+    const tableBlocks = blockOrBlocks.map(({ block }) => block);
+    const sharedTableDiff = tableBlocks[0] && tableBlocks[0].tableDiff;
+    const isCellLevelTablePair = Boolean(
+      tableBlocks.length === 2 &&
+        tableBlocks[0].type === 'removed' &&
+        tableBlocks[1].type === 'added' &&
+        tableBlocks.every((block) => block.nodeType === 'table') &&
+        sharedTableDiff &&
+        sharedTableDiff.mode === 'cell_level' &&
+        sharedTableDiff.comparisonHtml &&
+        tableBlocks[1].tableDiff === sharedTableDiff
+    );
+
+    if (isCellLevelTablePair) {
+      // Keep the underlying removed/added blocks untouched for whole-table
+      // recovery. Only the comparison surface consumes this merged table, so
+      // unchanged cells appear once while the existing selection keys still
+      // choose the complete previous or current table.
+      return [{
+        type: 'table-cell-level',
+        html: sharedTableDiff.comparisonHtml,
+      }];
+    }
+
     return blockOrBlocks.flatMap(({ block }) => getGitHubStyleDiffParts(block));
   }
 
   const block = blockOrBlocks;
+
+  if (
+    block.nodeType === 'table' &&
+    block.tableDiff &&
+    block.tableDiff.mode === 'cell_level' &&
+    block.tableDiff.comparisonHtml
+  ) {
+    return [{
+      type: 'table-cell-level',
+      html: block.tableDiff.comparisonHtml,
+    }];
+  }
 
   if (block.type === 'added') {
     return [{
@@ -291,15 +327,11 @@ function getLayoutWrapperProps(block) {
     'data-dh-layout-custom-widths',
     'data-dh-layout-cell',
     'data-dh-layout-width',
+    'data-dh-layout-weight',
   ].forEach((name) => {
     const value = element.getAttribute(name);
     if (value !== null) props[name] = value;
   });
-
-  const gridTemplateColumns = element.style && element.style.gridTemplateColumns;
-  if (gridTemplateColumns) {
-    props.style = { gridTemplateColumns };
-  }
 
   return props;
 }
@@ -410,9 +442,11 @@ function DiffDisplayRows({
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
             key={`${key}-${part.type}-${partIndex}`}
           >
-            <span className="dh-github-diff-part__marker">
-              {part.type === 'added' ? '+' : '-'}
-            </span>
+            {part.type !== 'table-cell-level' ? (
+              <span className="dh-github-diff-part__marker">
+                {part.type === 'added' ? '+' : '-'}
+              </span>
+            ) : null}
             <div
               className="dh-github-diff-part__content"
               dangerouslySetInnerHTML={{ __html: part.html }}
@@ -870,140 +904,14 @@ function ComparisonPanelContent({
           <article className="dh-rich-page">
             {showChangeSelection ? (
               <section className="dh-rendered-page-body">
-                {diffDisplay.rows.map((row) => {
-                  if (row.type === 'layout_structure') {
-                    return (
-                      <div key={row.key} {...getLayoutWrapperProps(row.block)}>
-                        <DiffDisplayRows
-                          rows={row.children}
-                          blockChoices={blockChoices}
-                          activeBlockKey={activeBlockKey}
-                          setActiveBlockKey={setActiveBlockKey}
-                          onChoose={handleChooseBlockVersion}
-                          onUndo={handleUndoBlockChoice}
-                        />
-                      </div>
-                    );
-                  }
-
-                  const key = row.key;
-
-                  if (row.type === 'same') {
-                    return (
-                      <div
-                        className="dh-rich-diff-unchanged"
-                        key={key}
-                        dangerouslySetInnerHTML={{ __html: getDiffBlockHtml(row.block) }}
-                      />
-                    );
-                  }
-
-                  const choice = blockChoices.get(key);
-
-                  if (choice) {
-                    const resolvedHtml = row.blocks
-                      .map(({ block }) =>
-                        getBlockRenderedPreviewHtml(block, choice === 'current')
-                      )
-                      .join('');
-
-                    return (
-                      <div
-                        className={`dh-resolved-change-block dh-resolved-change-block--${choice}`}
-                        key={key}
-                      >
-                        <div className="dh-resolved-change-block__status">
-                          <span>
-                            {choice === 'current'
-                              ? 'Current version selected'
-                              : 'Old version restored'}
-                          </span>
-                          <button
-                            aria-label="Undo this content choice"
-                            className="dh-resolved-change-block__undo"
-                            onClick={() => handleUndoBlockChoice(key)}
-                            title="Undo this content choice"
-                            type="button"
-                          >
-                            ↶
-                          </button>
-                        </div>
-                        {resolvedHtml ? (
-                          <div
-                            className="dh-resolved-change-block__content"
-                            dangerouslySetInnerHTML={{ __html: resolvedHtml }}
-                          />
-                        ) : (
-                          <div className="dh-resolved-change-block__empty">
-                            This content is not present in the selected version.
-                          </div>
-                        )}
-                      </div>
-                    );
-                  }
-
-                  const isActive = activeBlockKey === key;
-                  const diffParts = getGitHubStyleDiffParts(row.blocks);
-
-                  return (
-                    <div
-                      aria-expanded={isActive}
-                      className={`dh-choice-diff-module${
-                        isActive ? ' dh-choice-diff-module--active' : ''
-                      }`}
-                      key={key}
-                      onClick={() =>
-                        setActiveBlockKey((previous) => (previous === key ? null : key))
-                      }
-                      onKeyDown={(event) => {
-                        if (event.target !== event.currentTarget) return;
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          setActiveBlockKey((previous) => (previous === key ? null : key));
-                        }
-                      }}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      {diffParts.map((part, partIndex) => (
-                        <div
-                          className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
-                          key={`${key}-${part.type}-${partIndex}`}
-                        >
-                          <span className="dh-github-diff-part__marker">
-                            {part.type === 'added' ? '+' : '-'}
-                          </span>
-                          <div
-                            className="dh-github-diff-part__content"
-                            dangerouslySetInnerHTML={{ __html: part.html }}
-                          />
-                        </div>
-                      ))}
-
-                      {isActive ? (
-                        <div
-                          className="dh-choice-diff-module__actions"
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <button
-                            className="dh-choice-action dh-choice-action--current"
-                            onClick={() => handleChooseBlockVersion(key, 'current')}
-                            type="button"
-                          >
-                            Keep current change
-                          </button>
-                          <button
-                            className="dh-choice-action"
-                            onClick={() => handleChooseBlockVersion(key, 'old')}
-                            type="button"
-                          >
-                            Restore old content
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                <DiffDisplayRows
+                  rows={diffDisplay.rows}
+                  blockChoices={blockChoices}
+                  activeBlockKey={activeBlockKey}
+                  setActiveBlockKey={setActiveBlockKey}
+                  onChoose={handleChooseBlockVersion}
+                  onUndo={handleUndoBlockChoice}
+                />
               </section>
             ) : (
               <section

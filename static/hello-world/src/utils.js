@@ -2439,27 +2439,6 @@ function normaliseLayoutType(value) {
   return aliases[normalised.replace(/_/g, '')] || normalised;
 }
 
-function layoutTypeUsesFixedSidebarRatio(layoutType) {
-  return [
-    'two_left_sidebar',
-    'two_right_sidebar',
-    'three_with_sidebars',
-  ].includes(layoutType);
-}
-
-function layoutTypeColumnWeights(layoutType) {
-  const columnsByType = {
-    single: ['1'],
-    two_equal: ['1', '1'],
-    two_left_sidebar: ['1', '2'],
-    two_right_sidebar: ['2', '1'],
-    three_equal: ['1', '1', '1'],
-    three_with_sidebars: ['1', '2', '1'],
-  };
-
-  return columnsByType[layoutType] || [];
-}
-
 function normaliseLayoutColumnWidth(value) {
   const source = String(value || '').trim().replace(/%$/, '');
   if (!/^\d+(?:\.\d+)?$/.test(source)) return '';
@@ -2467,6 +2446,21 @@ function normaliseLayoutColumnWidth(value) {
   const width = Number(source);
   if (!Number.isFinite(width) || width <= 0 || width > 100) return '';
   return String(width);
+}
+
+function layoutColumnWeight(value) {
+  const normalisedWidth = normaliseLayoutColumnWidth(value);
+  if (!normalisedWidth) return '';
+
+  const width = Number(normalisedWidth);
+  if (!Number.isFinite(width)) return '';
+
+  // External CSS cannot safely consume an arbitrary numeric data attribute as
+  // a flex-grow value. Round the validated Confluence width to one of the
+  // predeclared 1..100 weight selectors instead. Flex weights are relative, so
+  // 25/75 remains exactly 1:3 and 33.33/66.67 becomes the visually equivalent
+  // 33/67 without relying on an inline style that Forge CSP may discard.
+  return String(Math.max(1, Math.min(100, Math.round(width))));
 }
 
 function layoutColumnWidths(renderedCells) {
@@ -2495,7 +2489,11 @@ function expandConfluenceLayouts(html, renderCellBody) {
           extractAttr(attributes, ['data-width', 'ac:width', 'width'])
         );
         const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
-        return `<div data-dh-layout-cell="true"${widthAttr}>${renderCellBody(body)}</div>`;
+        const weight = layoutColumnWeight(width);
+        const weightAttr = weight
+          ? ` data-dh-layout-weight="${escapeAttr(weight)}"`
+          : '';
+        return `<div data-dh-layout-cell="true"${widthAttr}${weightAttr}>${renderCellBody(body)}</div>`;
       }
     )
     .replace(
@@ -2504,30 +2502,19 @@ function expandConfluenceLayouts(html, renderCellBody) {
         const layoutType = normaliseLayoutType(
           extractAttr(attributes, ['ac:type', 'type', 'data-layout', 'layout'])
         );
-        // Confluence can retain stale data-width values on predefined sidebar
-        // layouts. Its native renderer follows the semantic layout type in that
-        // case, so only equal/custom layouts should allow widths to override it.
-        const customWidths = layoutTypeUsesFixedSidebarRatio(layoutType)
-          ? []
-          : layoutColumnWidths(body);
-        const columnWeights = customWidths.length
-          ? customWidths
-          : layoutTypeColumnWeights(layoutType);
+        // The semantic type describes the template the user started from, but
+        // Confluence can keep that type after the user drags a column divider.
+        // Complete Cell widths therefore take precedence for every layout type.
+        // The fixed type selectors remain the safe fallback when widths are
+        // missing or incomplete.
+        const customWidths = layoutColumnWidths(body);
         const customWidthAttr = customWidths.length
           ? ' data-dh-layout-custom-widths="true"'
-          : '';
-        const gridStyle = columnWeights.length
-          ? styleAttr([
-              `grid-template-columns: ${columnWeights
-                .map((width) => `minmax(0, ${width}fr)`)
-                .join(' ')}`,
-            ])
           : '';
 
         return [
           `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
           customWidthAttr,
-          gridStyle,
           '>',
           body,
           '</div>',
@@ -2609,7 +2596,11 @@ function renderedLayoutBoundaryStart(node) {
       extractAttr(openingTag, ['data-width', 'ac:width', 'width'])
     );
     const widthAttr = width ? ` data-dh-layout-width="${escapeAttr(width)}"` : '';
-    return `<div data-dh-layout-cell="true"${widthAttr}>`;
+    const weight = layoutColumnWeight(width);
+    const weightAttr = weight
+      ? ` data-dh-layout-weight="${escapeAttr(weight)}"`
+      : '';
+    return `<div data-dh-layout-cell="true"${widthAttr}${weightAttr}>`;
   }
 
   if (tag === 'ac:layout-section') {
@@ -2625,29 +2616,14 @@ function renderedLayoutBoundaryStart(node) {
       )
     );
     const customWidths =
-      !layoutTypeUsesFixedSidebarRatio(layoutType) &&
-      rawWidths.length &&
-      rawWidths.every(Boolean)
-        ? rawWidths
-        : [];
-    const columnWeights = customWidths.length
-      ? customWidths
-      : layoutTypeColumnWeights(layoutType);
+      rawWidths.length && rawWidths.every(Boolean) ? rawWidths : [];
     const customWidthAttr = customWidths.length
       ? ' data-dh-layout-custom-widths="true"'
-      : '';
-    const gridStyle = columnWeights.length
-      ? styleAttr([
-          `grid-template-columns: ${columnWeights
-            .map((width) => `minmax(0, ${width}fr)`)
-            .join(' ')}`,
-        ])
       : '';
 
     return [
       `<div data-dh-layout-section="true" data-dh-layout-type="${escapeAttr(layoutType)}"`,
       customWidthAttr,
-      gridStyle,
       '>',
     ].join('');
   }
@@ -4331,9 +4307,19 @@ function extractTableRows(html) {
   const occupied = [];
   let effectiveColumnCount = 0;
 
-  const rows = Array.from(table.querySelectorAll('tr')).map((row, rowIndex) => {
+  // querySelectorAll('tr') also returns rows from a table nested inside a
+  // cell. Only rows whose nearest table is the table being compared belong to
+  // this logical grid.
+  const tableRows = Array.from(table.querySelectorAll('tr')).filter(
+    (row) => row.closest('table') === table
+  );
+
+  const rows = tableRows.map((row, rowIndex) => {
     let effectiveColIndex = 0;
     occupied[rowIndex] = occupied[rowIndex] || [];
+    const sectionTag = row.parentElement
+      ? row.parentElement.tagName.toLowerCase()
+      : 'table';
 
     const cells = Array.from(row.children)
       .filter((cell) => /^(td|th)$/i.test(cell.tagName))
@@ -4359,10 +4345,12 @@ function extractTableRows(html) {
           cellIndex,
           colIndex,
           tag: cell.tagName.toLowerCase(),
+          sectionTag,
           rowspan,
           colspan,
           text: normaliseBlockText(cell),
           html: cell.innerHTML,
+          backgroundColor: cell.getAttribute('data-dh-bg-color') || '',
           signature: canonicalDomSignature(cell),
         };
       });
@@ -4375,72 +4363,669 @@ function extractTableRows(html) {
 }
 
 function haveSameTableShape(oldRows, currentRows) {
-  if (!oldRows.length || !currentRows.length) return false;
-  if (oldRows.length !== currentRows.length) return false;
-  if (oldRows.effectiveColumnCount !== currentRows.effectiveColumnCount) return false;
-
-  return oldRows.every((oldRow, rowIndex) => {
-    const currentRow = currentRows[rowIndex];
-    if (!currentRow || oldRow.cells.length !== currentRow.cells.length) return false;
-
-    return oldRow.cells.every((oldCell, cellIndex) => {
-      const currentCell = currentRow.cells[cellIndex];
-      return (
-        currentCell &&
-        oldCell.tag === currentCell.tag &&
-        oldCell.colIndex === currentCell.colIndex &&
-        oldCell.rowspan === currentCell.rowspan &&
-        oldCell.colspan === currentCell.colspan
-      );
-    });
-  });
+  const compatibility = analyseTableCompatibility(oldRows, currentRows);
+  return Boolean(compatibility && compatibility.kind === 'same');
 }
 
 function countTableCells(rows) {
   return rows.reduce((total, row) => total + row.cells.length, 0);
 }
 
-function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
-  const doc = new DOMParser().parseFromString(
-    currentBlock.renderedHtml || currentBlock.html || '',
-    'text/html'
-  );
-  const table = doc.body.querySelector('table');
-  let added = 0;
-  let removed = 0;
-  let limited = false;
-  const changedCells = [];
+function flattenTableCells(rows) {
+  return rows.flatMap((row) => row.cells);
+}
 
-  if (!table) {
+function tableCellCoordinateKey(cell) {
+  return `${cell.rowIndex}:${cell.colIndex}`;
+}
+
+function indexTableCells(rows) {
+  const cellsByCoordinate = new Map();
+
+  flattenTableCells(rows).forEach((cell) => {
+    const key = tableCellCoordinateKey(cell);
+    if (cellsByCoordinate.has(key)) {
+      // Duplicate starting coordinates mean the source cannot be mapped to a
+      // deterministic logical grid. Returning null forces the safe fallback.
+      cellsByCoordinate.clear();
+      cellsByCoordinate.invalid = true;
+      return;
+    }
+    cellsByCoordinate.set(key, cell);
+  });
+
+  return cellsByCoordinate.invalid ? null : cellsByCoordinate;
+}
+
+function tableCellsShareGeometry(oldCell, currentCell) {
+  return Boolean(
+    oldCell &&
+      currentCell &&
+      oldCell.rowIndex === currentCell.rowIndex &&
+      oldCell.colIndex === currentCell.colIndex &&
+      oldCell.tag === currentCell.tag &&
+      oldCell.sectionTag === currentCell.sectionTag &&
+      oldCell.rowspan === currentCell.rowspan &&
+      oldCell.colspan === currentCell.colspan
+  );
+}
+
+function tableCellMapIsGeometricSubset(subset, superset) {
+  if (!subset || !superset) return false;
+  return Array.from(subset.entries()).every(([key, cell]) =>
+    tableCellsShareGeometry(cell, superset.get(key))
+  );
+}
+
+function tableRowSignatures(rows, maximumColumnCount = rows.effectiveColumnCount) {
+  return rows.map((row) =>
+    row.cells
+      .filter(
+        (cell) =>
+          cell.colIndex < maximumColumnCount &&
+          cell.colIndex + cell.colspan <= maximumColumnCount
+      )
+      .map(
+        (cell) =>
+          `${cell.tag}:${cell.rowspan}:${cell.colspan}:${cell.signature}`
+      )
+      .join('|')
+  );
+}
+
+function tableColumnSignatures(rows, maximumRowCount = rows.length) {
+  const cells = flattenTableCells(rows).filter(
+    (cell) =>
+      cell.rowIndex < maximumRowCount &&
+      cell.rowIndex + cell.rowspan <= maximumRowCount
+  );
+  return Array.from({ length: rows.effectiveColumnCount }, (_, columnIndex) =>
+    cells
+      .filter(
+        (cell) =>
+          columnIndex >= cell.colIndex &&
+          columnIndex < cell.colIndex + cell.colspan
+      )
+      .map(
+        (cell) =>
+          `${cell.rowIndex}:${columnIndex - cell.colIndex}:${cell.tag}:` +
+          `${cell.rowspan}:${cell.colspan}:${cell.signature}`
+      )
+      .join('|')
+  );
+}
+
+function hasShiftedStableAxis(oldSignatures, currentSignatures) {
+  const positions = (signatures) => {
+    const bySignature = new Map();
+    signatures.forEach((signature, index) => {
+      if (!signature) return;
+      const indices = bySignature.get(signature) || [];
+      indices.push(index);
+      bySignature.set(signature, indices);
+    });
+    return bySignature;
+  };
+  const oldPositions = positions(oldSignatures);
+  const currentPositions = positions(currentSignatures);
+
+  // A signature that occurs exactly once in both versions is a reliable
+  // structural anchor. If such an unchanged row/column moved, the insertion
+  // or deletion happened in the middle and coordinate matching is unsafe.
+  return Array.from(oldPositions.entries()).some(([signature, oldIndices]) => {
+    const currentIndices = currentPositions.get(signature);
+    return Boolean(
+      oldIndices.length === 1 &&
+        currentIndices &&
+        currentIndices.length === 1 &&
+        oldIndices[0] !== currentIndices[0]
+    );
+  });
+}
+
+function analyseCombinedTerminalTableChanges(
+  oldRows,
+  currentRows,
+  oldCells,
+  currentCells
+) {
+  const commonRowCount = Math.min(oldRows.length, currentRows.length);
+  const commonColumnCount = Math.min(
+    oldRows.effectiveColumnCount,
+    currentRows.effectiveColumnCount
+  );
+
+  const buildCoreMap = (cells) => {
+    const core = new Map();
+
+    for (const [key, cell] of cells.entries()) {
+      const startsInCore =
+        cell.rowIndex < commonRowCount && cell.colIndex < commonColumnCount;
+      if (!startsInCore) continue;
+
+      // A merge crossing from the common grid into a terminal row/column has
+      // no unambiguous old/current counterpart, so it must use table fallback.
+      if (
+        cell.rowIndex + cell.rowspan > commonRowCount ||
+        cell.colIndex + cell.colspan > commonColumnCount
+      ) {
+        return null;
+      }
+      core.set(key, cell);
+    }
+
+    return core;
+  };
+
+  const oldCore = buildCoreMap(oldCells);
+  const currentCore = buildCoreMap(currentCells);
+  if (
+    !oldCore ||
+    !currentCore ||
+    oldCore.size !== currentCore.size ||
+    !tableCellMapIsGeometricSubset(oldCore, currentCore) ||
+    !tableCellMapIsGeometricSubset(currentCore, oldCore)
+  ) {
     return null;
   }
 
+  const rowsShifted = hasShiftedStableAxis(
+    tableRowSignatures(oldRows, commonColumnCount),
+    tableRowSignatures(currentRows, commonColumnCount)
+  );
+  const columnsShifted = hasShiftedStableAxis(
+    tableColumnSignatures(oldRows, commonRowCount),
+    tableColumnSignatures(currentRows, commonRowCount)
+  );
+  if (rowsShifted || columnsShifted) return null;
+
+  const rowChange =
+    oldRows.length < currentRows.length ? 'rows_added' : 'rows_removed';
+  const columnChange =
+    oldRows.effectiveColumnCount < currentRows.effectiveColumnCount
+      ? 'columns_added'
+      : 'columns_removed';
+  const mixedDirections = rowChange.endsWith('added') !== columnChange.endsWith('added');
+
+  if (mixedDirections) {
+    const terminalCells = [
+      ...Array.from(oldCells.values()),
+      ...Array.from(currentCells.values()),
+    ].filter(
+      (cell) =>
+        cell.rowIndex >= commonRowCount ||
+        cell.colIndex >= commonColumnCount
+    );
+
+    // A mixed add/remove comparison needs to synthesize a neutral corner.
+    // Restrict that operation to ordinary terminal cells; merged terminal
+    // cells remain safer and clearer in the existing whole-table fallback.
+    if (
+      terminalCells.some(
+        (cell) => cell.rowspan !== 1 || cell.colspan !== 1
+      )
+    ) {
+      return null;
+    }
+  }
+
+  return {
+    kind: `${rowChange}_${columnChange}`,
+    base: mixedDirections
+      ? 'composite'
+      : rowChange.endsWith('added')
+        ? 'current'
+        : 'old',
+    rowChange,
+    columnChange,
+    commonRowCount,
+    commonColumnCount,
+    oldCells,
+    currentCells,
+  };
+}
+
+function analyseTableCompatibility(oldRows, currentRows) {
+  if (!oldRows.length || !currentRows.length) return null;
+
+  const oldCells = indexTableCells(oldRows);
+  const currentCells = indexTableCells(currentRows);
+  if (!oldCells || !currentCells) return null;
+
+  const sameRows = oldRows.length === currentRows.length;
+  const sameColumns =
+    oldRows.effectiveColumnCount === currentRows.effectiveColumnCount;
+  const oldIsSubset = tableCellMapIsGeometricSubset(oldCells, currentCells);
+  const currentIsSubset = tableCellMapIsGeometricSubset(currentCells, oldCells);
+  const rowsShifted = hasShiftedStableAxis(
+    tableRowSignatures(oldRows),
+    tableRowSignatures(currentRows)
+  );
+  const columnsShifted = hasShiftedStableAxis(
+    tableColumnSignatures(oldRows),
+    tableColumnSignatures(currentRows)
+  );
+
+  if (
+    sameRows &&
+    sameColumns &&
+    oldCells.size === currentCells.size &&
+    oldIsSubset &&
+    currentIsSubset
+  ) {
+    return { kind: 'same', base: 'current', oldCells, currentCells };
+  }
+
+  if (!sameRows && !sameColumns) {
+    const combined = analyseCombinedTerminalTableChanges(
+      oldRows,
+      currentRows,
+      oldCells,
+      currentCells
+    );
+    if (combined) return combined;
+  }
+
+  // A complete row appended at the bottom retains every existing logical
+  // coordinate. Insertions in the middle intentionally do not qualify because
+  // their shifted coordinates would require heuristic row matching.
+  if (
+    sameColumns &&
+    oldRows.length < currentRows.length &&
+    oldIsSubset &&
+    !rowsShifted &&
+    Array.from(currentCells.values())
+      .filter((cell) => !oldCells.has(tableCellCoordinateKey(cell)))
+      .every((cell) => cell.rowIndex >= oldRows.length)
+  ) {
+    return { kind: 'rows_added', base: 'current', oldCells, currentCells };
+  }
+
+  if (
+    sameColumns &&
+    currentRows.length < oldRows.length &&
+    currentIsSubset &&
+    !rowsShifted &&
+    Array.from(oldCells.values())
+      .filter((cell) => !currentCells.has(tableCellCoordinateKey(cell)))
+      .every((cell) => cell.rowIndex >= currentRows.length)
+  ) {
+    return { kind: 'rows_removed', base: 'old', oldCells, currentCells };
+  }
+
+  // The same conservative rule applies to complete columns appended on the
+  // right. Colspans that cross the old/new boundary fail the geometry subset
+  // check and therefore fall back instead of being guessed.
+  if (
+    sameRows &&
+    oldRows.effectiveColumnCount < currentRows.effectiveColumnCount &&
+    oldIsSubset &&
+    !columnsShifted &&
+    Array.from(currentCells.values())
+      .filter((cell) => !oldCells.has(tableCellCoordinateKey(cell)))
+      .every((cell) => cell.colIndex >= oldRows.effectiveColumnCount)
+  ) {
+    return { kind: 'columns_added', base: 'current', oldCells, currentCells };
+  }
+
+  if (
+    sameRows &&
+    currentRows.effectiveColumnCount < oldRows.effectiveColumnCount &&
+    currentIsSubset &&
+    !columnsShifted &&
+    Array.from(oldCells.values())
+      .filter((cell) => !currentCells.has(tableCellCoordinateKey(cell)))
+      .every((cell) => cell.colIndex >= currentRows.effectiveColumnCount)
+  ) {
+    return { kind: 'columns_removed', base: 'old', oldCells, currentCells };
+  }
+
+  return null;
+}
+
+function findRenderedTableCell(table, cellMeta) {
+  if (!table || !cellMeta) return null;
+
+  const rows = Array.from(table.querySelectorAll('tr')).filter(
+    (row) => row.closest('table') === table
+  );
+  const row = rows[cellMeta.rowIndex];
+  if (!row) return null;
+
+  return Array.from(row.children).filter((cell) => /^(td|th)$/i.test(cell.tagName))[
+    cellMeta.cellIndex
+  ] || null;
+}
+
+function renderChangedTableCell(cell, oldCell, currentCell) {
+  const oldBackgroundAttr = oldCell.backgroundColor
+    ? ` data-dh-bg-color="${escapeAttr(oldCell.backgroundColor)}"`
+    : '';
+  const currentBackgroundAttr = currentCell.backgroundColor
+    ? ` data-dh-bg-color="${escapeAttr(currentCell.backgroundColor)}"`
+    : '';
+
+  cell.classList.add('dh-table-cell-diff', 'dh-table-cell-diff--modified');
+  // The outer cell comes from the current table. Move its background onto the
+  // current-value region so the previous-value region can independently show
+  // the old cell background instead of inheriting the current one.
+  cell.removeAttribute('data-dh-bg-color');
+  cell.innerHTML = [
+    `<div class="dh-table-cell-version dh-table-cell-version--previous"${oldBackgroundAttr}>`,
+    `<div class="dh-table-cell-version__value">${oldCell.html || '&nbsp;'}</div>`,
+    '</div>',
+    `<div class="dh-table-cell-version dh-table-cell-version--current"${currentBackgroundAttr}>`,
+    `<div class="dh-table-cell-version__value">${currentCell.html || '&nbsp;'}</div>`,
+    '</div>',
+  ].join('');
+}
+
+function decorateTableStructureChange(table, changedCells, changeType) {
+  if (!table || !changedCells.length) return;
+
+  const changedSlots = new Set();
+  changedCells.forEach((cell) => {
+    for (let row = cell.rowIndex; row < cell.rowIndex + cell.rowspan; row++) {
+      for (
+        let column = cell.colIndex;
+        column < cell.colIndex + cell.colspan;
+        column++
+      ) {
+        changedSlots.add(`${row}:${column}`);
+      }
+    }
+  });
+
+  changedCells.forEach((cellMeta) => {
+    const cell = findRenderedTableCell(table, cellMeta);
+    if (!cell) return;
+
+    cell.classList.add(
+      'dh-table-structure-diff-cell',
+      `dh-table-structure-diff--${changeType}`
+    );
+
+    // A cell edge is drawn only when at least one logical slot across that edge
+    // has no changed neighbour. This traces the outside of row/column unions,
+    // including an L-shaped simultaneous row-and-column change, without
+    // double-framing their bottom-right intersection.
+    const hasUnchangedTopNeighbour = Array.from(
+      { length: cellMeta.colspan },
+      (_, offset) => `${cellMeta.rowIndex - 1}:${cellMeta.colIndex + offset}`
+    ).some((slot) => !changedSlots.has(slot));
+    const hasUnchangedBottomNeighbour = Array.from(
+      { length: cellMeta.colspan },
+      (_, offset) =>
+        `${cellMeta.rowIndex + cellMeta.rowspan}:${cellMeta.colIndex + offset}`
+    ).some((slot) => !changedSlots.has(slot));
+    const hasUnchangedLeftNeighbour = Array.from(
+      { length: cellMeta.rowspan },
+      (_, offset) => `${cellMeta.rowIndex + offset}:${cellMeta.colIndex - 1}`
+    ).some((slot) => !changedSlots.has(slot));
+    const hasUnchangedRightNeighbour = Array.from(
+      { length: cellMeta.rowspan },
+      (_, offset) =>
+        `${cellMeta.rowIndex + offset}:${cellMeta.colIndex + cellMeta.colspan}`
+    ).some((slot) => !changedSlots.has(slot));
+
+    if (hasUnchangedTopNeighbour) {
+      cell.classList.add('dh-table-structure-diff-edge--top');
+    }
+    if (hasUnchangedBottomNeighbour) {
+      cell.classList.add('dh-table-structure-diff-edge--bottom');
+    }
+    if (hasUnchangedLeftNeighbour) {
+      cell.classList.add('dh-table-structure-diff-edge--left');
+    }
+    if (hasUnchangedRightNeighbour) {
+      cell.classList.add('dh-table-structure-diff-edge--right');
+    }
+  });
+}
+
+function getDirectTableRows(table) {
+  if (!table) return [];
+  return Array.from(table.querySelectorAll('tr')).filter(
+    (row) => row.closest('table') === table
+  );
+}
+
+function getDirectRowCells(row) {
+  if (!row) return [];
+  return Array.from(row.children).filter((cell) =>
+    /^(td|th)$/i.test(cell.tagName)
+  );
+}
+
+function getLastDirectCellTagName(row) {
+  const cells = getDirectRowCells(row);
+  return cells.length ? cells[cells.length - 1].tagName.toLowerCase() : 'td';
+}
+
+function cloneNodeIntoDocument(doc, node) {
+  if (!doc || !node) return null;
+  return typeof doc.importNode === 'function'
+    ? doc.importNode(node, true)
+    : node.cloneNode(true);
+}
+
+function findTableRowDestination(table, sourceRow) {
+  if (!table || !sourceRow || !sourceRow.parentElement) return table;
+
+  const sectionTag = sourceRow.parentElement.tagName.toLowerCase();
+  if (sectionTag === 'table') return table;
+
+  // The source and destination tables normally have the same row groups. If
+  // an unusual storage table omits the corresponding group, append a matching
+  // group instead of silently moving the row into a semantically wrong one.
+  let destination = Array.from(table.children).find(
+    (child) => child.tagName.toLowerCase() === sectionTag
+  );
+  if (!destination) {
+    destination = table.ownerDocument.createElement(sectionTag);
+    table.appendChild(destination);
+  }
+  return destination;
+}
+
+function createNeutralTableGap(doc, columnCount, tagName = 'td') {
+  if (!doc || columnCount < 1) return null;
+
+  const gap = doc.createElement(tagName === 'th' ? 'th' : 'td');
+  gap.setAttribute('data-dh-table-structural-gap', 'true');
+  gap.setAttribute('aria-hidden', 'true');
+  if (columnCount > 1) gap.setAttribute('colspan', String(columnCount));
+  gap.innerHTML = '&nbsp;';
+  return gap;
+}
+
+function buildMixedTerminalTableDocument(
+  oldBlock,
+  currentBlock,
+  compatibility
+) {
+  const oldDoc = new DOMParser().parseFromString(
+    oldBlock.renderedHtml || oldBlock.html || '',
+    'text/html'
+  );
+  const currentDoc = new DOMParser().parseFromString(
+    currentBlock.renderedHtml || currentBlock.html || '',
+    'text/html'
+  );
+  const oldTable = oldDoc.body.querySelector('table');
+  const table = currentDoc.body.querySelector('table');
+  if (!oldTable || !table) return null;
+
+  const oldRows = getDirectTableRows(oldTable);
+  const currentRows = getDirectTableRows(table);
+  const rowDifference = Math.abs(oldRows.length - currentRows.length);
+  const oldColumnCount = Math.max(
+    compatibility.commonColumnCount,
+    ...Array.from(compatibility.oldCells.values()).map(
+      (cell) => cell.colIndex + cell.colspan
+    )
+  );
+  const currentColumnCount = Math.max(
+    compatibility.commonColumnCount,
+    ...Array.from(compatibility.currentCells.values()).map(
+      (cell) => cell.colIndex + cell.colspan
+    )
+  );
+  const columnDifference = Math.abs(oldColumnCount - currentColumnCount);
+
+  if (
+    compatibility.rowChange === 'rows_removed' &&
+    compatibility.columnChange === 'columns_added'
+  ) {
+    // Start from the current table because it already contains the added
+    // right-hand column. Append the removed old rows and then a neutral corner
+    // for the extra current columns. That corner existed in neither version.
+    oldRows
+      .slice(compatibility.commonRowCount)
+      .forEach((oldRow) => {
+        const clonedRow = cloneNodeIntoDocument(currentDoc, oldRow);
+        const gap = createNeutralTableGap(
+          currentDoc,
+          columnDifference,
+          getLastDirectCellTagName(clonedRow)
+        );
+        if (gap) clonedRow.appendChild(gap);
+        findTableRowDestination(table, oldRow).appendChild(clonedRow);
+      });
+  } else if (
+    compatibility.rowChange === 'rows_added' &&
+    compatibility.columnChange === 'columns_removed'
+  ) {
+    // Start from the current table because it already contains the added
+    // bottom row. Restore only the removed old terminal cells on common rows,
+    // then reserve a neutral corner beside every added row.
+    for (let rowIndex = 0; rowIndex < compatibility.commonRowCount; rowIndex++) {
+      const oldRow = oldRows[rowIndex];
+      const currentRow = currentRows[rowIndex];
+      if (!oldRow || !currentRow) return null;
+
+      const oldRowCells = getDirectRowCells(oldRow);
+      const removedMetas = Array.from(compatibility.oldCells.values())
+        .filter(
+          (cell) =>
+            cell.rowIndex === rowIndex &&
+            cell.colIndex >= compatibility.commonColumnCount
+        )
+        .sort((left, right) => left.cellIndex - right.cellIndex);
+
+      removedMetas.forEach((cellMeta) => {
+        const sourceCell = oldRowCells[cellMeta.cellIndex];
+        const clonedCell = cloneNodeIntoDocument(currentDoc, sourceCell);
+        if (clonedCell) currentRow.appendChild(clonedCell);
+      });
+    }
+
+    currentRows
+      .slice(compatibility.commonRowCount)
+      .forEach((currentRow) => {
+        const gap = createNeutralTableGap(
+          currentDoc,
+          columnDifference,
+          getLastDirectCellTagName(currentRow)
+        );
+        if (gap) currentRow.appendChild(gap);
+      });
+  } else {
+    return null;
+  }
+
+  // A zero difference would indicate inconsistent compatibility metadata.
+  // Refuse that table rather than emitting a misleading composite grid.
+  if (!rowDifference || !columnDifference) return null;
+
+  return { doc: currentDoc, table };
+}
+
+function buildCellLevelTableComparison(oldBlock, currentBlock, compatibility) {
+  const mixedDocument = compatibility.base === 'composite'
+    ? buildMixedTerminalTableDocument(oldBlock, currentBlock, compatibility)
+    : null;
+  const baseBlock = compatibility.base === 'old' ? oldBlock : currentBlock;
+  const doc = mixedDocument
+    ? mixedDocument.doc
+    : new DOMParser().parseFromString(
+        baseBlock.renderedHtml || baseBlock.html || '',
+        'text/html'
+      );
+  const table = mixedDocument ? mixedDocument.table : doc.body.querySelector('table');
+  if (!table) return null;
+
   table.classList.add('dh-table-diff', 'dh-table-diff--cell-level');
 
-  Array.from(table.querySelectorAll('tr')).forEach((row, rowIndex) => {
-    const currentCells = Array.from(row.children).filter((cell) => /^(td|th)$/i.test(cell.tagName));
+  const changedCells = [];
+  const addedCells = [];
+  const removedCells = [];
 
-    currentCells.forEach((cell, colIndex) => {
-      const oldCell = oldRows[rowIndex] && oldRows[rowIndex].cells[colIndex];
-      const currentCell = currentRows[rowIndex] && currentRows[rowIndex].cells[colIndex];
+  compatibility.currentCells.forEach((currentCell, key) => {
+    const oldCell = compatibility.oldCells.get(key);
 
-      if (!oldCell || !currentCell || oldCell.text === currentCell.text) return;
-
-      const inline = buildInlineTextDiff(oldCell.text, currentCell.text);
-      cell.classList.add('dh-table-cell-diff', 'dh-table-cell-diff--modified');
-      cell.innerHTML = inline.html || escapeHtml(currentCell.text);
-      added += inline.added;
-      removed += inline.removed;
-      limited = limited || inline.limited;
-      changedCells.push({
-        rowIndex,
-        colIndex,
-        oldText: oldCell.text,
-        newText: currentCell.text,
-        inline: inline.parts,
+    if (!oldCell) {
+      addedCells.push({
+        rowIndex: currentCell.rowIndex,
+        cellIndex: currentCell.cellIndex,
+        colIndex: currentCell.colIndex,
+        rowspan: currentCell.rowspan,
+        colspan: currentCell.colspan,
+        text: currentCell.text,
       });
+      return;
+    }
+
+    if (oldCell.signature === currentCell.signature) return;
+
+    const baseCell = compatibility.base === 'old' ? oldCell : currentCell;
+    const cell = findRenderedTableCell(table, baseCell);
+    if (!cell) return;
+
+    renderChangedTableCell(cell, oldCell, currentCell);
+    changedCells.push({
+      rowIndex: currentCell.rowIndex,
+      colIndex: currentCell.colIndex,
+      rowspan: currentCell.rowspan,
+      colspan: currentCell.colspan,
+      oldText: oldCell.text,
+      newText: currentCell.text,
     });
   });
+
+  compatibility.oldCells.forEach((oldCell, key) => {
+    if (compatibility.currentCells.has(key)) return;
+    removedCells.push({
+      rowIndex: oldCell.rowIndex,
+      cellIndex: oldCell.cellIndex,
+      colIndex: oldCell.colIndex,
+      rowspan: oldCell.rowspan,
+      colspan: oldCell.colspan,
+      text: oldCell.text,
+    });
+  });
+
+  decorateTableStructureChange(table, addedCells, 'added');
+  decorateTableStructureChange(table, removedCells, 'removed');
+
+  return {
+    comparisonHtml: table.outerHTML,
+    changedCells,
+    addedCells,
+    removedCells,
+  };
+}
+
+function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
+  const compatibility = analyseTableCompatibility(oldRows, currentRows);
+  if (!compatibility) return null;
+
+  const comparison = buildCellLevelTableComparison(
+    oldBlock,
+    currentBlock,
+    compatibility
+  );
+  if (!comparison) return null;
 
   return {
     type: 'modified',
@@ -4450,63 +5035,26 @@ function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
     newText: currentBlock.text,
     oldHtml: oldBlock.html,
     newHtml: currentBlock.html,
-    renderedHtml: table.outerHTML,
+    oldRawHtml: oldBlock.rawHtml || oldBlock.html,
+    newRawHtml: currentBlock.rawHtml || currentBlock.html,
+    oldRenderedHtml: oldBlock.renderedHtml || oldBlock.html,
+    newRenderedHtml: currentBlock.renderedHtml || currentBlock.html,
+    renderedHtml: comparison.comparisonHtml,
     inline: [],
     tableDiff: {
       mode: 'cell_level',
-      changedCells,
-      rows: currentRows.length,
-      cells: countTableCells(currentRows),
+      structureChange: compatibility.kind,
+      ...comparison,
+      rows: Math.max(oldRows.length, currentRows.length),
+      columns: Math.max(
+        oldRows.effectiveColumnCount,
+        currentRows.effectiveColumnCount
+      ),
     },
-    added,
-    removed,
-    limited,
+    added: comparison.changedCells.length + comparison.addedCells.length,
+    removed: comparison.changedCells.length + comparison.removedCells.length,
+    limited: false,
   };
-}
-
-function getChangedCompatibleTableCells(oldRows, currentRows) {
-  const changedCells = [];
-
-  oldRows.forEach((oldRow, rowIndex) => {
-    const currentRow = currentRows[rowIndex];
-    if (!currentRow) return;
-
-    oldRow.cells.forEach((oldCell, cellIndex) => {
-      const currentCell = currentRow.cells[cellIndex];
-      if (!currentCell || oldCell.signature === currentCell.signature) return;
-
-      changedCells.push({
-        rowIndex,
-        cellIndex,
-        colIndex: oldCell.colIndex,
-        oldText: oldCell.text,
-        newText: currentCell.text,
-      });
-    });
-  });
-
-  return changedCells;
-}
-
-function renderTableWithChangedCells(block, changedCells, changeType) {
-  const doc = new DOMParser().parseFromString(block.renderedHtml || block.html || '', 'text/html');
-  const table = doc.body.querySelector('table');
-  if (!table) return block.renderedHtml || block.html || '';
-
-  table.classList.add('dh-table-diff', 'dh-table-diff--cell-level');
-  changedCells.forEach((changedCell) => {
-    const row = table.querySelectorAll('tr')[changedCell.rowIndex];
-    if (!row) return;
-
-    const cell = Array.from(row.children).filter((child) => /^(td|th)$/i.test(child.tagName))[
-      changedCell.cellIndex
-    ];
-    if (!cell) return;
-
-    cell.classList.add('dh-table-cell-diff', `dh-table-cell-diff--${changeType}`);
-  });
-
-  return table.outerHTML;
 }
 
 function buildTableReplacementBlocks(oldBlock, currentBlock) {
@@ -4514,28 +5062,34 @@ function buildTableReplacementBlocks(oldBlock, currentBlock) {
   const currentRows = extractTableRows(currentBlock.renderedHtml || currentBlock.html);
   const removedBlock = makeRemovedBlock(oldBlock);
   const addedBlock = makeAddedBlock(currentBlock);
+  const compatibility = analyseTableCompatibility(oldRows, currentRows);
 
-  if (haveSameTableShape(oldRows, currentRows)) {
-    const changedCells = getChangedCompatibleTableCells(oldRows, currentRows);
+  if (compatibility) {
+    const comparison = buildCellLevelTableComparison(
+      oldBlock,
+      currentBlock,
+      compatibility
+    );
 
-    if (changedCells.length) {
-      removedBlock.renderedHtml = renderTableWithChangedCells(oldBlock, changedCells, 'removed');
-      addedBlock.renderedHtml = renderTableWithChangedCells(currentBlock, changedCells, 'added');
+    if (comparison) {
+      removedBlock.tableDiff = {
+        mode: 'cell_level',
+        structureChange: compatibility.kind,
+        ...comparison,
+        rows: Math.max(oldRows.length, currentRows.length),
+        columns: Math.max(
+          oldRows.effectiveColumnCount,
+          currentRows.effectiveColumnCount
+        ),
+      };
+      addedBlock.tableDiff = removedBlock.tableDiff;
+      return [removedBlock, addedBlock];
     }
-
-    removedBlock.tableDiff = {
-      mode: 'cell_level',
-      changedCells,
-      rows: currentRows.length,
-      cells: countTableCells(currentRows),
-    };
-    addedBlock.tableDiff = removedBlock.tableDiff;
-    return [removedBlock, addedBlock];
   }
 
   removedBlock.tableDiff = {
     mode: 'structure',
-    reason: 'table shape changed',
+    reason: 'table logical grid could not be mapped reliably',
     oldRows: oldRows.length,
     currentRows: currentRows.length,
     oldCells: countTableCells(oldRows),
