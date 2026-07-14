@@ -794,33 +794,207 @@ describe('Sprint 2 diff classification and display requirements', () => {
     expect(result.blocks[0].oldHtml).toContain('<p>Second</p>');
   });
 
-  test('compatible table changes mark only changed old and new cells', () => {
+  test('compatible table changes build one comparison table with only the changed cell expanded', () => {
     const result = buildRichTextDiffHtml(
-      '<table><tbody><tr><th>Field</th><th>Value</th></tr><tr><td data-highlight-colour="LIGHT_GREEN">Status</td><td>Old</td></tr></tbody></table>',
-      '<table><tbody><tr><th>Field</th><th>Value</th></tr><tr><td data-highlight-colour="LIGHT_GREEN">Status</td><td>New</td></tr></tbody></table>',
+      '<table><tbody><tr><th>Field</th><th>Value</th></tr><tr><td data-highlight-colour="LIGHT_GREEN">Status</td><td data-highlight-colour="LIGHT_BLUE">Old</td></tr></tbody></table>',
+      '<table><tbody><tr><th>Field</th><th>Value</th></tr><tr><td data-highlight-colour="LIGHT_GREEN">Status</td><td data-highlight-colour="LIGHT_RED">New</td></tr></tbody></table>',
       '',
       {}
     );
 
     expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
     expect(result.blocks[0].tableDiff.mode).toBe('cell_level');
-    expect(result.blocks[0].renderedHtml).toContain('dh-table-cell-diff--removed');
-    expect(result.blocks[1].renderedHtml).toContain('dh-table-cell-diff--added');
+    expect(result.blocks[0].tableDiff.structureChange).toBe('same');
+    expect(result.blocks[0].tableDiff.changedCells).toHaveLength(1);
+    expect(result.blocks[0].tableDiff.changedCells[0]).toMatchObject({
+      rowIndex: 1,
+      colIndex: 1,
+      oldText: 'Old',
+      newText: 'New',
+    });
+    expect(result.blocks[0].tableDiff.comparisonHtml).toContain(
+      'dh-table-cell-diff--modified'
+    );
+    expect(result.blocks[0].tableDiff.comparisonHtml).not.toContain(
+      'dh-table-cell-version__marker'
+    );
+    expect(result.blocks[0].tableDiff.comparisonHtml).toContain('Old');
+    expect(result.blocks[0].tableDiff.comparisonHtml).toContain('New');
+    expect(result.blocks[0].tableDiff.comparisonHtml).toContain(
+      'dh-table-cell-version--previous" data-dh-bg-color="light-blue"'
+    );
+    expect(result.blocks[0].tableDiff.comparisonHtml).toContain(
+      'dh-table-cell-version--current" data-dh-bg-color="light-red"'
+    );
+    expect(
+      (result.blocks[0].tableDiff.comparisonHtml.match(/<table\b/g) || [])
+    ).toHaveLength(1);
+    expect(
+      (result.blocks[0].tableDiff.comparisonHtml.match(/>Field</g) || [])
+    ).toHaveLength(1);
     expect(result.blocks[1].renderedHtml).toContain('data-dh-bg-color="light-green"');
   });
 
   test.each([
-    ['added row', '<table><tbody><tr><td>A</td></tr></tbody></table>', '<table><tbody><tr><td>A</td></tr><tr><td>B</td></tr></tbody></table>'],
-    ['removed column', '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>', '<table><tbody><tr><td>A</td></tr></tbody></table>'],
+    ['added row', '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>'],
+    ['removed column', '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>', '<table><tbody><tr><td>A</td></tr><tr><td>C</td></tr></tbody></table>'],
+    ['added column', '<table><tbody><tr><td>A</td></tr><tr><td>C</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>'],
+  ])('simple table structure change uses cell-level rendering for %s', (_name, oldHtml, newHtml) => {
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+    const tableDiff = result.blocks[0].tableDiff;
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
+    expect(tableDiff.mode).toBe('cell_level');
+    expect(tableDiff.comparisonHtml).toContain('dh-table-diff--cell-level');
+    expect(tableDiff.addedCells.length + tableDiff.removedCells.length).toBe(2);
+    expect(tableDiff.comparisonHtml).toMatch(
+      /dh-table-structure-diff--(?:added|removed)/
+    );
+    expect(
+      (tableDiff.comparisonHtml.match(/data-dh-table-structure-marker=/g) || [])
+    ).toHaveLength(0);
+    expect(tableDiff.comparisonHtml).not.toContain('dh-table-cell-version');
+  });
+
+  test.each([
+    [
+      'modified cell plus appended right column',
+      '<table><tbody><tr><td>A</td><td data-highlight-colour="LIGHT_BLUE">Old</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td data-highlight-colour="LIGHT_RED">New</td><td>X</td></tr><tr><td>C</td><td>D</td><td>Y</td></tr></tbody></table>',
+      'columns_added',
+    ],
+    [
+      'modified cell plus appended bottom row',
+      '<table><tbody><tr><td>A</td><td>Old</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>New</td></tr><tr><td>C</td><td>D</td></tr><tr><td>X</td><td>Y</td></tr></tbody></table>',
+      'rows_added',
+    ],
+  ])('combines %s in one cell-level table', (_name, oldHtml, newHtml, structureChange) => {
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+    const tableDiff = result.blocks[0].tableDiff;
+
+    expect(tableDiff.mode).toBe('cell_level');
+    expect(tableDiff.structureChange).toBe(structureChange);
+    expect(tableDiff.changedCells).toHaveLength(1);
+    expect(tableDiff.addedCells).toHaveLength(2);
+    expect(tableDiff.comparisonHtml).toContain('dh-table-cell-diff--modified');
+    expect(tableDiff.comparisonHtml).toContain('dh-table-structure-diff--added');
+    expect(tableDiff.comparisonHtml).not.toContain('dh-table-cell-version__marker');
+  });
+
+  test.each([
+    [
+      'a bottom row and right column are both added',
+      '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>B</td><td>E</td></tr><tr><td>C</td><td>D</td><td>F</td></tr><tr><td>G</td><td>H</td><td>I</td></tr></tbody></table>',
+      'rows_added_columns_added',
+      5,
+      0,
+    ],
+    [
+      'a bottom row and right column are both removed',
+      '<table><tbody><tr><td>A</td><td>B</td><td>E</td></tr><tr><td>C</td><td>D</td><td>F</td></tr><tr><td>G</td><td>H</td><td>I</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>',
+      'rows_removed_columns_removed',
+      0,
+      5,
+    ],
+  ])(
+    'uses one L-shaped structural region when %s',
+    (_name, oldHtml, newHtml, structureChange, addedCount, removedCount) => {
+      const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+      const tableDiff = result.blocks[0].tableDiff;
+
+      expect(tableDiff.mode).toBe('cell_level');
+      expect(tableDiff.structureChange).toBe(structureChange);
+      expect(tableDiff.addedCells).toHaveLength(addedCount);
+      expect(tableDiff.removedCells).toHaveLength(removedCount);
+      expect(tableDiff.comparisonHtml).not.toContain(
+        'data-dh-table-structural-gap'
+      );
+      expect(
+        (tableDiff.comparisonHtml.match(/<table\b/g) || [])
+      ).toHaveLength(1);
+    }
+  );
+
+  test.each([
+    [
+      'a right column is added while a bottom row is removed',
+      '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr><tr><td>E</td><td>F</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>B</td><td>G</td></tr><tr><td>C</td><td>D</td><td>H</td></tr></tbody></table>',
+      'rows_removed_columns_added',
+      2,
+      2,
+    ],
+    [
+      'a bottom row is added while a right column is removed',
+      '<table><tbody><tr><td>A</td><td>B</td><td>C</td></tr><tr><td>D</td><td>E</td><td>F</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>D</td><td>E</td></tr><tr><td>G</td><td>H</td></tr></tbody></table>',
+      'rows_added_columns_removed',
+      2,
+      2,
+    ],
+  ])(
+    'uses a neutral composite corner when %s',
+    (_name, oldHtml, newHtml, structureChange, addedCount, removedCount) => {
+      const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+      const tableDiff = result.blocks[0].tableDiff;
+
+      expect(tableDiff.mode).toBe('cell_level');
+      expect(tableDiff.structureChange).toBe(structureChange);
+      expect(tableDiff.addedCells).toHaveLength(addedCount);
+      expect(tableDiff.removedCells).toHaveLength(removedCount);
+      expect(
+        (tableDiff.comparisonHtml.match(/data-dh-table-structural-gap=/g) || [])
+      ).toHaveLength(1);
+      expect(tableDiff.comparisonHtml).toContain(
+        'dh-table-structure-diff--added'
+      );
+      expect(tableDiff.comparisonHtml).toContain(
+        'dh-table-structure-diff--removed'
+      );
+      expect(
+        (tableDiff.comparisonHtml.match(/<table\b/g) || [])
+      ).toHaveLength(1);
+    }
+  );
+
+  test('matching rowspan and colspan use logical coordinates for changed cells', () => {
+    const oldHtml = '<table><tbody><tr><th colspan="2">Head</th></tr><tr><td rowspan="2">A</td><td>B</td></tr><tr><td>Old C</td></tr></tbody></table>';
+    const newHtml = oldHtml.replace('Old C', 'New C');
+    const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+    const tableDiff = result.blocks[0].tableDiff;
+
+    expect(tableDiff.mode).toBe('cell_level');
+    expect(tableDiff.changedCells).toHaveLength(1);
+    expect(tableDiff.changedCells[0]).toMatchObject({
+      rowIndex: 2,
+      colIndex: 1,
+      rowspan: 1,
+      colspan: 1,
+      oldText: 'Old C',
+      newText: 'New C',
+    });
+    expect(tableDiff.comparisonHtml).toContain('rowspan="2"');
+    expect(tableDiff.comparisonHtml).toContain('colspan="2"');
+  });
+
+  test.each([
     ['rowspan change', '<table><tbody><tr><td rowspan="2">A</td><td>B</td></tr><tr><td>C</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td></tr></tbody></table>'],
     ['colspan change', '<table><tbody><tr><td colspan="2">A</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>'],
+    ['middle row insertion', '<table><tbody><tr><td>A</td></tr><tr><td>C</td></tr></tbody></table>', '<table><tbody><tr><td>A</td></tr><tr><td>B</td></tr><tr><td>C</td></tr></tbody></table>'],
+    ['middle column insertion', '<table><tbody><tr><td>A</td><td>C</td></tr><tr><td>D</td><td>F</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td><td>C</td></tr><tr><td>D</td><td>E</td><td>F</td></tr></tbody></table>'],
+    ['middle row plus right column insertion', '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>E</td><td>F</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td><td>C</td></tr><tr><td>D</td><td>G</td><td>H</td></tr><tr><td>E</td><td>F</td><td>I</td></tr></tbody></table>'],
+    ['middle column plus bottom row insertion', '<table><tbody><tr><td>A</td><td>C</td></tr><tr><td>D</td><td>F</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td><td>C</td></tr><tr><td>D</td><td>E</td><td>F</td></tr><tr><td>G</td><td>H</td><td>I</td></tr></tbody></table>'],
   ])('incompatible table structure falls back to whole-table rows for %s', (_name, oldHtml, newHtml) => {
     const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
 
     expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
     expect(result.blocks[0].tableDiff.mode).toBe('structure');
-    expect(result.blocks[0].renderedHtml).not.toContain('dh-table-cell-diff--removed');
-    expect(result.blocks[1].renderedHtml).not.toContain('dh-table-cell-diff--added');
+    expect(result.blocks[0].tableDiff.comparisonHtml).toBeUndefined();
+    expect(result.blocks[0].renderedHtml).not.toContain('dh-table-cell-diff');
+    expect(result.blocks[1].renderedHtml).not.toContain('dh-table-cell-diff');
   });
 
   test('panels and decisions are independent blocks with original styling preserved', () => {

@@ -395,12 +395,102 @@ body {
   font-weight: 700;
 }
 
-.dh-table-diff--cell-level .dh-table-cell-diff--removed {
-  box-shadow: inset 0 0 0 2px var(--dh-red);
+.dh-table-diff--cell-level .dh-table-cell-diff--modified {
+  padding: 0 !important;
 }
 
-.dh-table-diff--cell-level .dh-table-cell-diff--added {
-  box-shadow: inset 0 0 0 2px #36b37e;
+.dh-table-cell-version {
+  display: block;
+  overflow: hidden;
+  border: 2px solid;
+  border-radius: 0;
+  background: transparent;
+}
+
+.dh-table-cell-version + .dh-table-cell-version {
+  margin-top: 0;
+}
+
+.dh-table-cell-version--previous {
+  border-color: var(--dh-red);
+}
+
+.dh-table-cell-version--current {
+  border-color: #36b37e;
+}
+
+.dh-table-cell-version__value {
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.dh-table-cell-version__value > :first-child {
+  margin-top: 0;
+}
+
+.dh-table-cell-version__value > :last-child {
+  margin-bottom: 0;
+}
+
+/*
+ * A row/column insertion or removal is one structural change, even though it
+ * is represented by several table cells. Draw only the outside edges of that
+ * logical region. Structural row/column changes deliberately omit +/- markers
+ * because a marker wide enough to read can distort a narrow column or cover
+ * the original cell content. Cell background colours remain untouched.
+ */
+.dh-table-structure-diff--added {
+  --dh-table-structure-diff-color: #36b37e;
+}
+
+.dh-table-structure-diff--removed {
+  --dh-table-structure-diff-color: var(--dh-red);
+}
+
+.dh-table-structure-diff-cell {
+  --dh-table-structure-edge-top: inset 0 0 0 transparent;
+  --dh-table-structure-edge-right: inset 0 0 0 transparent;
+  --dh-table-structure-edge-bottom: inset 0 0 0 transparent;
+  --dh-table-structure-edge-left: inset 0 0 0 transparent;
+  box-shadow:
+    var(--dh-table-structure-edge-top),
+    var(--dh-table-structure-edge-right),
+    var(--dh-table-structure-edge-bottom),
+    var(--dh-table-structure-edge-left) !important;
+}
+
+.dh-table-structure-diff-edge--top {
+  --dh-table-structure-edge-top: inset 0 2px 0 0 var(--dh-table-structure-diff-color);
+}
+
+.dh-table-structure-diff-edge--right {
+  --dh-table-structure-edge-right: inset -2px 0 0 0 var(--dh-table-structure-diff-color);
+}
+
+.dh-table-structure-diff-edge--bottom {
+  --dh-table-structure-edge-bottom: inset 0 -2px 0 0 var(--dh-table-structure-diff-color);
+}
+
+.dh-table-structure-diff-edge--left {
+  --dh-table-structure-edge-left: inset 2px 0 0 0 var(--dh-table-structure-diff-color);
+}
+
+/*
+ * When one terminal axis grows while the other shrinks, the comparison-only
+ * grid has a bottom-right area that belongs to neither source table. Keep it
+ * visibly neutral: it closes the rectangular layout but is not an addition or
+ * removal and therefore must never receive a red or green change frame.
+ */
+.dh-rich-page td[data-dh-table-structural-gap='true'],
+.dh-rich-page th[data-dh-table-structural-gap='true'] {
+  background-color: #fafbfc !important;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent,
+    transparent 6px,
+    rgba(9, 30, 66, 0.06) 6px,
+    rgba(9, 30, 66, 0.06) 7px
+  ) !important;
 }
 
 .dh-table-diff-pair {
@@ -1674,6 +1764,12 @@ body {
   border: 2px solid var(--dh-red);
 }
 
+.dh-github-diff-part--table-cell-level {
+  display: block;
+  border: 0;
+  background: #fff;
+}
+
 .dh-github-diff-part__marker {
   display: flex;
   justify-content: center;
@@ -1695,6 +1791,11 @@ body {
 .dh-github-diff-part__content {
   min-width: 0;
   padding: 8px 12px;
+}
+
+.dh-github-diff-part--table-cell-level .dh-github-diff-part__content {
+  padding: 0;
+  overflow-x: auto;
 }
 
 .dh-github-diff-part__content > :last-child,
