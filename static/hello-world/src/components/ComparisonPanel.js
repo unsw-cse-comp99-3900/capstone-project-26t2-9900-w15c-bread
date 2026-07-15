@@ -4,6 +4,7 @@ import {
   countWords,
   extractMentionAccountIds,
   formatDateTime,
+  isBlankParagraphBlock,
   prepareConfluenceHtml,
   storageToPlainText,
 } from '../utils';
@@ -141,8 +142,7 @@ function isEmptyParagraphItem(item) {
   return Boolean(
     item &&
     item.block &&
-    item.block.nodeType === 'paragraph' &&
-    !String(item.block.text || '').trim()
+    isDisplayBlankLineBlock(item.block)
   );
 }
 
@@ -190,11 +190,20 @@ function createChangeDisplayRow(items, blockChoiceKeys) {
 function buildChangeRunRows(items, blockChoiceKeys) {
   const removedItems = items.filter(({ block }) => block.type === 'removed');
   const addedItems = items.filter(({ block }) => block.type === 'added');
+  const visibleRemovedItems = removedItems.filter(
+    ({ block }) => !isDisplayBlankLineBlock(block)
+  );
+  const visibleAddedItems = addedItems.filter(
+    ({ block }) => !isDisplayBlankLineBlock(block)
+  );
 
   // LCS-based diff output can represent one changed region as all removed
   // blocks followed by all added blocks. Pair compatible old and new blocks
   // within that region so each logical replacement has one recovery choice.
-  const pairs = pairChangeItems(removedItems, addedItems);
+  // Pair visible content first. Blank paragraphs may be cursor spacing that
+  // belongs to such a replacement; grouping them before pairing would leave
+  // those paragraphs behind when the old content is restored.
+  const pairs = pairChangeItems(visibleRemovedItems, visibleAddedItems);
   const groupedItems = pairs.map(([removedItem, addedItem]) => [removedItem, addedItem]);
   const pairedRemovedPositions = new Map(
     pairs.map(([removedItem]) => [removedItem, removedItems.indexOf(removedItem)])
@@ -210,9 +219,41 @@ function buildChangeRunRows(items, blockChoiceKeys) {
   attachUnpairedSpacerItems(groupedItems, addedItems, pairedAddedPositions);
 
   const usedItems = new Set(groupedItems.flat());
+  const blankRunGroups = [];
+  const itemsInBlankRuns = new Set();
+  let itemIndex = 0;
+
+  // Extraction normally converts a source-side run before the LCS diff runs.
+  // Keep this display-level fallback for historical Storage wrappers, after
+  // replacement spacing has had a chance to attach to its visible content.
+  while (itemIndex < items.length) {
+    if (usedItems.has(items[itemIndex]) || !isDisplayBlankLineBlock(items[itemIndex].block)) {
+      itemIndex++;
+      continue;
+    }
+
+    const blankRun = [];
+    while (
+      itemIndex < items.length &&
+      !usedItems.has(items[itemIndex]) &&
+      isDisplayBlankLineBlock(items[itemIndex].block)
+    ) {
+      blankRun.push(items[itemIndex]);
+      itemIndex++;
+    }
+
+    if (blankRun.length > 1) {
+      blankRunGroups.push(blankRun);
+      blankRun.forEach((item) => itemsInBlankRuns.add(item));
+    }
+  }
+
   const displayGroups = [
+    ...blankRunGroups,
     ...groupedItems,
-    ...items.filter((item) => !usedItems.has(item)).map((item) => [item]),
+    ...items
+      .filter((item) => !usedItems.has(item) && !itemsInBlankRuns.has(item))
+      .map((item) => [item]),
   ];
 
   // Sort groups by their first source position. Inside a paired group, the
@@ -358,6 +399,30 @@ export function buildDiffDisplayRows(blocks) {
   };
 }
 
+export function buildDraftDiffSummary(
+  currentStorage,
+  draftStorage,
+  baseUrl = '',
+  attachmentsByFilename = {},
+  usersByAccountId = {}
+) {
+  // The draft is the value that will become the next current page version.
+  // Keeping the live page on the old side makes red rows mean "removed from
+  // Current" and green rows mean "added by Draft", matching the write-back.
+  const diff = buildRichTextDiffHtml(
+    currentStorage,
+    draftStorage,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId
+  );
+
+  return {
+    diff,
+    display: buildDiffDisplayRows(diff.blocks || []),
+  };
+}
+
 function fallbackTextHtml(text) {
   if (!text) return '';
   const doc = new DOMParser().parseFromString('', 'text/html');
@@ -366,8 +431,34 @@ function fallbackTextHtml(text) {
   return paragraph.outerHTML;
 }
 
+function isBlankLineRunBlock(block) {
+  return Boolean(
+    block &&
+    (block.nodeType === 'blank_line_run' ||
+      block.nodeType === 'blank_line_change') &&
+    Number.isInteger(block.blankLineCount) &&
+    block.blankLineCount > 0
+  );
+}
+
+function isDisplayBlankLineBlock(block) {
+  return isBlankLineRunBlock(block) || isBlankParagraphBlock(block);
+}
+
+function blankLineRunSummaryHtml(block, suffix) {
+  const count = block.blankLineCount;
+  const noun = count === 1 ? 'blank line' : 'blank lines';
+  return `<div class="dh-blank-line-run-summary">${count} ${noun} ${suffix}</div>`;
+}
+
 function getBlockRenderedPreviewHtml(block, selected) {
   if (!block) return '';
+
+  if (block.isBlankLineCountChange) {
+    return selected
+      ? block.newRenderedHtml || block.renderedHtml || ''
+      : block.oldRenderedHtml || block.renderedHtml || '';
+  }
 
   if (block.isStructuralBoundary) {
     return selected
@@ -430,6 +521,34 @@ function getDiffBlockHtml(block) {
 function getGitHubStyleDiffParts(blockOrBlocks) {
   if (Array.isArray(blockOrBlocks)) {
     const tableBlocks = blockOrBlocks.map(({ block }) => block);
+    const isBlankLineRun = Boolean(
+      tableBlocks.length && tableBlocks.every(isDisplayBlankLineBlock)
+    );
+
+    if (isBlankLineRun) {
+      // The underlying block retains every original empty paragraph for exact
+      // recovery. The comparison surface intentionally summarizes the run so
+      // ten Enter presses produce one compact decision instead of ten empty
+      // red/green boxes.
+      return ['removed', 'added'].flatMap((type) => {
+        const matchingBlocks = tableBlocks.filter((block) => block.type === type);
+        if (!matchingBlocks.length) return [];
+
+        const blankLineCount = matchingBlocks.reduce(
+          (count, block) => count + (block.blankLineCount || 1),
+          0
+        );
+
+        return [{
+          type,
+          html: blankLineRunSummaryHtml(
+            { blankLineCount },
+            type === 'added' ? 'added' : 'removed'
+          ),
+        }];
+      });
+    }
+
     const sharedTableDiff = tableBlocks[0] && tableBlocks[0].tableDiff;
     const isCellLevelTablePair = Boolean(
       tableBlocks.length === 2 &&
@@ -536,6 +655,61 @@ function formatLayoutWidthVector(widths) {
   return safeWidths
     .map((width) => (width ? `${width}%` : 'auto'))
     .join(' / ');
+}
+
+function DraftDiffSummaryRows({ rows }) {
+  if (!(rows || []).length) {
+    return (
+      <div className="dh-draft-diff-summary__empty">
+        The draft is identical to the current page.
+      </div>
+    );
+  }
+
+  return rows.map((row) => {
+    if (row.type === 'layout_width_change') {
+      const change = row.layoutWidthChange || {};
+      return (
+        <div className="dh-draft-diff-summary__change" key={row.key}>
+          <div className="dh-draft-diff-summary__change-title">
+            Column widths changed
+          </div>
+          <div className="dh-layout-width-change__values">
+            <span className="dh-layout-width-change__value dh-layout-width-change__value--old">
+              <span aria-hidden="true">-</span>{' '}
+              {formatLayoutWidthVector(change.oldWidths)}
+            </span>
+            <span className="dh-layout-width-change__value dh-layout-width-change__value--current">
+              <span aria-hidden="true">+</span>{' '}
+              {formatLayoutWidthVector(change.newWidths)}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    const diffParts = getGitHubStyleDiffParts(row.blocks || []);
+    return (
+      <div className="dh-draft-diff-summary__change" key={row.key}>
+        {diffParts.map((part, partIndex) => (
+          <div
+            className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
+            key={`${row.key}-${part.type}-${partIndex}`}
+          >
+            {part.type !== 'table-cell-level' ? (
+              <span className="dh-github-diff-part__marker">
+                {part.type === 'added' ? '+' : '-'}
+              </span>
+            ) : null}
+            <div
+              className="dh-github-diff-part__content"
+              dangerouslySetInnerHTML={{ __html: part.html }}
+            />
+          </div>
+        ))}
+      </div>
+    );
+  });
 }
 
 function LayoutWidthChangeControl({
@@ -714,11 +888,46 @@ function DiffDisplayRows({
 
     const choice = blockChoices.get(key);
     if (choice) {
-      const resolvedHtml = row.blocks
-        .map(({ block }) =>
-          getBlockRenderedPreviewHtml(block, choice === 'current')
-        )
-        .join('');
+      const blankLineBlocks = row.blocks.map(({ block }) => block);
+      const isBlankLineRun = Boolean(
+        blankLineBlocks.length && blankLineBlocks.every(isDisplayBlankLineBlock)
+      );
+      const selectedBlankLineBlocks = isBlankLineRun
+        ? blankLineBlocks.filter(
+            (block) =>
+              block.isBlankLineCountChange ||
+              (choice === 'current'
+                ? block.type === 'added'
+                : block.type === 'removed')
+          )
+        : [];
+      const resolvedHtml = isBlankLineRun
+        ? selectedBlankLineBlocks.length
+          ? blankLineRunSummaryHtml(
+              {
+                blankLineCount: selectedBlankLineBlocks.reduce(
+                  (count, block) => {
+                    if (block.isBlankLineCountChange) {
+                      return (
+                        count +
+                        (choice === 'current'
+                          ? block.newBlankLineCount
+                          : block.oldBlankLineCount)
+                      );
+                    }
+                    return count + (block.blankLineCount || 1);
+                  },
+                  0
+                ),
+              },
+              'selected'
+            )
+          : ''
+        : row.blocks
+            .map(({ block }) =>
+              getBlockRenderedPreviewHtml(block, choice === 'current')
+            )
+            .join('');
 
       return (
         <div
@@ -880,6 +1089,7 @@ function ComparisonPanelContent({
   const [blockChoices, setBlockChoices] = useState(new Map());
   const [activeBlockKey, setActiveBlockKey] = useState(null);
   const [draftPreview, setDraftPreview] = useState(null);
+  const [showDraftDiffSummary, setShowDraftDiffSummary] = useState(false);
   const [writeBack, setWriteBack] = useState({
     status: 'idle',
     error: '',
@@ -1042,6 +1252,7 @@ function ComparisonPanelContent({
     setBlockChoices(new Map());
     setActiveBlockKey(null);
     setDraftPreview(null);
+    setShowDraftDiffSummary(false);
     setWriteBack({ status: 'idle', error: '', page: null });
   }, [selectableBlocks, selectedVersion.number, currentVersion && currentVersion.number]);
 
@@ -1053,13 +1264,17 @@ function ComparisonPanelContent({
         event.key === 'Escape' &&
         writeBack.status !== 'loading'
       ) {
-        setDraftPreview(null);
+        if (showDraftDiffSummary) {
+          setShowDraftDiffSummary(false);
+        } else {
+          setDraftPreview(null);
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [draftPreview, writeBack.status]);
+  }, [draftPreview, showDraftDiffSummary, writeBack.status]);
 
   const handleChooseBlockVersion = (key, choice) => {
     setBlockChoices((previous) => {
@@ -1104,6 +1319,36 @@ function ComparisonPanelContent({
       richDiff.blocks,
     ]
   );
+  const draftDiffSummary = useMemo(() => {
+    if (!draftPreview || draftPreview.storageError) return null;
+
+    try {
+      return {
+        ...buildDraftDiffSummary(
+          currentBodyValue,
+          draftPreview.storageHtml,
+          baseUrl,
+          attachmentsByFilename || {},
+          mentionUsersByAccountId
+        ),
+        error: '',
+      };
+    } catch (error) {
+      console.error('[ComparisonPanel] Failed to build draft diff summary', error);
+      return {
+        diff: emptyDiff,
+        display: { rows: [], selectableRows: [], blockChoiceKeys: new Map() },
+        error: 'The draft diff summary could not be rendered safely.',
+      };
+    }
+  }, [
+    attachmentsByFilename,
+    baseUrl,
+    currentBodyValue,
+    draftPreview,
+    emptyDiff,
+    mentionUsersByAccountId,
+  ]);
 
   const diffSummary = richDiff.summary || {
     added: richDiff.added || 0,
@@ -1145,6 +1390,7 @@ function ComparisonPanelContent({
     };
 
     setWriteBack({ status: 'idle', error: '', page: null });
+    setShowDraftDiffSummary(false);
     setDraftPreview(draft);
   };
 
@@ -1296,6 +1542,7 @@ function ComparisonPanelContent({
               event.target === event.currentTarget &&
               !operationIsLoading
             ) {
+              setShowDraftDiffSummary(false);
               setDraftPreview(null);
             }
           }}
@@ -1316,15 +1563,32 @@ function ComparisonPanelContent({
                   {' '}v{draftPreview.currentVersionNumber || '?'}
                 </p>
               </div>
-              <button
-                aria-label="Close draft preview"
-                className="dh-draft-modal__close"
-                disabled={operationIsLoading}
-                onClick={() => setDraftPreview(null)}
-                type="button"
-              >
-                ×
-              </button>
+              <div className="dh-draft-modal__header-actions">
+                <button
+                  className="dh-draft-modal__diff-summary-button"
+                  disabled={
+                    operationIsLoading ||
+                    Boolean(draftPreview.storageError) ||
+                    !draftDiffSummary
+                  }
+                  onClick={() => setShowDraftDiffSummary(true)}
+                  type="button"
+                >
+                  Diff Summary
+                </button>
+                <button
+                  aria-label="Close draft preview"
+                  className="dh-draft-modal__close"
+                  disabled={operationIsLoading}
+                  onClick={() => {
+                    setShowDraftDiffSummary(false);
+                    setDraftPreview(null);
+                  }}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
             </header>
 
             <div className="dh-draft-modal__body">
@@ -1372,7 +1636,10 @@ function ComparisonPanelContent({
                 <button
                   disabled={operationIsLoading}
                   type="button"
-                  onClick={() => setDraftPreview(null)}
+                  onClick={() => {
+                    setShowDraftDiffSummary(false);
+                    setDraftPreview(null);
+                  }}
                 >
                   Back to changes
                 </button>
@@ -1394,6 +1661,88 @@ function ComparisonPanelContent({
               </div>
             </footer>
           </section>
+
+          {showDraftDiffSummary && draftDiffSummary ? (
+            <div
+              className="dh-draft-diff-summary-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  setShowDraftDiffSummary(false);
+                }
+              }}
+            >
+              <section
+                aria-labelledby="dh-draft-diff-summary-title"
+                aria-modal="true"
+                className="dh-draft-diff-summary"
+                role="dialog"
+              >
+                <header className="dh-draft-diff-summary__header">
+                  <div>
+                    <h2
+                      className="dh-draft-modal__title"
+                      id="dh-draft-diff-summary-title"
+                    >
+                      Diff Summary
+                    </h2>
+                    <p className="dh-draft-modal__meta">
+                      Current v{draftPreview.currentVersionNumber || '?'} → Draft
+                    </p>
+                  </div>
+                  <button
+                    aria-label="Close diff summary"
+                    className="dh-draft-modal__close"
+                    onClick={() => setShowDraftDiffSummary(false)}
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </header>
+
+                <div className="dh-draft-diff-summary__body">
+                  {draftDiffSummary.error ? (
+                    <div className="dh-draft-modal__result--error">
+                      {draftDiffSummary.error}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="dh-draft-diff-summary__chips">
+                        <span className="dh-change-chip dh-change-chip--added">
+                          + {draftDiffSummary.diff.summary.added} additions
+                        </span>
+                        <span className="dh-change-chip dh-change-chip--removed">
+                          - {draftDiffSummary.diff.summary.removed} removals
+                        </span>
+                        <span className="dh-change-chip">
+                          {draftDiffSummary.diff.summary.modifiedBlocks || 0} modified
+                        </span>
+                      </div>
+                      {draftDiffSummary.diff.summary.limited ? (
+                        <div className="dh-diff-warning">
+                          This page is large, so the summary uses a limited safe comparison.
+                        </div>
+                      ) : null}
+                      <div className="dh-draft-diff-summary__changes">
+                        <DraftDiffSummaryRows
+                          rows={draftDiffSummary.display.selectableRows}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <footer className="dh-draft-diff-summary__footer">
+                  <span>Red is removed from Current; green is added by Draft.</span>
+                  <button
+                    onClick={() => setShowDraftDiffSummary(false)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </footer>
+              </section>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

@@ -75,17 +75,17 @@ function App() {
     };
   }, [refreshToken]);
 
-  const handlePageUpdated = (updatedPage) => {
+  const handlePageUpdated = () => {
     setRefreshToken((current) => current + 1);
 
-    // If the PUT succeeded before Confluence's version read model caught up,
-    // refresh once more after the normal consistency window so the timeline
-    // replaces the old Current entry without requiring the user to reopen the app.
-    if (updatedPage && updatedPage.versionConfirmed === false) {
-      setTimeout(() => {
-        setRefreshToken((current) => current + 1);
-      }, 2000);
-    }
+    // The page update endpoint can succeed before Confluence's version-list
+    // read model exposes the new version. The resolver cannot reliably know
+    // whether that separate read model has caught up, so always retry once
+    // after its normal consistency window. This keeps the timeline current
+    // without asking the user to close and reopen the app.
+    setTimeout(() => {
+      setRefreshToken((current) => current + 1);
+    }, 2000);
   };
 
   const handleClose = () => {

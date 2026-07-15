@@ -1,6 +1,23 @@
 import { buildRichTextDiffHtml } from '../utils';
 import { buildRecoveryStorageHtml } from '../recoveryStorage';
-import { buildDiffDisplayRows } from './ComparisonPanel';
+import { buildDiffDisplayRows, buildDraftDiffSummary } from './ComparisonPanel';
+
+describe('draft diff summary', () => {
+  test('compares the current page as old content and the draft as new content', () => {
+    const currentStorage = '<p>Stable</p><p>Current wording</p>';
+    const draftStorage = '<p>Stable</p><p>Draft wording</p><p>Draft addition</p>';
+    const result = buildDraftDiffSummary(currentStorage, draftStorage);
+    const changedBlocks = result.diff.blocks.filter((block) => block.type !== 'same');
+
+    expect(changedBlocks.map((block) => ({ type: block.type, text: block.text }))).toEqual([
+      { type: 'removed', text: 'Current wording' },
+      { type: 'added', text: 'Draft wording' },
+      { type: 'added', text: 'Draft addition' },
+    ]);
+    expect(result.diff.summary).toMatchObject({ added: 2, removed: 1 });
+    expect(result.display.selectableRows).toHaveLength(2);
+  });
+});
 
 describe('comparison change grouping', () => {
   test('pairs visible replacement text instead of leading empty paragraphs', () => {
@@ -20,12 +37,26 @@ describe('comparison change grouping', () => {
 
     expect(replacementRow).toBeDefined();
     expect(
-      replacementRow.blocks.map(({ block }) => ({ type: block.type, text: block.text }))
+      replacementRow.blocks.map(({ block }) => ({
+        type: block.type,
+        nodeType: block.nodeType,
+        text: block.text,
+        blankLineCount: block.blankLineCount,
+      }))
     ).toEqual([
-      { type: 'removed', text: 'old text' },
-      { type: 'added', text: '' },
-      { type: 'added', text: '' },
-      { type: 'added', text: 'new text' },
+      {
+        type: 'removed',
+        nodeType: 'paragraph',
+        text: 'old text',
+        blankLineCount: undefined,
+      },
+      { type: 'added', nodeType: 'blank_line_run', text: '', blankLineCount: 2 },
+      {
+        type: 'added',
+        nodeType: 'paragraph',
+        text: 'new text',
+        blankLineCount: undefined,
+      },
     ]);
 
     replacementRow.blocks.forEach(({ index }) => {
