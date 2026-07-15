@@ -113,6 +113,18 @@ const CONFLUENCE_EMPTY_STORAGE_TAGS = new Set([
   'ri:user',
 ]);
 
+// ADF elements are not universally empty, so they cannot be placed in the
+// unconditional set above. When one is explicitly self-closing in Storage,
+// however, it must be expanded before HTML DOMParser sees it. HTML parsing does
+// not apply XML self-closing semantics to custom tags and can otherwise attach
+// the complete remainder of the page to one empty ADF paragraph/hardBreak.
+const CONDITIONAL_EMPTY_ADF_STORAGE_TAGS = new Set([
+  'ac:adf-attribute',
+  'ac:adf-content',
+  'ac:adf-mark',
+  'ac:adf-node',
+]);
+
 const HTML_EMPTY_STORAGE_TAGS = new Set([
   'area',
   'base',
@@ -131,7 +143,11 @@ const HTML_EMPTY_STORAGE_TAGS = new Set([
 ]);
 
 const STORAGE_PARSER_EMPTY_TAG_RE = new RegExp(
-  `<(${[...CONFLUENCE_EMPTY_STORAGE_TAGS, 'time']
+  `<(${[
+    ...CONFLUENCE_EMPTY_STORAGE_TAGS,
+    ...CONDITIONAL_EMPTY_ADF_STORAGE_TAGS,
+    'time',
+  ]
     .map((tag) => tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('|')})\\b([^>]*)\\/>`,
   'gi'
@@ -221,7 +237,11 @@ export function getStorageNodeOuterHtml(node) {
   const attributes = getNodeAttributeHtml(node);
   const children = Array.from(node.childNodes || []).map(getStorageNodeOuterHtml).join('');
 
-  if (CONFLUENCE_EMPTY_STORAGE_TAGS.has(tag) || HTML_EMPTY_STORAGE_TAGS.has(tag)) {
+  if (
+    CONFLUENCE_EMPTY_STORAGE_TAGS.has(tag) ||
+    HTML_EMPTY_STORAGE_TAGS.has(tag) ||
+    (CONDITIONAL_EMPTY_ADF_STORAGE_TAGS.has(tag) && !children)
+  ) {
     return `<${tag}${attributes} />${children}`;
   }
 
@@ -2224,8 +2244,37 @@ function expandWhiteboardAnchors(html) {
   });
 }
 
+function expandSelfClosingAdfElementsForPreview(html) {
+  return String(html || '').replace(
+    /<(ac:adf-(?:attribute|content|mark|node))\b([^>]*)\/>/gi,
+    (match, rawTag, attributes) => {
+      const tag = String(rawTag || '').toLowerCase();
+
+      if (tag === 'ac:adf-node') {
+        const nodeType = String(
+          extractAttr(match, ['type', 'ac:type']) || ''
+        )
+          .replace(/[-_]/g, '')
+          .toLowerCase();
+
+        // These two nodes are the historical Storage forms relevant to empty
+        // editor lines. Render them immediately so the sanitizer retains one
+        // semantic blank block instead of unwrapping an unknown empty tag.
+        if (nodeType === 'paragraph') return '<p></p>';
+        if (nodeType === 'hardbreak') return '<br>';
+      }
+
+      // Other explicitly empty ADF elements may still be handled by the normal
+      // ADF renderer. Give its regular expressions an unambiguous empty pair;
+      // otherwise a self-closing opener could consume a much later closing tag
+      // together with every page block in between.
+      return `<${rawTag}${attributes}></${rawTag}>`;
+    }
+  );
+}
+
 function expandAdfNodes(html, usersByAccountId = {}) {
-  let expanded = expandAdfMarks(html);
+  let expanded = expandAdfMarks(expandSelfClosingAdfElementsForPreview(html));
 
   // Decision fallbacks can contain a second ADF copy of every item. Render
   // the enclosing extension before the generic item pass so only the primary
@@ -3797,6 +3846,175 @@ function extractLayoutDiffBlocks(
   return walkWrapper(layoutNode, `layout:${layoutIndex}`);
 }
 
+function containsOnlyBlankEditorPlaceholders(value) {
+  // Both the Storage string and DOM textContent are checked by the callers.
+  // Therefore this recognises the entity spelling as well as the decoded
+  // non-breaking-space character used by DOMParser.
+  return !String(value || '')
+    .replace(/&(?:nbsp|#160|#x0*a0);/gi, '')
+    // Rich-text editors use several Unicode format controls as caret anchors.
+    // They are visually empty and must not make otherwise blank paragraphs
+    // appear to contain content. Object-replacement characters are purposely
+    // excluded because they can stand for a real embedded rich node.
+    .replace(
+      /[\s\u00a0\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/g,
+      ''
+    );
+}
+
+function isVisuallyBlankParagraphMarkup(markup) {
+  const doc = new DOMParser().parseFromString(
+    String(markup || ''),
+    'text/html'
+  );
+  const elements = Array.from(doc.body.querySelectorAll('*'));
+  if (!elements.length || !containsOnlyBlankEditorPlaceholders(doc.body.textContent)) {
+    return false;
+  }
+
+  // Comments and CDATA can carry real source content without contributing to
+  // textContent. They are never editor blank lines, so do not collapse them.
+  if (/<!--|<!\[CDATA\[/i.test(String(markup || ''))) return false;
+
+  let hasLineContainer = false;
+  const harmlessInlineTags = new Set([
+    'span',
+    'strong',
+    'b',
+    'em',
+    'i',
+    'u',
+    's',
+    'strike',
+    'sub',
+    'sup',
+  ]);
+
+  return elements.every((element) => {
+    const tag = String(element.tagName || '').toLowerCase();
+    const explicitNodeType = String(
+      element.getAttribute('data-dh-node-type') || ''
+    ).toLowerCase();
+
+    // Prepared rich nodes advertise their semantic type. Only the paragraph
+    // wrapper itself is allowed; an otherwise textless mention, image, macro,
+    // status, date, or unsupported fallback must remain a real diff block.
+    if (explicitNodeType && explicitNodeType !== 'paragraph') return false;
+
+    if (tag === 'p' || tag === 'br' || tag === 'ac:adf-content') {
+      hasLineContainer = true;
+      return true;
+    }
+
+    if (tag === 'div') {
+      // ADF alignment/indentation is rendered as a paragraph div. Plain empty
+      // divs are also accepted because some historical editor serializers use
+      // them for an empty line before Confluence normalises the next version.
+      hasLineContainer = true;
+      return true;
+    }
+
+    if (tag === 'ac:adf-node') {
+      const adfType = String(
+        element.getAttribute('type') || element.getAttribute('ac:type') || ''
+      )
+        .replace(/[-_]/g, '')
+        .toLowerCase();
+
+      // A hardBreak is the ADF equivalent of a <br>. Paragraph is accepted for
+      // wrappers that survived preparation because of nested historical ADF.
+      if (adfType === 'hardbreak' || adfType === 'paragraph') {
+        hasLineContainer = true;
+        return true;
+      }
+      return false;
+    }
+
+    return harmlessInlineTags.has(tag);
+  }) && hasLineContainer;
+}
+
+export function isBlankParagraphBlock(block) {
+  if (!block || block.nodeType !== 'paragraph') return false;
+
+  // Placeholder characters can survive preview preparation even when the raw
+  // Storage is empty. Any visible text proves this is not a blank line.
+  if (!containsOnlyBlankEditorPlaceholders(block.text)) return false;
+
+  // The raw Storage representation is not stable across page versions. Base
+  // the decision on the prepared semantic markup instead: direct paragraphs,
+  // top-level <br> nodes, empty formatting wrappers, and ADF hardBreak/content
+  // wrappers all represent the same user action (pressing Enter). The helper's
+  // allow-list prevents real rich nodes from being hidden by this grouping.
+  return isVisuallyBlankParagraphMarkup(
+    block.renderedHtml || block.html || block.rawHtml
+  );
+}
+
+function mergeBlankParagraphRun(run) {
+  const first = run[0];
+  const blankLineCount = run.reduce(
+    (count, block) => count + (block.blankLineCount || 1),
+    0
+  );
+  const html = run.map((block) => block.html || '').join('');
+  const renderedHtml = run
+    .map((block) => block.renderedHtml || block.html || '')
+    .join('');
+  const rawHtml = run
+    .map((block) => block.rawHtml || block.html || '')
+    .join('');
+
+  return {
+    ...first,
+    // The count is semantic: one blank paragraph and ten blank paragraphs
+    // produce different keys, while the complete original Storage remains
+    // available for exact Keep/Restore reconstruction.
+    // Blank lines have no content identity beyond their count and structural
+    // location. Ignoring regenerated Storage wrappers lets equal counts align
+    // as unchanged even when Confluence rewrites local IDs or ADF markup.
+    key: `blank_line_run:${first.layoutPath || 'root'}:${blankLineCount}`,
+    html,
+    renderedHtml,
+    rawHtml,
+    tag: 'p',
+    nodeType: 'blank_line_run',
+    text: '',
+    blankLineCount,
+    canInlineDiff: false,
+  };
+}
+
+function collapseAdjacentBlankParagraphBlocks(blocks) {
+  const collapsed = [];
+  let index = 0;
+
+  while (index < blocks.length) {
+    const block = blocks[index];
+    if (!isBlankParagraphBlock(block)) {
+      collapsed.push(block);
+      index++;
+      continue;
+    }
+
+    const run = [block];
+    let nextIndex = index + 1;
+    while (
+      nextIndex < blocks.length &&
+      isBlankParagraphBlock(blocks[nextIndex]) &&
+      blocks[nextIndex].layoutPath === block.layoutPath
+    ) {
+      run.push(blocks[nextIndex]);
+      nextIndex++;
+    }
+
+    collapsed.push(mergeBlankParagraphRun(run));
+    index = nextIndex;
+  }
+
+  return collapsed;
+}
+
 function extractDiffBlocks(
   html,
   baseUrl,
@@ -3809,7 +4027,7 @@ function extractDiffBlocks(
   let layoutIndex = 0;
   let rawBlockIndex = 0;
 
-  return Array.from(rawDoc.body.childNodes)
+  const blocks = Array.from(rawDoc.body.childNodes)
     .filter((node) => node.nodeType === Node.ELEMENT_NODE || normaliseBlockText(node))
     .flatMap((node) => {
       if (
@@ -3841,6 +4059,8 @@ function extractDiffBlocks(
       });
     })
     .filter((block) => block.html);
+
+  return collapseAdjacentBlankParagraphBlocks(blocks);
 }
 
 function createDiffSummary(overrides = {}) {
@@ -3938,6 +4158,7 @@ function makeSameBlock(currentBlock, oldBlock = currentBlock) {
     oldLayoutColumnWidth,
     newLayoutColumnWidth,
     layoutColumnWidthChange,
+    blankLineCount: currentBlock.blankLineCount || oldBlock.blankLineCount,
     // The existing summary represents one replacement as one removal plus one
     // addition. Preserve that contract for a width-vector replacement while
     // keeping the structural boundary itself aligned as a `same` block.
@@ -4000,6 +4221,7 @@ function makeAddedBlock(block) {
     layoutPath: block.layoutPath,
     layoutBoundaryEdge: block.layoutBoundaryEdge,
     layoutWrapperTag: block.layoutWrapperTag,
+    blankLineCount: block.blankLineCount,
     added: 1,
     removed: 0,
   };
@@ -4025,9 +4247,158 @@ function makeRemovedBlock(block) {
     layoutPath: block.layoutPath,
     layoutBoundaryEdge: block.layoutBoundaryEdge,
     layoutWrapperTag: block.layoutWrapperTag,
+    blankLineCount: block.blankLineCount,
     added: 0,
     removed: 1,
   };
+}
+
+function makeBlankLineCountChange(removedBlock, addedBlock) {
+  const oldBlankLineCount = removedBlock.blankLineCount || 1;
+  const newBlankLineCount = addedBlock.blankLineCount || 1;
+  const blankLineDelta = newBlankLineCount - oldBlankLineCount;
+  const isAddition = blankLineDelta > 0;
+
+  return {
+    // Keep the public page-level contract limited to added/removed blocks. The
+    // dedicated metadata below tells recovery that this is a count transition,
+    // not an ordinary block that disappears on one side.
+    type: isAddition ? 'added' : 'removed',
+    tag: 'p',
+    nodeType: 'blank_line_change',
+    text: '',
+    oldHtml: removedBlock.oldHtml,
+    newHtml: addedBlock.newHtml,
+    oldRawHtml: removedBlock.oldRawHtml,
+    newRawHtml: addedBlock.newRawHtml,
+    oldRenderedHtml: removedBlock.renderedHtml,
+    newRenderedHtml: addedBlock.renderedHtml,
+    renderedHtml: isAddition
+      ? addedBlock.renderedHtml
+      : removedBlock.renderedHtml,
+    layoutPath: addedBlock.layoutPath || removedBlock.layoutPath,
+    blankLineCount: Math.abs(blankLineDelta),
+    oldBlankLineCount,
+    newBlankLineCount,
+    blankLineDelta,
+    isBlankLineCountChange: true,
+    added: isAddition ? 1 : 0,
+    removed: isAddition ? 0 : 1,
+  };
+}
+
+function isBlankDiffResultBlock(block) {
+  return Boolean(
+    block &&
+    (block.nodeType === 'blank_line_run' || isBlankParagraphBlock(block))
+  );
+}
+
+function aggregateOneSidedBlankDiffBlocks(blocks, type) {
+  const isRemoved = type === 'removed';
+  const blankLineCount = blocks.reduce(
+    (count, block) => count + (block.blankLineCount || 1),
+    0
+  );
+  const storageHtml = blocks
+    .map((block) =>
+      isRemoved
+        ? block.oldHtml || block.html || ''
+        : block.newHtml || block.html || ''
+    )
+    .join('');
+  const rawHtml = blocks
+    .map((block) =>
+      isRemoved
+        ? block.oldRawHtml || block.oldHtml || block.html || ''
+        : block.newRawHtml || block.newHtml || block.html || ''
+    )
+    .join('');
+  const renderedHtml = blocks
+    .map((block) => block.renderedHtml || '')
+    .join('');
+
+  return {
+    ...blocks[0],
+    type,
+    tag: 'p',
+    nodeType: 'blank_line_run',
+    text: '',
+    ...(isRemoved
+      ? { oldHtml: storageHtml, oldRawHtml: rawHtml }
+      : { newHtml: storageHtml, newRawHtml: rawHtml }),
+    renderedHtml,
+    blankLineCount,
+    added: isRemoved ? 0 : 1,
+    removed: isRemoved ? 1 : 0,
+  };
+}
+
+function makeSameBlankLineRun(removedBlock, addedBlock) {
+  return {
+    type: 'same',
+    tag: 'p',
+    nodeType: 'blank_line_run',
+    text: '',
+    html: addedBlock.newHtml,
+    renderedHtml: addedBlock.renderedHtml,
+    oldRawHtml: removedBlock.oldRawHtml,
+    newRawHtml: addedBlock.newRawHtml,
+    layoutPath: addedBlock.layoutPath || removedBlock.layoutPath,
+    blankLineCount: addedBlock.blankLineCount,
+    added: 0,
+    removed: 0,
+  };
+}
+
+function compactBlankLineCountChanges(blocks) {
+  const compacted = [];
+
+  for (let index = 0; index < blocks.length; index++) {
+    const first = blocks[index];
+    if (
+      !first ||
+      !['removed', 'added'].includes(first.type) ||
+      !isBlankDiffResultBlock(first)
+    ) {
+      compacted.push(first);
+      continue;
+    }
+
+    const run = [];
+    let runIndex = index;
+    while (
+      runIndex < blocks.length &&
+      ['removed', 'added'].includes(blocks[runIndex].type) &&
+      isBlankDiffResultBlock(blocks[runIndex])
+    ) {
+      run.push(blocks[runIndex]);
+      runIndex++;
+    }
+
+    const removedBlocks = run.filter((block) => block.type === 'removed');
+    const addedBlocks = run.filter((block) => block.type === 'added');
+    const removedRun = removedBlocks.length
+      ? aggregateOneSidedBlankDiffBlocks(removedBlocks, 'removed')
+      : null;
+    const addedRun = addedBlocks.length
+      ? aggregateOneSidedBlankDiffBlocks(addedBlocks, 'added')
+      : null;
+
+    if (removedRun && addedRun) {
+      if (removedRun.blankLineCount === addedRun.blankLineCount) {
+        compacted.push(makeSameBlankLineRun(removedRun, addedRun));
+      } else {
+        compacted.push(makeBlankLineCountChange(removedRun, addedRun));
+      }
+    } else {
+      compacted.push(removedRun || addedRun);
+    }
+
+    index = runIndex - 1;
+  }
+
+  return compacted;
 }
 
 function buildDiffResult(blocks, summaryOverrides = {}) {
@@ -5447,7 +5818,10 @@ export function buildRichTextDiffHtml(
     j++;
   }
 
-  return buildDiffResult(decorateTableReplacementBlocks(blocks), { limited });
+  return buildDiffResult(
+    compactBlankLineCountChanges(decorateTableReplacementBlocks(blocks)),
+    { limited }
+  );
 }
 
 export function countWords(text) {

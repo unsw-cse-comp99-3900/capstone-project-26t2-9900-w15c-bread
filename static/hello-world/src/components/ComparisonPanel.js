@@ -4,6 +4,7 @@ import {
   countWords,
   extractMentionAccountIds,
   formatDateTime,
+  isBlankParagraphBlock,
   prepareConfluenceHtml,
   storageToPlainText,
 } from '../utils';
@@ -49,8 +50,38 @@ function createChangeDisplayRow(items, blockChoiceKeys) {
 }
 
 function buildChangeRunRows(items, blockChoiceKeys) {
-  const removedItems = items.filter(({ block }) => block.type === 'removed');
-  const addedItems = items.filter(({ block }) => block.type === 'added');
+  const blankRunGroups = [];
+  const itemsInBlankRuns = new Set();
+  let itemIndex = 0;
+
+  // Extraction normally converts a source-side run before the LCS diff runs.
+  // Keep this display-level fallback because historical Confluence Storage can
+  // still produce several distinct prepared wrappers for consecutive empty
+  // editor lines. One recovery choice must cover that whole adjacent run.
+  while (itemIndex < items.length) {
+    if (!isDisplayBlankLineBlock(items[itemIndex].block)) {
+      itemIndex++;
+      continue;
+    }
+
+    const blankRun = [];
+    while (
+      itemIndex < items.length &&
+      isDisplayBlankLineBlock(items[itemIndex].block)
+    ) {
+      blankRun.push(items[itemIndex]);
+      itemIndex++;
+    }
+
+    if (blankRun.length > 1) {
+      blankRunGroups.push(blankRun);
+      blankRun.forEach((item) => itemsInBlankRuns.add(item));
+    }
+  }
+
+  const remainingItems = items.filter((item) => !itemsInBlankRuns.has(item));
+  const removedItems = remainingItems.filter(({ block }) => block.type === 'removed');
+  const addedItems = remainingItems.filter(({ block }) => block.type === 'added');
 
   // LCS-based diff output can represent one changed region as all removed
   // blocks followed by all added blocks. Pair compatible old and new blocks
@@ -71,8 +102,9 @@ function buildChangeRunRows(items, blockChoiceKeys) {
 
   const usedItems = new Set(groupedItems.flat());
   const displayGroups = [
+    ...blankRunGroups,
     ...groupedItems,
-    ...items.filter((item) => !usedItems.has(item)).map((item) => [item]),
+    ...remainingItems.filter((item) => !usedItems.has(item)).map((item) => [item]),
   ];
 
   // Sort groups by their first source position. Inside a paired group, the
@@ -225,8 +257,34 @@ function fallbackTextHtml(text) {
   return paragraph.outerHTML;
 }
 
+function isBlankLineRunBlock(block) {
+  return Boolean(
+    block &&
+    (block.nodeType === 'blank_line_run' ||
+      block.nodeType === 'blank_line_change') &&
+    Number.isInteger(block.blankLineCount) &&
+    block.blankLineCount > 0
+  );
+}
+
+function isDisplayBlankLineBlock(block) {
+  return isBlankLineRunBlock(block) || isBlankParagraphBlock(block);
+}
+
+function blankLineRunSummaryHtml(block, suffix) {
+  const count = block.blankLineCount;
+  const noun = count === 1 ? 'blank line' : 'blank lines';
+  return `<div class="dh-blank-line-run-summary">${count} ${noun} ${suffix}</div>`;
+}
+
 function getBlockRenderedPreviewHtml(block, selected) {
   if (!block) return '';
+
+  if (block.isBlankLineCountChange) {
+    return selected
+      ? block.newRenderedHtml || block.renderedHtml || ''
+      : block.oldRenderedHtml || block.renderedHtml || '';
+  }
 
   if (block.isStructuralBoundary) {
     return selected
@@ -289,6 +347,34 @@ function getDiffBlockHtml(block) {
 function getGitHubStyleDiffParts(blockOrBlocks) {
   if (Array.isArray(blockOrBlocks)) {
     const tableBlocks = blockOrBlocks.map(({ block }) => block);
+    const isBlankLineRun = Boolean(
+      tableBlocks.length && tableBlocks.every(isDisplayBlankLineBlock)
+    );
+
+    if (isBlankLineRun) {
+      // The underlying block retains every original empty paragraph for exact
+      // recovery. The comparison surface intentionally summarizes the run so
+      // ten Enter presses produce one compact decision instead of ten empty
+      // red/green boxes.
+      return ['removed', 'added'].flatMap((type) => {
+        const matchingBlocks = tableBlocks.filter((block) => block.type === type);
+        if (!matchingBlocks.length) return [];
+
+        const blankLineCount = matchingBlocks.reduce(
+          (count, block) => count + (block.blankLineCount || 1),
+          0
+        );
+
+        return [{
+          type,
+          html: blankLineRunSummaryHtml(
+            { blankLineCount },
+            type === 'added' ? 'added' : 'removed'
+          ),
+        }];
+      });
+    }
+
     const sharedTableDiff = tableBlocks[0] && tableBlocks[0].tableDiff;
     const isCellLevelTablePair = Boolean(
       tableBlocks.length === 2 &&
@@ -573,11 +659,46 @@ function DiffDisplayRows({
 
     const choice = blockChoices.get(key);
     if (choice) {
-      const resolvedHtml = row.blocks
-        .map(({ block }) =>
-          getBlockRenderedPreviewHtml(block, choice === 'current')
-        )
-        .join('');
+      const blankLineBlocks = row.blocks.map(({ block }) => block);
+      const isBlankLineRun = Boolean(
+        blankLineBlocks.length && blankLineBlocks.every(isDisplayBlankLineBlock)
+      );
+      const selectedBlankLineBlocks = isBlankLineRun
+        ? blankLineBlocks.filter(
+            (block) =>
+              block.isBlankLineCountChange ||
+              (choice === 'current'
+                ? block.type === 'added'
+                : block.type === 'removed')
+          )
+        : [];
+      const resolvedHtml = isBlankLineRun
+        ? selectedBlankLineBlocks.length
+          ? blankLineRunSummaryHtml(
+              {
+                blankLineCount: selectedBlankLineBlocks.reduce(
+                  (count, block) => {
+                    if (block.isBlankLineCountChange) {
+                      return (
+                        count +
+                        (choice === 'current'
+                          ? block.newBlankLineCount
+                          : block.oldBlankLineCount)
+                      );
+                    }
+                    return count + (block.blankLineCount || 1);
+                  },
+                  0
+                ),
+              },
+              'selected'
+            )
+          : ''
+        : row.blocks
+            .map(({ block }) =>
+              getBlockRenderedPreviewHtml(block, choice === 'current')
+            )
+            .join('');
 
       return (
         <div

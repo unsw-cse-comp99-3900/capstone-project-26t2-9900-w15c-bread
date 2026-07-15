@@ -25,6 +25,8 @@ function getBlockChoice(index, blockChoices, blockChoiceKeys) {
 }
 
 function blockIsOmitted(block, useCurrent) {
+  if (block && block.isBlankLineCountChange) return false;
+
   return (
     (block && block.type === 'added' && !useCurrent) ||
     (block && block.type === 'removed' && useCurrent)
@@ -57,6 +59,14 @@ function selectLayoutCellOpeningTag(block, useCurrent) {
 
 export function getSelectedBlockStorageHtml(block, useCurrent) {
   if (!block) return '';
+
+  if (block.isBlankLineCountChange) {
+    // A count change stores complete runs on both sides. Although its public
+    // type reports only the net direction (+ or -), neither choice is absent.
+    return useCurrent
+      ? block.newRawHtml || block.newHtml || ''
+      : block.oldRawHtml || block.oldHtml || '';
+  }
 
   if (block.type === 'same') {
     if (

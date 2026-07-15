@@ -369,6 +369,110 @@ describe('buildRecoveryStorageHtml', () => {
     expect(restoredPreview).not.toContain('data-dh-layout-weight=');
   });
 
+  test('keeps a consecutive blank-line run as one choice while preserving its exact count', () => {
+    const oldStorage = [
+      '<p>Before</p>',
+      '<ac:adf-node type="paragraph">',
+      '<ac:adf-attribute key="local-id">historical-blank-1</ac:adf-attribute>',
+      '<p></p>',
+      '</ac:adf-node>',
+      '<ac:adf-node type="paragraph">',
+      '<ac:adf-attribute key="local-id">historical-blank-2</ac:adf-attribute>',
+      '<p><br /></p>',
+      '</ac:adf-node>',
+      '<p>After</p>',
+    ].join('');
+    const currentStorage = [
+      '<p>Before</p>',
+      '<p></p><p></p><p></p><p></p><p></p>',
+      '<p>After</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(oldStorage, currentStorage, '', {});
+    const diffDisplay = buildDiffDisplayRows(diff.blocks);
+    const blankLineChoices = diffDisplay.selectableRows.filter((row) =>
+      row.blocks.every(({ block }) =>
+        ['blank_line_run', 'blank_line_change'].includes(block.nodeType)
+      )
+    );
+
+    expect(blankLineChoices).toHaveLength(1);
+    expect(blankLineChoices[0].blocks).toHaveLength(1);
+    expect(blankLineChoices[0].blocks[0].block).toMatchObject({
+      nodeType: 'blank_line_change',
+      blankLineCount: 3,
+      oldBlankLineCount: 2,
+      newBlankLineCount: 5,
+      blankLineDelta: 3,
+    });
+
+    const currentResult = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map(),
+      diffDisplay.blockChoiceKeys
+    );
+    const oldResult = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map([[blankLineChoices[0].key, 'old']]),
+      diffDisplay.blockChoiceKeys
+    );
+    const oldPreview = buildRecoveryPreviewHtml(
+      diff.blocks,
+      new Map([[blankLineChoices[0].key, 'old']]),
+      diffDisplay.blockChoiceKeys
+    );
+
+    expect((currentResult.html.match(/<p><\/p>/g) || [])).toHaveLength(5);
+    expect((oldResult.html.match(/<ac:adf-node type="paragraph">/g) || [])).toHaveLength(2);
+    expect(oldResult.html).toContain('historical-blank-1');
+    expect(oldResult.html).toContain('historical-blank-2');
+    expect(
+      (
+        oldPreview.match(
+          /<p(?:\s[^>]*)?>\s*(?:<br\b[^>]*\/?>)?\s*<\/p>/gi
+        ) || []
+      )
+    ).toHaveLength(2);
+
+    // The comparison layer provides a second safety net for historical blocks
+    // that reached the LCS as separate paragraph wrappers. They must share one
+    // recovery key even when their node type was not normalised in advance.
+    const legacyPreparedBlocks = [
+      {
+        type: 'removed',
+        nodeType: 'paragraph',
+        tag: 'p',
+        text: '\u200c',
+        html: '<p><span>\u200c</span></p>',
+        rawHtml: '<p><span>\u200c</span></p>',
+        renderedHtml: '<p><span>\u200c</span></p>',
+      },
+      {
+        type: 'removed',
+        nodeType: 'paragraph',
+        tag: 'br',
+        text: '',
+        html: '<br />',
+        rawHtml: '<br />',
+        renderedHtml: '<br>',
+      },
+      {
+        type: 'added',
+        nodeType: 'blank_line_run',
+        tag: 'p',
+        text: '',
+        blankLineCount: 1,
+        html: '<p></p>',
+        rawHtml: '<p></p>',
+        renderedHtml: '<p></p>',
+      },
+    ];
+    const legacyDisplay = buildDiffDisplayRows(legacyPreparedBlocks);
+
+    expect(legacyDisplay.selectableRows).toHaveLength(1);
+    expect(legacyDisplay.selectableRows[0].blocks).toHaveLength(3);
+    expect(new Set(legacyDisplay.blockChoiceKeys.values())).toHaveProperty('size', 1);
+  });
+
   test('preserves self-closing Confluence emoji storage', () => {
     const storage = '<p>Hello <ac:emoticon ac:name="laugh" /></p>';
     const diff = buildRichTextDiffHtml(storage, storage, '', {});

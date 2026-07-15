@@ -152,6 +152,12 @@ sanitizes the result with explicit allowlists for tags, attributes, URLs, styles
 and app-owned `data-dh-*` metadata. Display HTML is never used as the source of
 truth for recovery; original Storage fragments are retained separately.
 
+Before DOM parsing and ADF regular-expression rendering, XML-style self-closing
+ADF elements are expanded safely. Self-closing `paragraph` and `hardBreak`
+nodes render as semantic blank lines; other empty ADF nodes receive an explicit
+closing tag. This prevents an empty historical node from matching a later ADF
+closing tag and swallowing the remainder of the page into one whole-page diff.
+
 Current renderer coverage includes:
 
 - paragraphs, H1-H6 headings, links, rules, hard breaks and blockquotes;
@@ -219,6 +225,19 @@ shows a limited-comparison warning.
   containing block different.
 - Compatible adjacent old/new blocks with the same semantic type and HTML tag
   share one Keep/Restore decision.
+- Consecutive empty editor paragraphs created by repeated Enter presses are
+  collapsed into one count-aware `blank_line_run`. The comparison renders one
+  net change: `2 -> 5` is only `3 blank lines added`, and `5 -> 2` is only
+  `3 blank lines removed`; it is not reported as a remove-plus-add replacement.
+  The internal `blank_line_change` retains both complete runs, so recovery keeps
+  the exact selected paragraph count and original Storage. This recognises both
+  direct Storage `<p>` elements and historical prepared forms such as top-level
+  `<br>`, ADF `hardBreak`/content wrappers, empty formatting spans, and invisible
+  editor caret characters. A display-level fallback also gives adjacent blank
+  blocks one recovery key if historical wrappers survive source normalisation.
+  Macros, media, links, mentions, and other empty-looking rich nodes remain
+  untouched. Inline `<br>` breaks inside non-empty text (commonly produced by
+  Shift+Enter) remain part of their containing paragraph.
 - Recovery remains block-level. Table cells are not independently staged.
   Compatible layout sections additionally expose one atomic column-width
   choice, separate from their child-content choices.
@@ -348,7 +367,7 @@ Last verified on 2026-07-15:
 
 ```text
 Test Suites: 2 passed, 2 total
-Tests:       111 passed, 111 total
+Tests:       114 passed, 114 total
 Production build: compiled successfully
 ```
 

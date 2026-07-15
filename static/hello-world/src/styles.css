@@ -1927,6 +1927,13 @@ body {
   margin-bottom: 0;
 }
 
+.dh-blank-line-run-summary {
+  color: var(--dh-subtle);
+  font-size: 13px;
+  font-style: italic;
+  font-weight: 600;
+}
+
 .dh-choice-diff-module__actions {
   display: flex;
   flex-wrap: wrap;
