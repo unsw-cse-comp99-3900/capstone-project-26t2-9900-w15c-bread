@@ -251,6 +251,41 @@ describe('type-specific diff safety', () => {
     expect(result.summary.removedBlocks).toBe(0);
   });
 
+  test('self-closing ADF blank nodes do not swallow the remaining page', () => {
+    const historicalStorage = [
+      '<p>Before blank lines</p>',
+      '<ac:adf-node type="paragraph" />',
+      '<ac:adf-node type="hardBreak" />',
+      '<p><ac:adf-node type="hardBreak" /></p>',
+      '<p>Content after blank lines</p>',
+      '<p>Page ending</p>',
+    ].join('');
+    const currentStorage = [
+      '<p>Before blank lines</p>',
+      '<p>Content after blank lines</p>',
+      '<p>Page ending</p>',
+    ].join('');
+    const result = buildRichTextDiffHtml(
+      historicalStorage,
+      currentStorage,
+      '',
+      {}
+    );
+
+    expect(result.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'removed',
+      'same',
+      'same',
+    ]);
+    expect(result.blocks[1]).toMatchObject({
+      nodeType: 'blank_line_run',
+      blankLineCount: 3,
+    });
+    expect(result.blocks[1].renderedHtml).not.toContain('Content after blank lines');
+    expect(result.summary.removedBlocks).toBe(1);
+  });
+
   test('transparent containers are split into semantic child blocks', () => {
     const result = buildRichTextDiffHtml(
       '<div><p>Before table</p><table><tbody><tr><td>old</td></tr></tbody></table><p>After table</p></div>',
@@ -406,6 +441,105 @@ describe('type-specific diff safety', () => {
     expect(contentBlocks[1].oldHtml).toContain('old middle');
     expect(contentBlocks[2].newHtml).toContain('new middle');
     expect(contentBlocks[3].text).toContain('stable third');
+  });
+
+  test('column width changes stay local instead of replacing the complete layout', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="50"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="35"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="65"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, currentHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+    const widthSection = result.blocks.find((block) => block.layoutWidthChange);
+    const changedCells = result.blocks.filter((block) => block.layoutColumnWidthChange);
+
+    expect(contentBlocks).toMatchObject([
+      { type: 'same', nodeType: 'paragraph', text: 'Left' },
+      { type: 'same', nodeType: 'paragraph', text: 'Right' },
+    ]);
+    expect(widthSection.layoutWidthChange).toEqual({
+      oldWidths: ['50', '50'],
+      newWidths: ['35', '65'],
+      changedColumnIndexes: [0, 1],
+    });
+    expect(changedCells.map((block) => block.layoutColumnWidthChange)).toEqual([
+      { oldWidth: '50', newWidth: '35' },
+      { oldWidth: '50', newWidth: '65' },
+    ]);
+    expect(result.blocks.some((block) => block.nodeType === 'layout')).toBe(false);
+    expect(result.summary.added).toBe(1);
+    expect(result.summary.removed).toBe(1);
+  });
+
+  test('column widths and inner content produce independent local changes', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="50"><p>Old left text</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>Stable right text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="40"><p>Current left text</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="60"><p>Stable right text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, currentHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+
+    expect(contentBlocks.map((block) => block.type)).toEqual([
+      'removed',
+      'added',
+      'same',
+    ]);
+    expect(contentBlocks.map((block) => block.nodeType)).toEqual([
+      'paragraph',
+      'paragraph',
+      'paragraph',
+    ]);
+    expect(result.blocks.some((block) => block.nodeType === 'layout')).toBe(false);
+    expect(result.summary.added).toBe(2);
+    expect(result.summary.removed).toBe(2);
+  });
+
+  test('one resized layout does not disable child diffing in another layout', () => {
+    const oldHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="50"><p>First left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="50"><p>First right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+      '<ac:layout><ac:layout-section ac:type="single">',
+      '<ac:layout-cell><p>Old second layout text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentHtml = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="30"><p>First left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="70"><p>First right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+      '<ac:layout><ac:layout-section ac:type="single">',
+      '<ac:layout-cell><p>Current second layout text</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, currentHtml, '', {});
+    const contentBlocks = result.blocks.filter((block) => !block.isStructuralBoundary);
+
+    expect(contentBlocks.map((block) => block.type)).toEqual([
+      'same',
+      'same',
+      'removed',
+      'added',
+    ]);
+    expect(result.blocks.some((block) => block.nodeType === 'layout')).toBe(false);
+    expect(result.blocks.filter((block) => block.layoutWidthChange)).toHaveLength(1);
   });
 
   test('layout structure changes fall back to complete layout recovery blocks', () => {
@@ -743,6 +877,156 @@ describe('Sprint 2 diff classification and display requirements', () => {
     expect(repeatedBreaks.blocks.map((block) => block.type)).toEqual(['same']);
     expect(noBreak.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
     expect(serializationWhitespace.blocks.map((block) => block.type)).toEqual(['same']);
+  });
+
+  test('consecutive empty editor paragraphs form one count-aware blank-line run', () => {
+    const withoutBlankLines = '<p>Before</p><p>After</p>';
+    const withSixBlankLines = [
+      '<p>Before</p>',
+      '<p></p>',
+      '<p><br /></p>',
+      '<p>&nbsp;</p>',
+      '<p>\u200b</p>',
+      '<p><br><br></p>',
+      '<p> </p>',
+      '<p>After</p>',
+    ].join('');
+    const removal = buildRichTextDiffHtml(
+      withSixBlankLines,
+      withoutBlankLines,
+      '',
+      {}
+    );
+    const countChange = buildRichTextDiffHtml(
+      '<p>Before</p><p></p><p></p><p>After</p>',
+      '<p>Before</p><p></p><p></p><p></p><p></p><p></p><p>After</p>',
+      '',
+      {}
+    );
+    const reverseCountChange = buildRichTextDiffHtml(
+      '<p>Before</p><p></p><p></p><p></p><p></p><p></p><p>After</p>',
+      '<p>Before</p><p></p><p></p><p>After</p>',
+      '',
+      {}
+    );
+    const historicalAdfBlankLines = [
+      '<p>Before</p>',
+      '<ac:adf-node type="paragraph">',
+      '<ac:adf-attribute key="local-id">old-blank-1</ac:adf-attribute>',
+      '<p></p>',
+      '</ac:adf-node>',
+      '<ac:adf-node type="paragraph">',
+      '<ac:adf-attribute key="local-id">old-blank-2</ac:adf-attribute>',
+      '<ac:adf-content><p><br /></p></ac:adf-content>',
+      '</ac:adf-node>',
+      '<p>After</p>',
+    ].join('');
+    const historicalAdfRemoval = buildRichTextDiffHtml(
+      historicalAdfBlankLines,
+      withoutBlankLines,
+      '',
+      {}
+    );
+    const historicalRenderedVariants = [
+      '<p>Before</p>',
+      '<br />',
+      '<p><span style="color: #172b4d"><br /></span></p>',
+      '<p><ac:adf-node type="hardBreak"></ac:adf-node></p>',
+      '<div><br /></div>',
+      '<p><span>\u200c\u2060</span></p>',
+      '<p>After</p>',
+    ].join('');
+    const historicalVariantRemoval = buildRichTextDiffHtml(
+      historicalRenderedVariants,
+      withoutBlankLines,
+      '',
+      {}
+    );
+    const emptyLookingRichNodes = buildRichTextDiffHtml(
+      [
+        '<p>Before</p>',
+        '<p><img src="https://example.com/transparent.png" alt="" /></p>',
+        '<p><a href="https://example.com"></a></p>',
+        '<hr />',
+        '<p>After</p>',
+      ].join(''),
+      withoutBlankLines,
+      '',
+      {}
+    );
+
+    expect(removal.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'removed',
+      'same',
+    ]);
+    expect(removal.blocks[1]).toMatchObject({
+      nodeType: 'blank_line_run',
+      blankLineCount: 6,
+    });
+    expect(removal.summary.removed).toBe(1);
+
+    expect(countChange.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'added',
+      'same',
+    ]);
+    expect(countChange.blocks[1]).toMatchObject({
+      nodeType: 'blank_line_change',
+      blankLineCount: 3,
+      oldBlankLineCount: 2,
+      newBlankLineCount: 5,
+      blankLineDelta: 3,
+    });
+    expect(countChange.summary.removed).toBe(0);
+    expect(countChange.summary.added).toBe(1);
+
+    expect(reverseCountChange.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'removed',
+      'same',
+    ]);
+    expect(reverseCountChange.blocks[1]).toMatchObject({
+      nodeType: 'blank_line_change',
+      blankLineCount: 3,
+      oldBlankLineCount: 5,
+      newBlankLineCount: 2,
+      blankLineDelta: -3,
+    });
+    expect(reverseCountChange.summary.removed).toBe(1);
+    expect(reverseCountChange.summary.added).toBe(0);
+
+    // Version history can contain both the legacy direct paragraph body and
+    // the newer ac:adf-content body. Neither wrapper should turn each Enter
+    // press into a separate diff choice.
+    expect(historicalAdfRemoval.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'removed',
+      'same',
+    ]);
+    expect(historicalAdfRemoval.blocks[1]).toMatchObject({
+      nodeType: 'blank_line_run',
+      blankLineCount: 2,
+    });
+    expect(historicalAdfRemoval.summary.removed).toBe(1);
+
+    expect(historicalVariantRemoval.blocks.map((block) => block.type)).toEqual([
+      'same',
+      'removed',
+      'same',
+    ]);
+    expect(historicalVariantRemoval.blocks[1]).toMatchObject({
+      nodeType: 'blank_line_run',
+      blankLineCount: 5,
+    });
+
+    // Invisible rich nodes are not blank lines: grouping them would make a
+    // restore choice silently discard an image, link, or horizontal rule.
+    expect(
+      emptyLookingRichNodes.blocks
+        .filter((block) => block.type === 'removed')
+        .some((block) => block.nodeType === 'blank_line_run')
+    ).toBe(false);
   });
 
   test('paragraph split and heading type changes are not grouped', () => {

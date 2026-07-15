@@ -4,6 +4,7 @@ import {
   countWords,
   extractMentionAccountIds,
   formatDateTime,
+  isBlankParagraphBlock,
   prepareConfluenceHtml,
   storageToPlainText,
 } from '../utils';
@@ -49,8 +50,38 @@ function createChangeDisplayRow(items, blockChoiceKeys) {
 }
 
 function buildChangeRunRows(items, blockChoiceKeys) {
-  const removedItems = items.filter(({ block }) => block.type === 'removed');
-  const addedItems = items.filter(({ block }) => block.type === 'added');
+  const blankRunGroups = [];
+  const itemsInBlankRuns = new Set();
+  let itemIndex = 0;
+
+  // Extraction normally converts a source-side run before the LCS diff runs.
+  // Keep this display-level fallback because historical Confluence Storage can
+  // still produce several distinct prepared wrappers for consecutive empty
+  // editor lines. One recovery choice must cover that whole adjacent run.
+  while (itemIndex < items.length) {
+    if (!isDisplayBlankLineBlock(items[itemIndex].block)) {
+      itemIndex++;
+      continue;
+    }
+
+    const blankRun = [];
+    while (
+      itemIndex < items.length &&
+      isDisplayBlankLineBlock(items[itemIndex].block)
+    ) {
+      blankRun.push(items[itemIndex]);
+      itemIndex++;
+    }
+
+    if (blankRun.length > 1) {
+      blankRunGroups.push(blankRun);
+      blankRun.forEach((item) => itemsInBlankRuns.add(item));
+    }
+  }
+
+  const remainingItems = items.filter((item) => !itemsInBlankRuns.has(item));
+  const removedItems = remainingItems.filter(({ block }) => block.type === 'removed');
+  const addedItems = remainingItems.filter(({ block }) => block.type === 'added');
 
   // LCS-based diff output can represent one changed region as all removed
   // blocks followed by all added blocks. Pair compatible old and new blocks
@@ -71,8 +102,9 @@ function buildChangeRunRows(items, blockChoiceKeys) {
 
   const usedItems = new Set(groupedItems.flat());
   const displayGroups = [
+    ...blankRunGroups,
     ...groupedItems,
-    ...items.filter((item) => !usedItems.has(item)).map((item) => [item]),
+    ...remainingItems.filter((item) => !usedItems.has(item)).map((item) => [item]),
   ];
 
   // Sort groups by their first source position. Inside a paired group, the
@@ -86,7 +118,7 @@ function buildChangeRunRows(items, blockChoiceKeys) {
     .map((group) => createChangeDisplayRow(group, blockChoiceKeys));
 }
 
-function nestStructuralDisplayRows(rows) {
+function nestStructuralDisplayRows(rows, blockChoiceKeys) {
   const root = [];
   const stack = [{ children: root, wrapperTag: '' }];
 
@@ -98,14 +130,48 @@ function nestStructuralDisplayRows(rows) {
     }
 
     if (block.layoutBoundaryEdge === 'start') {
+      const parent = stack[stack.length - 1];
+      const widthChoiceKey = block.layoutWidthChange
+        ? `layout-width:${row.index}`
+        : '';
       const wrapper = {
         type: 'layout_structure',
         key: row.key,
         block,
+        index: row.index,
         wrapperTag: block.layoutWrapperTag,
         children: [],
+        layoutCellCount: 0,
+        widthChoiceKey,
+        widthItems: widthChoiceKey ? [{ block, index: row.index }] : [],
+        layoutWidthAffected: false,
       };
-      stack[stack.length - 1].children.push(wrapper);
+
+      if (widthChoiceKey) {
+        // The section start controls preview rendering (grid/flex mode), while
+        // the affected cell starts control the recoverable Storage widths.
+        // Giving them one key makes the complete width vector atomic.
+        blockChoiceKeys.set(row.index, widthChoiceKey);
+      }
+
+      if (
+        block.layoutWrapperTag === 'ac:layout-cell' &&
+        parent.wrapperTag === 'ac:layout-section'
+      ) {
+        const columnIndex = parent.layoutCellCount;
+        parent.layoutCellCount++;
+        wrapper.layoutWidthAffected = Boolean(
+          parent.block.layoutWidthChange &&
+          parent.block.layoutWidthChange.changedColumnIndexes.includes(columnIndex)
+        );
+
+        if (wrapper.layoutWidthAffected && parent.widthChoiceKey) {
+          parent.widthItems.push({ block, index: row.index });
+          blockChoiceKeys.set(row.index, parent.widthChoiceKey);
+        }
+      }
+
+      parent.children.push(wrapper);
       stack.push(wrapper);
       return;
     }
@@ -125,13 +191,24 @@ function nestStructuralDisplayRows(rows) {
 function collectSelectableDisplayRows(rows) {
   return rows.flatMap((row) => {
     if (row.type === 'layout_structure') {
-      return collectSelectableDisplayRows(row.children || []);
+      const widthRow = row.widthChoiceKey
+        ? [{
+            type: 'layout_width_change',
+            key: row.widthChoiceKey,
+            blocks: row.widthItems,
+            layoutWidthChange: row.block.layoutWidthChange,
+          }]
+        : [];
+      return [
+        ...widthRow,
+        ...collectSelectableDisplayRows(row.children || []),
+      ];
     }
     return row.type === 'change' ? [row] : [];
   });
 }
 
-function buildDiffDisplayRows(blocks) {
+export function buildDiffDisplayRows(blocks) {
   const rows = [];
   const blockChoiceKeys = new Map();
 
@@ -163,7 +240,7 @@ function buildDiffDisplayRows(blocks) {
     index = runIndex - 1;
   }
 
-  const nestedRows = nestStructuralDisplayRows(rows);
+  const nestedRows = nestStructuralDisplayRows(rows, blockChoiceKeys);
 
   return {
     rows: nestedRows,
@@ -180,11 +257,39 @@ function fallbackTextHtml(text) {
   return paragraph.outerHTML;
 }
 
+function isBlankLineRunBlock(block) {
+  return Boolean(
+    block &&
+    (block.nodeType === 'blank_line_run' ||
+      block.nodeType === 'blank_line_change') &&
+    Number.isInteger(block.blankLineCount) &&
+    block.blankLineCount > 0
+  );
+}
+
+function isDisplayBlankLineBlock(block) {
+  return isBlankLineRunBlock(block) || isBlankParagraphBlock(block);
+}
+
+function blankLineRunSummaryHtml(block, suffix) {
+  const count = block.blankLineCount;
+  const noun = count === 1 ? 'blank line' : 'blank lines';
+  return `<div class="dh-blank-line-run-summary">${count} ${noun} ${suffix}</div>`;
+}
+
 function getBlockRenderedPreviewHtml(block, selected) {
   if (!block) return '';
 
+  if (block.isBlankLineCountChange) {
+    return selected
+      ? block.newRenderedHtml || block.renderedHtml || ''
+      : block.oldRenderedHtml || block.renderedHtml || '';
+  }
+
   if (block.isStructuralBoundary) {
-    return block.fullRenderedHtml || '';
+    return selected
+      ? block.newFullRenderedHtml || block.fullRenderedHtml || ''
+      : block.oldFullRenderedHtml || block.fullRenderedHtml || '';
   }
 
   if (block.type === 'same') {
@@ -242,6 +347,34 @@ function getDiffBlockHtml(block) {
 function getGitHubStyleDiffParts(blockOrBlocks) {
   if (Array.isArray(blockOrBlocks)) {
     const tableBlocks = blockOrBlocks.map(({ block }) => block);
+    const isBlankLineRun = Boolean(
+      tableBlocks.length && tableBlocks.every(isDisplayBlankLineBlock)
+    );
+
+    if (isBlankLineRun) {
+      // The underlying block retains every original empty paragraph for exact
+      // recovery. The comparison surface intentionally summarizes the run so
+      // ten Enter presses produce one compact decision instead of ten empty
+      // red/green boxes.
+      return ['removed', 'added'].flatMap((type) => {
+        const matchingBlocks = tableBlocks.filter((block) => block.type === type);
+        if (!matchingBlocks.length) return [];
+
+        const blankLineCount = matchingBlocks.reduce(
+          (count, block) => count + (block.blankLineCount || 1),
+          0
+        );
+
+        return [{
+          type,
+          html: blankLineRunSummaryHtml(
+            { blankLineCount },
+            type === 'added' ? 'added' : 'removed'
+          ),
+        }];
+      });
+    }
+
     const sharedTableDiff = tableBlocks[0] && tableBlocks[0].tableDiff;
     const isCellLevelTablePair = Boolean(
       tableBlocks.length === 2 &&
@@ -311,9 +444,12 @@ function getGitHubStyleDiffParts(blockOrBlocks) {
   ];
 }
 
-function getLayoutWrapperProps(block) {
+function getLayoutWrapperProps(block, useCurrent = true) {
+  const renderedBoundary = useCurrent
+    ? block.newFullRenderedHtml || block.fullRenderedHtml
+    : block.oldFullRenderedHtml || block.fullRenderedHtml;
   const doc = new DOMParser().parseFromString(
-    `${block.fullRenderedHtml || '<div>'}</div>`,
+    `${renderedBoundary || '<div>'}</div>`,
     'text/html'
   );
   const element = doc.body.firstElementChild;
@@ -336,9 +472,122 @@ function getLayoutWrapperProps(block) {
   return props;
 }
 
+function formatLayoutWidthVector(widths) {
+  const safeWidths = widths || [];
+  if (!safeWidths.length || safeWidths.every((width) => !width)) {
+    return 'Template default';
+  }
+
+  return safeWidths
+    .map((width) => (width ? `${width}%` : 'auto'))
+    .join(' / ');
+}
+
+function LayoutWidthChangeControl({
+  row,
+  blockChoices,
+  activeBlockKey,
+  setActiveBlockKey,
+  onChoose,
+  onUndo,
+}) {
+  const key = row.widthChoiceKey;
+  const choice = blockChoices.get(key);
+  const isActive = activeBlockKey === key;
+  const change = row.block.layoutWidthChange;
+  const oldWidths = formatLayoutWidthVector(change.oldWidths);
+  const newWidths = formatLayoutWidthVector(change.newWidths);
+
+  if (choice) {
+    return (
+      <div
+        className={`dh-layout-width-change dh-layout-width-change--resolved dh-layout-width-change--${choice}`}
+      >
+        <div>
+          <span className="dh-layout-width-change__title">
+            Column widths {choice === 'current' ? 'kept' : 'restored'}
+          </span>
+          <span className="dh-layout-width-change__selected-value">
+            {choice === 'current' ? newWidths : oldWidths}
+          </span>
+        </div>
+        <button
+          aria-label="Undo this column width choice"
+          className="dh-resolved-change-block__undo"
+          onClick={() => onUndo(key)}
+          title="Undo this column width choice"
+          type="button"
+        >
+          Undo
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      aria-expanded={isActive}
+      className={`dh-layout-width-change${
+        isActive ? ' dh-layout-width-change--active' : ''
+      }`}
+      onClick={() =>
+        setActiveBlockKey((previous) => (previous === key ? null : key))
+      }
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setActiveBlockKey((previous) => (previous === key ? null : key));
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
+      <div className="dh-layout-width-change__heading">
+        <span className="dh-layout-width-change__title">Column widths changed</span>
+        <span className="dh-layout-width-change__hint">
+          {change.changedColumnIndexes.length} affected column
+          {change.changedColumnIndexes.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="dh-layout-width-change__values">
+        <span className="dh-layout-width-change__value dh-layout-width-change__value--old">
+          <span aria-hidden="true">-</span> {oldWidths}
+        </span>
+        <span className="dh-layout-width-change__value dh-layout-width-change__value--current">
+          <span aria-hidden="true">+</span> {newWidths}
+        </span>
+      </div>
+
+      {isActive ? (
+        <div
+          className="dh-layout-width-change__actions"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            className="dh-choice-action dh-choice-action--current"
+            onClick={() => onChoose(key, 'current')}
+            type="button"
+          >
+            Keep current widths
+          </button>
+          <button
+            className="dh-choice-action"
+            onClick={() => onChoose(key, 'old')}
+            type="button"
+          >
+            Restore old widths
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DiffDisplayRows({
   rows,
   blockChoices,
+  blockChoiceKeys,
   activeBlockKey,
   setActiveBlockKey,
   onChoose,
@@ -346,16 +595,53 @@ function DiffDisplayRows({
 }) {
   return (rows || []).map((row) => {
     if (row.type === 'layout_structure') {
+      const wrapperChoiceKey = blockChoiceKeys.get(row.index);
+      const wrapperChoice = wrapperChoiceKey
+        ? blockChoices.get(wrapperChoiceKey)
+        : null;
+      const useCurrent = wrapperChoice !== 'old';
+      const affectedClassName = row.layoutWidthAffected
+        ? `dh-layout-width-affected dh-layout-width-affected--${
+            wrapperChoice || 'unresolved'
+          }`
+        : '';
+      const children = (
+        <DiffDisplayRows
+          rows={row.children}
+          blockChoices={blockChoices}
+          blockChoiceKeys={blockChoiceKeys}
+          activeBlockKey={activeBlockKey}
+          setActiveBlockKey={setActiveBlockKey}
+          onChoose={onChoose}
+          onUndo={onUndo}
+        />
+      );
+
+      if (row.widthChoiceKey) {
+        return (
+          <div className="dh-layout-width-change-region" key={row.key}>
+            <LayoutWidthChangeControl
+              row={row}
+              blockChoices={blockChoices}
+              activeBlockKey={activeBlockKey}
+              setActiveBlockKey={setActiveBlockKey}
+              onChoose={onChoose}
+              onUndo={onUndo}
+            />
+            <div {...getLayoutWrapperProps(row.block, useCurrent)}>
+              {children}
+            </div>
+          </div>
+        );
+      }
+
       return (
-        <div key={row.key} {...getLayoutWrapperProps(row.block)}>
-          <DiffDisplayRows
-            rows={row.children}
-            blockChoices={blockChoices}
-            activeBlockKey={activeBlockKey}
-            setActiveBlockKey={setActiveBlockKey}
-            onChoose={onChoose}
-            onUndo={onUndo}
-          />
+        <div
+          className={affectedClassName || undefined}
+          key={row.key}
+          {...getLayoutWrapperProps(row.block, useCurrent)}
+        >
+          {children}
         </div>
       );
     }
@@ -373,11 +659,46 @@ function DiffDisplayRows({
 
     const choice = blockChoices.get(key);
     if (choice) {
-      const resolvedHtml = row.blocks
-        .map(({ block }) =>
-          getBlockRenderedPreviewHtml(block, choice === 'current')
-        )
-        .join('');
+      const blankLineBlocks = row.blocks.map(({ block }) => block);
+      const isBlankLineRun = Boolean(
+        blankLineBlocks.length && blankLineBlocks.every(isDisplayBlankLineBlock)
+      );
+      const selectedBlankLineBlocks = isBlankLineRun
+        ? blankLineBlocks.filter(
+            (block) =>
+              block.isBlankLineCountChange ||
+              (choice === 'current'
+                ? block.type === 'added'
+                : block.type === 'removed')
+          )
+        : [];
+      const resolvedHtml = isBlankLineRun
+        ? selectedBlankLineBlocks.length
+          ? blankLineRunSummaryHtml(
+              {
+                blankLineCount: selectedBlankLineBlocks.reduce(
+                  (count, block) => {
+                    if (block.isBlankLineCountChange) {
+                      return (
+                        count +
+                        (choice === 'current'
+                          ? block.newBlankLineCount
+                          : block.oldBlankLineCount)
+                      );
+                    }
+                    return count + (block.blankLineCount || 1);
+                  },
+                  0
+                ),
+              },
+              'selected'
+            )
+          : ''
+        : row.blocks
+            .map(({ block }) =>
+              getBlockRenderedPreviewHtml(block, choice === 'current')
+            )
+            .join('');
 
       return (
         <div
@@ -907,6 +1228,7 @@ function ComparisonPanelContent({
                 <DiffDisplayRows
                   rows={diffDisplay.rows}
                   blockChoices={blockChoices}
+                  blockChoiceKeys={diffDisplay.blockChoiceKeys}
                   activeBlockKey={activeBlockKey}
                   setActiveBlockKey={setActiveBlockKey}
                   onChoose={handleChooseBlockVersion}

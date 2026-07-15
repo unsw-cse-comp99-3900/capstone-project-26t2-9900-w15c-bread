@@ -1562,6 +1562,130 @@ body {
   }
 }
 
+/*
+ * Column resizing is a layout-level decision, not a content replacement. The
+ * compact control stays above the affected section so a width-only change can
+ * never wrap the complete page in the ordinary removed/added frame.
+ */
+.dh-layout-width-change-region {
+  min-width: 0;
+}
+
+.dh-layout-width-change {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--dh-red);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--dh-red-soft);
+  color: var(--dh-text);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.dh-layout-width-change:hover,
+.dh-layout-width-change:focus-visible,
+.dh-layout-width-change--active {
+  border-color: var(--dh-blue);
+  box-shadow: 0 0 0 2px rgba(0, 82, 204, 0.18);
+}
+
+.dh-layout-width-change--resolved {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  cursor: default;
+}
+
+.dh-layout-width-change--resolved:hover {
+  box-shadow: none;
+}
+
+.dh-layout-width-change--current {
+  border-color: var(--dh-green);
+  background: #e3fcef;
+}
+
+.dh-layout-width-change--old {
+  border-color: var(--dh-red);
+  background: var(--dh-red-soft);
+}
+
+.dh-layout-width-change__heading,
+.dh-layout-width-change__values,
+.dh-layout-width-change__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.dh-layout-width-change__heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.dh-layout-width-change__title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dh-layout-width-change__hint,
+.dh-layout-width-change__selected-value {
+  color: var(--dh-subtle);
+  font-size: 12px;
+}
+
+.dh-layout-width-change__selected-value {
+  display: block;
+  margin-top: 2px;
+}
+
+.dh-layout-width-change__value {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dh-layout-width-change__value--old {
+  border: 1px solid var(--dh-red);
+  color: var(--dh-red);
+  background: var(--dh-red-soft);
+}
+
+.dh-layout-width-change__value--current {
+  border: 1px solid var(--dh-green);
+  color: #006644;
+  background: #e3fcef;
+}
+
+.dh-layout-width-change__actions {
+  margin: 10px -12px -10px;
+  padding: 10px 12px;
+  border-top: 1px solid #ffbdad;
+  background: #fff;
+}
+
+/* Only cells whose stored width changed receive a local outline. Their inner
+ * content remains unmarked and continues through the normal semantic diff. */
+.dh-layout-width-affected {
+  border-radius: 4px;
+  outline: 2px solid var(--dh-red);
+  outline-offset: 3px;
+}
+
+.dh-layout-width-affected--current {
+  outline-color: var(--dh-green);
+}
+
+.dh-layout-width-affected--old {
+  outline-color: var(--dh-red);
+}
+
 .dh-rich-page [data-dh-node-type='unsupported'] p {
   margin-bottom: 6px;
 }
@@ -1801,6 +1925,13 @@ body {
 .dh-github-diff-part__content > :last-child,
 .dh-resolved-change-block__content > :last-child {
   margin-bottom: 0;
+}
+
+.dh-blank-line-run-summary {
+  color: var(--dh-subtle);
+  font-size: 13px;
+  font-style: italic;
+  font-weight: 600;
 }
 
 .dh-choice-diff-module__actions {

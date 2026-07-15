@@ -152,6 +152,12 @@ sanitizes the result with explicit allowlists for tags, attributes, URLs, styles
 and app-owned `data-dh-*` metadata. Display HTML is never used as the source of
 truth for recovery; original Storage fragments are retained separately.
 
+Before DOM parsing and ADF regular-expression rendering, XML-style self-closing
+ADF elements are expanded safely. Self-closing `paragraph` and `hardBreak`
+nodes render as semantic blank lines; other empty ADF nodes receive an explicit
+closing tag. This prevents an empty historical node from matching a later ADF
+closing tag and swallowing the remainder of the page into one whole-page diff.
+
 Current renderer coverage includes:
 
 - paragraphs, H1-H6 headings, links, rules, hard breaks and blockquotes;
@@ -219,8 +225,22 @@ shows a limited-comparison warning.
   containing block different.
 - Compatible adjacent old/new blocks with the same semantic type and HTML tag
   share one Keep/Restore decision.
-- Recovery remains block-level. Table cells and layout wrappers are not
-  independently staged.
+- Consecutive empty editor paragraphs created by repeated Enter presses are
+  collapsed into one count-aware `blank_line_run`. The comparison renders one
+  net change: `2 -> 5` is only `3 blank lines added`, and `5 -> 2` is only
+  `3 blank lines removed`; it is not reported as a remove-plus-add replacement.
+  The internal `blank_line_change` retains both complete runs, so recovery keeps
+  the exact selected paragraph count and original Storage. This recognises both
+  direct Storage `<p>` elements and historical prepared forms such as top-level
+  `<br>`, ADF `hardBreak`/content wrappers, empty formatting spans, and invisible
+  editor caret characters. A display-level fallback also gives adjacent blank
+  blocks one recovery key if historical wrappers survive source normalisation.
+  Macros, media, links, mentions, and other empty-looking rich nodes remain
+  untouched. Inline `<br>` breaks inside non-empty text (commonly produced by
+  Shift+Enter) remain part of their containing paragraph.
+- Recovery remains block-level. Table cells are not independently staged.
+  Compatible layout sections additionally expose one atomic column-width
+  choice, separate from their child-content choices.
 
 Unresolved changes display red/green outer borders and `-`/`+` gutters without
 red/green fills, so original content backgrounds remain visible. Clicking a
@@ -274,15 +294,26 @@ stack into one column.
 
 For diff and recovery, a layout is split into non-selectable Layout/Section/Cell
 boundaries plus independently selectable child blocks only when the old and
-current layout structure signatures are identical. The signature includes the
-layout type, breakout mode, cell count/order and stored cell widths, but excludes
-cell body content. `layoutPath` prevents equal text in different columns from
-being matched together.
+current layout compatibility signatures are identical. The signature includes
+the layout type, breakout mode and cell count/order, but excludes cell body
+content and stored widths. `layoutPath` prevents equal text in different columns
+from being matched together.
 
-Known limitation: changing a column width, adding/removing/reordering columns,
-or otherwise changing the layout structure signature causes the complete layout
-to fall back to old/current blocks and one whole-layout recovery choice. The
-current code does not safely stage those structural changes per column.
+Stored width vectors are compared separately for compatible sections. A resized
+section renders one compact old/current ratio decision and outlines only the
+affected columns; unchanged child content is not placed inside a removed/added
+page frame. All affected cells in the section share one atomic choice so recovery
+cannot mix incompatible ratios. Restoring old widths changes only the width
+attributes on current cell opening tags, preserving current local IDs and other
+editor metadata. Content choices inside those cells remain independent. An
+unresolved width change and its affected columns use the same red visual language
+as removed content; choosing current widths resolves it in green, while restoring
+historical widths remains red.
+
+Adding/removing/reordering columns, changing the layout type or breakout mode,
+or otherwise changing the compatibility signature still falls back to complete
+old/current layout blocks. Those genuinely structural changes do not yet support
+per-column staging.
 
 ## Recovery and Preview Safety
 
@@ -332,11 +363,11 @@ cd static/hello-world
 npm.cmd run build
 ```
 
-Last verified on 2026-07-14:
+Last verified on 2026-07-15:
 
 ```text
 Test Suites: 2 passed, 2 total
-Tests:       106 passed, 106 total
+Tests:       114 passed, 114 total
 Production build: compiled successfully
 ```
 

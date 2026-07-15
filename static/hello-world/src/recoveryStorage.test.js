@@ -1,6 +1,9 @@
 import { buildRecoveryStorageHtml } from './recoveryStorage';
 import { buildRichTextDiffHtml, prepareConfluenceHtml } from './utils';
-import { buildRecoveryPreviewHtml } from './components/ComparisonPanel';
+import {
+  buildDiffDisplayRows,
+  buildRecoveryPreviewHtml,
+} from './components/ComparisonPanel';
 
 function legacyTask(text) {
   return [
@@ -268,6 +271,206 @@ describe('buildRecoveryStorageHtml', () => {
     expect(result.html).toContain('<ac:layout-section ac:type="two_equal">');
     expect(result.html).toContain('<td>old</td>');
     expect(result.html).not.toContain('<td>current</td>');
+  });
+
+  test('restores one atomic column-width vector without rolling back current local IDs', () => {
+    const oldStorage = [
+      '<ac:layout ac:local-id="old-layout">',
+      '<ac:layout-section ac:type="two_equal" local-id="old-section">',
+      '<ac:layout-cell data-local-id="old-left" data-width="30"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-local-id="old-right" data-width="70"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentStorage = [
+      '<ac:layout ac:local-id="current-layout">',
+      '<ac:layout-section ac:type="two_equal" local-id="current-section">',
+      '<ac:layout-cell data-local-id="current-left" data-width="42"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-local-id="current-right" data-width="58"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(oldStorage, currentStorage, '', {});
+    const diffDisplay = buildDiffDisplayRows(diff.blocks);
+    const widthRows = diffDisplay.selectableRows.filter(
+      (row) => row.type === 'layout_width_change'
+    );
+    const widthChoiceKey = widthRows[0].key;
+    const blockChoiceKeys = diffDisplay.blockChoiceKeys;
+
+    expect(widthRows).toHaveLength(1);
+    expect(widthRows[0].layoutWidthChange.changedColumnIndexes).toEqual([0, 1]);
+    expect(widthRows[0].blocks).toHaveLength(3);
+
+    const currentResult = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map(),
+      blockChoiceKeys
+    );
+    const restoredResult = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map([[widthChoiceKey, 'old']]),
+      blockChoiceKeys
+    );
+    const restoredPreview = buildRecoveryPreviewHtml(
+      diff.blocks,
+      new Map([[widthChoiceKey, 'old']]),
+      blockChoiceKeys
+    );
+
+    expect(currentResult.error).toBe('');
+    expect(currentResult.html).toContain('data-width="42"');
+    expect(currentResult.html).toContain('data-width="58"');
+
+    expect(restoredResult.error).toBe('');
+    expect(restoredResult.html).toContain('data-local-id="current-left" data-width="30"');
+    expect(restoredResult.html).toContain('data-local-id="current-right" data-width="70"');
+    expect(restoredResult.html).toContain('local-id="current-section"');
+    expect(restoredResult.html).not.toContain('data-width="42"');
+    expect(restoredResult.html).not.toContain('data-width="58"');
+    expect(restoredResult.html).not.toContain('old-left');
+    expect(restoredPreview).toContain('data-dh-layout-weight="30"');
+    expect(restoredPreview).toContain('data-dh-layout-weight="70"');
+  });
+
+  test('restoring historical default widths removes current explicit width attributes', () => {
+    const oldStorage = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const currentStorage = [
+      '<ac:layout><ac:layout-section ac:type="two_equal">',
+      '<ac:layout-cell data-width="45"><p>Left</p></ac:layout-cell>',
+      '<ac:layout-cell data-width="55"><p>Right</p></ac:layout-cell>',
+      '</ac:layout-section></ac:layout>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(oldStorage, currentStorage, '', {});
+    const diffDisplay = buildDiffDisplayRows(diff.blocks);
+    const widthRow = diffDisplay.selectableRows.find(
+      (row) => row.type === 'layout_width_change'
+    );
+    const widthChoiceKey = widthRow.key;
+    const blockChoiceKeys = diffDisplay.blockChoiceKeys;
+
+    const restoredResult = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map([[widthChoiceKey, 'old']]),
+      blockChoiceKeys
+    );
+    const restoredPreview = buildRecoveryPreviewHtml(
+      diff.blocks,
+      new Map([[widthChoiceKey, 'old']]),
+      blockChoiceKeys
+    );
+
+    expect(restoredResult.error).toBe('');
+    expect(restoredResult.html).not.toContain('data-width=');
+    expect(restoredPreview).not.toContain('data-dh-layout-custom-widths="true"');
+    expect(restoredPreview).not.toContain('data-dh-layout-weight=');
+  });
+
+  test('keeps a consecutive blank-line run as one choice while preserving its exact count', () => {
+    const oldStorage = [
+      '<p>Before</p>',
+      '<ac:adf-node type="paragraph">',
+      '<ac:adf-attribute key="local-id">historical-blank-1</ac:adf-attribute>',
+      '<p></p>',
+      '</ac:adf-node>',
+      '<ac:adf-node type="paragraph">',
+      '<ac:adf-attribute key="local-id">historical-blank-2</ac:adf-attribute>',
+      '<p><br /></p>',
+      '</ac:adf-node>',
+      '<p>After</p>',
+    ].join('');
+    const currentStorage = [
+      '<p>Before</p>',
+      '<p></p><p></p><p></p><p></p><p></p>',
+      '<p>After</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(oldStorage, currentStorage, '', {});
+    const diffDisplay = buildDiffDisplayRows(diff.blocks);
+    const blankLineChoices = diffDisplay.selectableRows.filter((row) =>
+      row.blocks.every(({ block }) =>
+        ['blank_line_run', 'blank_line_change'].includes(block.nodeType)
+      )
+    );
+
+    expect(blankLineChoices).toHaveLength(1);
+    expect(blankLineChoices[0].blocks).toHaveLength(1);
+    expect(blankLineChoices[0].blocks[0].block).toMatchObject({
+      nodeType: 'blank_line_change',
+      blankLineCount: 3,
+      oldBlankLineCount: 2,
+      newBlankLineCount: 5,
+      blankLineDelta: 3,
+    });
+
+    const currentResult = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map(),
+      diffDisplay.blockChoiceKeys
+    );
+    const oldResult = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map([[blankLineChoices[0].key, 'old']]),
+      diffDisplay.blockChoiceKeys
+    );
+    const oldPreview = buildRecoveryPreviewHtml(
+      diff.blocks,
+      new Map([[blankLineChoices[0].key, 'old']]),
+      diffDisplay.blockChoiceKeys
+    );
+
+    expect((currentResult.html.match(/<p><\/p>/g) || [])).toHaveLength(5);
+    expect((oldResult.html.match(/<ac:adf-node type="paragraph">/g) || [])).toHaveLength(2);
+    expect(oldResult.html).toContain('historical-blank-1');
+    expect(oldResult.html).toContain('historical-blank-2');
+    expect(
+      (
+        oldPreview.match(
+          /<p(?:\s[^>]*)?>\s*(?:<br\b[^>]*\/?>)?\s*<\/p>/gi
+        ) || []
+      )
+    ).toHaveLength(2);
+
+    // The comparison layer provides a second safety net for historical blocks
+    // that reached the LCS as separate paragraph wrappers. They must share one
+    // recovery key even when their node type was not normalised in advance.
+    const legacyPreparedBlocks = [
+      {
+        type: 'removed',
+        nodeType: 'paragraph',
+        tag: 'p',
+        text: '\u200c',
+        html: '<p><span>\u200c</span></p>',
+        rawHtml: '<p><span>\u200c</span></p>',
+        renderedHtml: '<p><span>\u200c</span></p>',
+      },
+      {
+        type: 'removed',
+        nodeType: 'paragraph',
+        tag: 'br',
+        text: '',
+        html: '<br />',
+        rawHtml: '<br />',
+        renderedHtml: '<br>',
+      },
+      {
+        type: 'added',
+        nodeType: 'blank_line_run',
+        tag: 'p',
+        text: '',
+        blankLineCount: 1,
+        html: '<p></p>',
+        rawHtml: '<p></p>',
+        renderedHtml: '<p></p>',
+      },
+    ];
+    const legacyDisplay = buildDiffDisplayRows(legacyPreparedBlocks);
+
+    expect(legacyDisplay.selectableRows).toHaveLength(1);
+    expect(legacyDisplay.selectableRows[0].blocks).toHaveLength(3);
+    expect(new Set(legacyDisplay.blockChoiceKeys.values())).toHaveProperty('size', 1);
   });
 
   test('preserves self-closing Confluence emoji storage', () => {

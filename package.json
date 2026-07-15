@@ -10,6 +10,6 @@
   },
   "dependencies": {
     "@forge/api": "^8.0.1",
-    "@forge/resolver": "^2.0.0-next.0"
+    "@forge/resolver": "^2.0.0"
   }
 }
