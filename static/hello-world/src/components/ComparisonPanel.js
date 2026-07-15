@@ -25,14 +25,153 @@ function canShareChoice(removedBlock, addedBlock) {
   if (!removedBlock || !addedBlock) return false;
   if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
 
+  const removedIsEmpty = !String(removedBlock.text || '').trim();
+  const addedIsEmpty = !String(addedBlock.text || '').trim();
+
   // The diff engine intentionally emits changed content as two simple result
   // blocks: the old block is removed and the new block is added. When those two
   // adjacent blocks occupy the same semantic role, the UI should treat them as
   // one recovery decision while still preserving the underlying result model.
+  // An empty paragraph is editor spacing, not a replacement for visible text.
   return (
     removedBlock.nodeType === addedBlock.nodeType &&
-    removedBlock.tag === addedBlock.tag
+    removedBlock.tag === addedBlock.tag &&
+    removedIsEmpty === addedIsEmpty
   );
+}
+
+function normalisePairingText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getCharacterBigrams(value) {
+  const text = normalisePairingText(value);
+  if (text.length < 2) return text ? [text] : [];
+
+  return Array.from({ length: text.length - 1 }, (_, index) => text.slice(index, index + 2));
+}
+
+function textPairingSimilarity(leftValue, rightValue) {
+  const left = normalisePairingText(leftValue);
+  const right = normalisePairingText(rightValue);
+  if (!left && !right) return 1;
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+
+  const rightCounts = new Map();
+  getCharacterBigrams(right).forEach((bigram) => {
+    rightCounts.set(bigram, (rightCounts.get(bigram) || 0) + 1);
+  });
+
+  let overlap = 0;
+  const leftBigrams = getCharacterBigrams(left);
+  leftBigrams.forEach((bigram) => {
+    const available = rightCounts.get(bigram) || 0;
+    if (!available) return;
+    overlap++;
+    rightCounts.set(bigram, available - 1);
+  });
+
+  const rightBigramCount = getCharacterBigrams(right).length;
+  return (2 * overlap) / (leftBigrams.length + rightBigramCount);
+}
+
+function pairChangeItems(removedItems, addedItems) {
+  const rowCount = removedItems.length + 1;
+  const columnCount = addedItems.length + 1;
+  const scores = Array.from({ length: rowCount }, () => Array(columnCount).fill(0));
+  const decisions = Array.from({ length: rowCount }, () => Array(columnCount).fill(''));
+
+  // Sequence alignment keeps pair order stable while maximizing the number of
+  // compatible pairs. Similarity resolves ambiguous runs containing several
+  // paragraphs, such as two editor spacer paragraphs followed by new text.
+  for (let removedIndex = removedItems.length - 1; removedIndex >= 0; removedIndex--) {
+    for (let addedIndex = addedItems.length - 1; addedIndex >= 0; addedIndex--) {
+      let bestScore = scores[removedIndex + 1][addedIndex];
+      let decision = 'skip-removed';
+
+      if (scores[removedIndex][addedIndex + 1] > bestScore) {
+        bestScore = scores[removedIndex][addedIndex + 1];
+        decision = 'skip-added';
+      }
+
+      const removedItem = removedItems[removedIndex];
+      const addedItem = addedItems[addedIndex];
+      if (canShareChoice(removedItem.block, addedItem.block)) {
+        const pairScore =
+          100 +
+          textPairingSimilarity(removedItem.block.text, addedItem.block.text) +
+          scores[removedIndex + 1][addedIndex + 1];
+
+        if (pairScore >= bestScore) {
+          bestScore = pairScore;
+          decision = 'pair';
+        }
+      }
+
+      scores[removedIndex][addedIndex] = bestScore;
+      decisions[removedIndex][addedIndex] = decision;
+    }
+  }
+
+  const pairs = [];
+  let removedIndex = 0;
+  let addedIndex = 0;
+  while (removedIndex < removedItems.length && addedIndex < addedItems.length) {
+    const decision = decisions[removedIndex][addedIndex];
+    if (decision === 'pair') {
+      pairs.push([removedItems[removedIndex], addedItems[addedIndex]]);
+      removedIndex++;
+      addedIndex++;
+    } else if (decision === 'skip-added') {
+      addedIndex++;
+    } else {
+      removedIndex++;
+    }
+  }
+
+  return pairs;
+}
+
+function isEmptyParagraphItem(item) {
+  return Boolean(
+    item &&
+    item.block &&
+    item.block.nodeType === 'paragraph' &&
+    !String(item.block.text || '').trim()
+  );
+}
+
+function attachUnpairedSpacerItems(groups, items, pairedItemPosition) {
+  items.forEach((item, itemPosition) => {
+    if (!isEmptyParagraphItem(item) || pairedItemPosition.has(item)) return;
+
+    let closestGroup = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    groups.forEach((group) => {
+      const anchor = group.find((candidate) => pairedItemPosition.has(candidate));
+      if (!anchor) return;
+      const anchorPosition = pairedItemPosition.get(anchor);
+      const start = Math.min(itemPosition, anchorPosition) + 1;
+      const end = Math.max(itemPosition, anchorPosition);
+      const separatedByVisibleContent = items
+        .slice(start, end)
+        .some((candidate) => !isEmptyParagraphItem(candidate));
+      if (separatedByVisibleContent) return;
+
+      const distance = Math.abs(itemPosition - anchorPosition);
+      if (distance < closestDistance) {
+        closestGroup = group;
+        closestDistance = distance;
+      }
+    });
+
+    if (closestGroup) closestGroup.push(item);
+  });
 }
 
 function createChangeDisplayRow(items, blockChoiceKeys) {
@@ -55,19 +194,20 @@ function buildChangeRunRows(items, blockChoiceKeys) {
   // LCS-based diff output can represent one changed region as all removed
   // blocks followed by all added blocks. Pair compatible old and new blocks
   // within that region so each logical replacement has one recovery choice.
-  const unusedAddedItems = new Set(addedItems);
-  const groupedItems = removedItems.map((removedItem) => {
-    const addedItem = addedItems.find(
-      (candidate) =>
-        unusedAddedItems.has(candidate) &&
-        canShareChoice(removedItem.block, candidate.block)
-    );
+  const pairs = pairChangeItems(removedItems, addedItems);
+  const groupedItems = pairs.map(([removedItem, addedItem]) => [removedItem, addedItem]);
+  const pairedRemovedPositions = new Map(
+    pairs.map(([removedItem]) => [removedItem, removedItems.indexOf(removedItem)])
+  );
+  const pairedAddedPositions = new Map(
+    pairs.map(([, addedItem]) => [addedItem, addedItems.indexOf(addedItem)])
+  );
 
-    if (!addedItem) return [removedItem];
-
-    unusedAddedItems.delete(addedItem);
-    return [removedItem, addedItem];
-  });
+  // Confluence can store cursor spacing as empty paragraph blocks adjacent to
+  // a visible replacement. Attach only those unpaired spacers to the nearest
+  // replacement choice so restoring the old text does not leave blank lines.
+  attachUnpairedSpacerItems(groupedItems, removedItems, pairedRemovedPositions);
+  attachUnpairedSpacerItems(groupedItems, addedItems, pairedAddedPositions);
 
   const usedItems = new Set(groupedItems.flat());
   const displayGroups = [
@@ -78,6 +218,7 @@ function buildChangeRunRows(items, blockChoiceKeys) {
   // Sort groups by their first source position. Inside a paired group, the
   // removed block deliberately remains before the added block.
   return displayGroups
+    .map((group) => group.sort((left, right) => left.index - right.index))
     .sort((left, right) => {
       const leftIndex = Math.min(...left.map(({ index }) => index));
       const rightIndex = Math.min(...right.map(({ index }) => index));
@@ -698,6 +839,7 @@ function ComparisonPanel({
   currentVersion,
   selectedVersion,
   onPageUpdated,
+  onDiffSummaryChange,
 }) {
   if (!selectedVersion) {
     return (
@@ -720,6 +862,7 @@ function ComparisonPanel({
       currentVersion={currentVersion}
       selectedVersion={selectedVersion}
       onPageUpdated={onPageUpdated}
+      onDiffSummaryChange={onDiffSummaryChange}
     />
   );
 }
@@ -732,6 +875,7 @@ function ComparisonPanelContent({
   currentVersion,
   selectedVersion,
   onPageUpdated,
+  onDiffSummaryChange,
 }) {
   const [blockChoices, setBlockChoices] = useState(new Map());
   const [activeBlockKey, setActiveBlockKey] = useState(null);
@@ -969,6 +1113,22 @@ function ComparisonPanelContent({
   };
   const totalChanges = diffSummary.added + diffSummary.removed;
   const showChangeSelection = hasComparisonBase && !isCurrent && selectableBlocks.length > 0;
+
+  useEffect(() => {
+    if (typeof onDiffSummaryChange !== 'function') return;
+
+    onDiffSummaryChange(selectedVersion.number, {
+      added: Number(diffSummary.added) || 0,
+      removed: Number(diffSummary.removed) || 0,
+      modifiedBlocks: Number(diffSummary.modifiedBlocks) || 0,
+    });
+  }, [
+    diffSummary.added,
+    diffSummary.modifiedBlocks,
+    diffSummary.removed,
+    onDiffSummaryChange,
+    selectedVersion.number,
+  ]);
 
   const handlePreviewDraft = () => {
     const draft = {

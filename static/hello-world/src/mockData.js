@@ -14,6 +14,11 @@ export const mockData = {
   pageTitle: 'Getting Started Guide (mock data)',
   baseUrl: '',
   attachmentsByFilename: {},
+  commentsByVersion: {},
+  currentUser: {
+    accountId: 'mock-current-user',
+    displayName: 'Sample User A',
+  },
   versions: [
     {
       number: 6,

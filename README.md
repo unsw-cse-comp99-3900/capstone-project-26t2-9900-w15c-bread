@@ -19,6 +19,11 @@ the template-generated `static/hello-world` directory.
 6. Open **Preview Draft** to inspect the reconstructed result.
 7. Use **Write to Current Page** to create a new current-page version.
 
+Each timeline card also provides **Add comment**. Version comments can include the
+current diff summary and are shared with other app users through a Confluence
+page content property. Each page version has at most one comment; editing it
+replaces the previously stored comment for that version.
+
 Previewing is read-only. The page is updated only after the final write button is
 pressed. Despite the modal name, the current frontend does not create an
 unpublished Confluence draft.
@@ -41,6 +46,9 @@ static/hello-world/src/App.js
 static/hello-world/src/components/Timeline.js
 static/hello-world/src/components/VersionCard.js
   Version timeline.
+
+static/hello-world/src/components/VersionCommentModal.js
+  Version selector, diff context, comment editor and comment preview.
 
 static/hello-world/src/components/ComparisonPanel.js
   Comparison UI, change grouping, Keep/Restore/Undo state, preview modal and
@@ -109,6 +117,21 @@ Writes reconstructed Storage directly to the current page. Before the PUT it:
 
 If another edit has created a newer version since Preview Draft was prepared,
 the resolver rejects the write instead of overwriting that edit.
+
+### `addVersionComment`
+
+Stores a comment against a page version in the
+`dynamic-history-version-comments` Confluence page content property. Comments
+include the author, creation time and optional diff summary. Property updates
+use Confluence's optimistic version number and retry once after a concurrent
+update. Saving another comment for the same version replaces the previous one,
+and existing duplicate data is reduced to the most recently stored comment.
+Comment text is limited to 2,000 characters and the property payload is kept
+below 30 KB.
+
+The resolver uses `asUser()`, so the user must be able to view the page to read
+comments and update the page to add one. The existing `read:page:confluence` and
+`write:page:confluence` scopes cover these content-property operations.
 
 ### `createDraft` (legacy)
 
@@ -218,7 +241,10 @@ shows a limited-comparison warning.
 - Inline date, status, mention, emoji and formatting changes make their
   containing block different.
 - Compatible adjacent old/new blocks with the same semantic type and HTML tag
-  share one Keep/Restore decision.
+  share one Keep/Restore decision. Ambiguous multi-block runs use text
+  similarity while preserving block order; adjacent Confluence spacer
+  paragraphs follow the corresponding replacement choice so restoring old
+  text does not leave extra blank lines.
 - Recovery remains block-level. Table cells are not independently staged.
   Compatible layout sections additionally expose one atomic column-width
   choice, separate from their child-content choices.
@@ -307,6 +333,8 @@ The recovery layer:
 - preserves layout boundary tags for compatible layouts;
 - rebuilds Task and Decision groups without duplicate wrappers/fallback items;
 - preserves self-closing Confluence references and valid code CDATA;
+- preserves self-closing namespaced ADF configuration and macro parameter
+  elements so browser parsing cannot move later content inside them;
 - normalizes preview-readable malformed code Storage before write-back; and
 - stops with an error if required raw Storage is unavailable.
 

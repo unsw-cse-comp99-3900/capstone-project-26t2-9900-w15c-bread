@@ -136,6 +136,8 @@ const STORAGE_PARSER_EMPTY_TAG_RE = new RegExp(
     .join('|')})\\b([^>]*)\\/>`,
   'gi'
 );
+const STORAGE_SELF_CLOSING_MARKER_ATTR = 'data-dh-parser-self-closing';
+const STORAGE_NAMESPACED_SELF_CLOSING_RE = /<((?:ac|ri):[a-z0-9-]+)\b([^>]*)\/>/gi;
 
 const STORAGE_CDATA_TOKEN_RE =
   /DHCDATAPROTECTEDSTART([0-9a-f]*)DHCDATAPROTECTEDEND/gi;
@@ -194,7 +196,14 @@ function restoreProtectedStorageCdata(html) {
  * by this helper when recovery content is sent back to Confluence.
  */
 export function normaliseStorageHtmlForParsing(html) {
-  return protectStorageCdataForParsing(html).replace(
+  const protectedStorage = protectStorageCdataForParsing(html);
+  const expandedNamespacedStorage = protectedStorage.replace(
+    STORAGE_NAMESPACED_SELF_CLOSING_RE,
+    (_match, tag, attributes) =>
+      `<${tag}${attributes} ${STORAGE_SELF_CLOSING_MARKER_ATTR}="true"></${tag}>`
+  );
+
+  return expandedNamespacedStorage.replace(
     STORAGE_PARSER_EMPTY_TAG_RE,
     (_match, tag, attributes) => `<${tag}${attributes}></${tag}>`
   );
@@ -202,6 +211,7 @@ export function normaliseStorageHtmlForParsing(html) {
 
 function getNodeAttributeHtml(node) {
   return Array.from(node.attributes || [])
+    .filter((attribute) => attribute.name !== STORAGE_SELF_CLOSING_MARKER_ATTR)
     .map((attribute) => ` ${attribute.name}="${escapeHtml(attribute.value)}"`)
     .join('');
 }
@@ -220,8 +230,14 @@ export function getStorageNodeOuterHtml(node) {
   const tag = String(node.tagName || '').toLowerCase();
   const attributes = getNodeAttributeHtml(node);
   const children = Array.from(node.childNodes || []).map(getStorageNodeOuterHtml).join('');
+  const wasNamespacedSelfClosing =
+    node.getAttribute(STORAGE_SELF_CLOSING_MARKER_ATTR) === 'true';
 
-  if (CONFLUENCE_EMPTY_STORAGE_TAGS.has(tag) || HTML_EMPTY_STORAGE_TAGS.has(tag)) {
+  if (
+    wasNamespacedSelfClosing ||
+    CONFLUENCE_EMPTY_STORAGE_TAGS.has(tag) ||
+    HTML_EMPTY_STORAGE_TAGS.has(tag)
+  ) {
     return `<${tag}${attributes} />${children}`;
   }
 

@@ -1,7 +1,122 @@
 import Resolver from '@forge/resolver';
 import api, { route } from '@forge/api';
+import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 
 const resolver = new Resolver();
+const COMMENT_PROPERTY_KEY = 'dynamic-history-version-comments';
+const MAX_COMMENT_LENGTH = 2000;
+const MAX_STORED_COMMENTS = 500;
+const MAX_COMMENT_PROPERTY_BYTES = 30_000;
+
+function normaliseCommentStore(value) {
+  const comments = value && Array.isArray(value.comments) ? value.comments : [];
+  const commentsByVersion = new Map();
+
+  comments
+    .filter(
+      (comment) =>
+        comment &&
+        typeof comment.id === 'string' &&
+        Number.isInteger(Number(comment.versionNumber)) &&
+        typeof comment.body === 'string'
+    )
+    .forEach((comment) => {
+      const versionKey = String(comment.versionNumber);
+
+      // Existing installations may already contain several comments for one
+      // version. Keep only the last stored comment so reading the property also
+      // performs a safe in-memory migration to the new one-comment contract.
+      commentsByVersion.delete(versionKey);
+      commentsByVersion.set(versionKey, comment);
+    });
+
+  return {
+    schemaVersion: 1,
+    comments: Array.from(commentsByVersion.values()).slice(-MAX_STORED_COMMENTS),
+  };
+}
+
+function groupCommentsByVersion(comments) {
+  return comments.reduce((grouped, comment) => {
+    const key = String(comment.versionNumber);
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(comment);
+    return grouped;
+  }, {});
+}
+
+async function readCommentProperty(pageId) {
+  const response = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}/properties?key=${COMMENT_PROPERTY_KEY}&limit=1`,
+    { headers: { Accept: 'application/json' } }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Unable to read version comments (${response.status}): ${await response.text()}`
+    );
+  }
+
+  const data = await response.json();
+  const propertySummary = (data.results || [])[0] || null;
+
+  if (!propertySummary) {
+    return {
+      property: null,
+      store: normaliseCommentStore(null),
+    };
+  }
+
+  // The collection response is intentionally compact and may omit `value`.
+  // Fetch the selected property by id so comment reads never depend on an
+  // expansion detail that differs between Confluence deployments.
+  const detailResponse = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}/properties/${propertySummary.id}`,
+    { headers: { Accept: 'application/json' } }
+  );
+
+  if (!detailResponse.ok) {
+    throw new Error(
+      `Unable to read version comment data (${detailResponse.status}): ${await detailResponse.text()}`
+    );
+  }
+
+  const property = await detailResponse.json();
+
+  return {
+    property,
+    store: normaliseCommentStore(property ? property.value : null),
+  };
+}
+
+async function writeCommentProperty(pageId, property, store) {
+  const value = normaliseCommentStore(store);
+  const isUpdate = Boolean(property && property.id);
+  const path = isUpdate
+    ? route`/wiki/api/v2/pages/${pageId}/properties/${property.id}`
+    : route`/wiki/api/v2/pages/${pageId}/properties`;
+  const payload = {
+    key: COMMENT_PROPERTY_KEY,
+    value,
+  };
+
+  if (isUpdate) {
+    payload.version = {
+      number: Number(property.version && property.version.number ? property.version.number : 1) + 1,
+      message: 'Add Dynamic History version comment',
+    };
+  }
+
+  return api.asUser().requestConfluence(path, {
+    method: isUpdate ? 'PUT' : 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
 
 /**
  * Fetch all versions of a Confluence page (newest first), following pagination.
@@ -197,8 +312,16 @@ resolver.define('getPageVersions', async (req) => {
     // remains the fallback so the app can still render something useful.
   }
 
-  const { versions: rawVersions, baseUrl: versionsBaseUrl } = await fetchAllVersions(pageId);
-  const { attachments, baseUrl: attachmentsBaseUrl } = await fetchPageAttachments(pageId);
+  const [versionResult, attachmentResult, commentResult] = await Promise.all([
+    fetchAllVersions(pageId),
+    fetchPageAttachments(pageId),
+    readCommentProperty(pageId).catch((error) => {
+      console.warn('[getPageVersions] version comments unavailable:', error.message);
+      return { property: null, store: normaliseCommentStore(null) };
+    }),
+  ]);
+  const { versions: rawVersions, baseUrl: versionsBaseUrl } = versionResult;
+  const { attachments, baseUrl: attachmentsBaseUrl } = attachmentResult;
   const baseUrl = versionsBaseUrl || attachmentsBaseUrl;
   const sortedVersions = [...rawVersions].sort(
     (left, right) => Number(right.number || 0) - Number(left.number || 0)
@@ -206,7 +329,13 @@ resolver.define('getPageVersions', async (req) => {
 
   console.log('[getPageVersions] fetched', rawVersions.length, 'versions');
 
-  const authorIds = [...new Set(sortedVersions.map((v) => v.authorId).filter(Boolean))];
+  const currentAccountId = req.context && req.context.accountId ? req.context.accountId : '';
+  const authorIds = [
+    ...new Set([
+      ...sortedVersions.map((v) => v.authorId).filter(Boolean),
+      ...(currentAccountId ? [currentAccountId] : []),
+    ]),
+  ];
   const authorMap = await resolveAuthorNames(authorIds);
 
   console.log('[getPageVersions] resolved', Object.keys(authorMap).length, 'author names; returning');
@@ -216,6 +345,11 @@ resolver.define('getPageVersions', async (req) => {
     pageTitle,
     baseUrl,
     attachmentsByFilename: attachments,
+    commentsByVersion: groupCommentsByVersion(commentResult.store.comments),
+    currentUser: {
+      accountId: currentAccountId,
+      displayName: authorMap[currentAccountId] || 'You',
+    },
     versions: sortedVersions.map((v, index) => {
       const versionBody = extractStorageBody(v);
 
@@ -231,6 +365,97 @@ resolver.define('getPageVersions', async (req) => {
       };
     }),
   };
+});
+
+resolver.define('addVersionComment', async (req) => {
+  const payload = (req && req.payload) || {};
+  const pageId = payload.pageId;
+  const versionNumber = Number(payload.versionNumber);
+  const body = typeof payload.body === 'string' ? payload.body.trim() : '';
+  const accountId = req.context && req.context.accountId ? req.context.accountId : '';
+
+  if (!pageId) {
+    throw new Error('A page id is required to add a version comment.');
+  }
+  if (!Number.isInteger(versionNumber) || versionNumber < 1) {
+    throw new Error('A valid page version is required.');
+  }
+  if (!body) {
+    throw new Error('Comment cannot be empty.');
+  }
+  if (body.length > MAX_COMMENT_LENGTH) {
+    throw new Error(`Comment cannot exceed ${MAX_COMMENT_LENGTH} characters.`);
+  }
+
+  // Do not trust the client-provided version number. This also ensures the
+  // invoking user can still view the page before we persist their comment.
+  const versionResponse = await api.asUser().requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}/versions/${versionNumber}`,
+    { headers: { Accept: 'application/json' } }
+  );
+  if (!versionResponse.ok) {
+    throw new Error(
+      versionResponse.status === 404
+        ? 'The selected page version is no longer available.'
+        : `Unable to verify the selected page version (${versionResponse.status}).`
+    );
+  }
+
+  const authorNames = accountId ? await resolveAuthorNames([accountId]) : {};
+  const rawSummary = payload.diffSummary || {};
+  const comment = {
+    id: randomUUID(),
+    versionNumber,
+    body,
+    includeDiffSummary: payload.includeDiffSummary !== false,
+    diffSummary: {
+      added: Math.max(0, Number(rawSummary.added) || 0),
+      removed: Math.max(0, Number(rawSummary.removed) || 0),
+      modified: Math.max(0, Number(rawSummary.modified) || 0),
+      currentVersionNumber: Math.max(0, Number(rawSummary.currentVersionNumber) || 0),
+    },
+    authorId: accountId,
+    authorName: authorNames[accountId] || 'Unknown user',
+    createdAt: new Date().toISOString(),
+  };
+
+  // Content properties use optimistic versions. Retry once if another user adds
+  // a comment between our read and write, re-reading their comment before retrying.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { property, store } = await readCommentProperty(pageId);
+    const nextStore = {
+      ...store,
+      comments: [
+        ...store.comments.filter(
+          (storedComment) => Number(storedComment.versionNumber) !== versionNumber
+        ),
+        comment,
+      ].slice(-MAX_STORED_COMMENTS),
+    };
+
+    if (Buffer.byteLength(JSON.stringify(nextStore), 'utf8') > MAX_COMMENT_PROPERTY_BYTES) {
+      throw new Error(
+        'This page has reached the version comment storage limit. Archive older comments before adding more.'
+      );
+    }
+
+    const response = await writeCommentProperty(pageId, property, nextStore);
+
+    if (response.ok) {
+      return {
+        comment,
+        commentsByVersion: groupCommentsByVersion(nextStore.comments),
+      };
+    }
+
+    if (response.status !== 409 || attempt === 1) {
+      throw new Error(
+        `Unable to save version comment (${response.status}): ${await response.text()}`
+      );
+    }
+  }
+
+  throw new Error('Unable to save version comment.');
 });
 
 resolver.define('createDraft', async (req) => {
