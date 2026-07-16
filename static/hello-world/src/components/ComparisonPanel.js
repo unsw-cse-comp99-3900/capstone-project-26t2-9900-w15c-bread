@@ -1036,6 +1036,7 @@ function ComparisonPanel({
   currentVersion,
   selectedVersion,
   onPageUpdated,
+  onDiffSummaryChange,
 }) {
   if (!selectedVersion) {
     return (
@@ -1058,6 +1059,7 @@ function ComparisonPanel({
       currentVersion={currentVersion}
       selectedVersion={selectedVersion}
       onPageUpdated={onPageUpdated}
+      onDiffSummaryChange={onDiffSummaryChange}
     />
   );
 }
@@ -1070,6 +1072,7 @@ function ComparisonPanelContent({
   currentVersion,
   selectedVersion,
   onPageUpdated,
+  onDiffSummaryChange,
 }) {
   const [blockChoices, setBlockChoices] = useState(new Map());
   const [activeBlockKey, setActiveBlockKey] = useState(null);
@@ -1343,6 +1346,22 @@ function ComparisonPanelContent({
   };
   const totalChanges = diffSummary.added + diffSummary.removed;
   const showChangeSelection = hasComparisonBase && !isCurrent && selectableBlocks.length > 0;
+
+  useEffect(() => {
+    if (typeof onDiffSummaryChange !== 'function') return;
+
+    onDiffSummaryChange(selectedVersion.number, {
+      added: Number(diffSummary.added) || 0,
+      removed: Number(diffSummary.removed) || 0,
+      modifiedBlocks: Number(diffSummary.modifiedBlocks) || 0,
+    });
+  }, [
+    diffSummary.added,
+    diffSummary.modifiedBlocks,
+    diffSummary.removed,
+    onDiffSummaryChange,
+    selectedVersion.number,
+  ]);
 
   const handlePreviewDraft = () => {
     const draft = {

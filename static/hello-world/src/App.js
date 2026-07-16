@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Timeline from './components/Timeline';
 import ComparisonPanel from './components/ComparisonPanel';
+import VersionCommentModal from './components/VersionCommentModal';
 import { mockData } from './mockData';
 import './styles.css';
 
@@ -31,6 +32,8 @@ function App() {
   const [usingMock, setUsingMock] = useState(false);
   const [selectedNumber, setSelectedNumber] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [commentVersionNumber, setCommentVersionNumber] = useState(null);
+  const [diffSummariesByVersion, setDiffSummariesByVersion] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +109,61 @@ function App() {
   // The newest version (index 0) is always the page's current version.
   const currentVersion = versions[0] || null;
   const selectedVersion = versions.find((v) => v.number === selectedNumber) || null;
+  const commentVersion = versions.find((v) => v.number === commentVersionNumber) || null;
+  const commentsByVersion = data && data.commentsByVersion ? data.commentsByVersion : {};
+
+  const handleOpenComment = (versionNumber) => {
+    setSelectedNumber(versionNumber);
+    setCommentVersionNumber(versionNumber);
+  };
+
+  const handleCommentVersionChange = (versionNumber) => {
+    setSelectedNumber(versionNumber);
+    setCommentVersionNumber(versionNumber);
+  };
+
+  const handleDiffSummaryChange = useCallback((versionNumber, summary) => {
+    setDiffSummariesByVersion((previous) => ({
+      ...previous,
+      [String(versionNumber)]: summary,
+    }));
+  }, []);
+
+  const handleSaveComment = async (commentInput) => {
+    let result;
+
+    if (usingMock) {
+      const mockComment = {
+        id: `mock-${Date.now()}`,
+        ...commentInput,
+        authorId: 'mock-current-user',
+        authorName: data.currentUser.displayName,
+        createdAt: new Date().toISOString(),
+      };
+      result = {
+        comment: mockComment,
+        commentsByVersion: {
+          ...commentsByVersion,
+          [String(commentInput.versionNumber)]: [mockComment],
+        },
+      };
+    } else {
+      const { invoke } = await loadForgeBridge();
+      result = await invoke('addVersionComment', {
+        pageId: data.pageId,
+        ...commentInput,
+      });
+    }
+
+    if (!result || !result.comment || !result.commentsByVersion) {
+      throw new Error('The comment service returned an invalid response.');
+    }
+
+    setData((previous) => ({
+      ...previous,
+      commentsByVersion: result.commentsByVersion,
+    }));
+  };
 
   return (
     <div className="dh-app">
@@ -129,9 +187,11 @@ function App() {
             <div className="dh-state">Loading version history…</div>
           ) : (
             <Timeline
+              commentsByVersion={commentsByVersion}
               versions={versions}
               selected={selectedNumber}
               onSelect={setSelectedNumber}
+              onAddComment={handleOpenComment}
             />
           )}
         </aside>
@@ -145,9 +205,26 @@ function App() {
             currentVersion={currentVersion}
             selectedVersion={selectedVersion}
             onPageUpdated={handlePageUpdated}
+            onDiffSummaryChange={handleDiffSummaryChange}
           />
         </main>
       </div>
+
+      {commentVersion ? (
+        <VersionCommentModal
+          currentUser={data && data.currentUser ? data.currentUser : { displayName: 'You' }}
+          currentVersion={currentVersion}
+          diffSummary={diffSummariesByVersion[String(commentVersion.number)]}
+          existingComment={
+            (commentsByVersion[String(commentVersion.number)] || [])[0] || null
+          }
+          onClose={() => setCommentVersionNumber(null)}
+          onSave={handleSaveComment}
+          onVersionChange={handleCommentVersionChange}
+          version={commentVersion}
+          versions={versions}
+        />
+      ) : null}
     </div>
   );
 }
