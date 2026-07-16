@@ -657,11 +657,13 @@ function formatLayoutWidthVector(widths) {
     .join(' / ');
 }
 
-function DraftDiffSummaryRows({ rows }) {
+function DraftDiffSummaryRows({ rows, limited }) {
   if (!(rows || []).length) {
     return (
       <div className="dh-draft-diff-summary__empty">
-        The draft is identical to the current page.
+        {limited
+          ? 'This page is too large for a detailed version comparison. No claim of equality can be made.'
+          : 'The Draft version is identical to the Current version.'}
       </div>
     );
   }
@@ -1574,7 +1576,7 @@ function ComparisonPanelContent({
                   onClick={() => setShowDraftDiffSummary(true)}
                   type="button"
                 >
-                  Diff Summary
+                  Version Difference Notes
                 </button>
                 <button
                   aria-label="Close draft preview"
@@ -1683,14 +1685,14 @@ function ComparisonPanelContent({
                       className="dh-draft-modal__title"
                       id="dh-draft-diff-summary-title"
                     >
-                      Diff Summary
+                      Version Difference Notes
                     </h2>
                     <p className="dh-draft-modal__meta">
-                      Current v{draftPreview.currentVersionNumber || '?'} → Draft
+                      Current v{draftPreview.currentVersionNumber || '?'} → Draft version
                     </p>
                   </div>
                   <button
-                    aria-label="Close diff summary"
+                    aria-label="Close version difference notes"
                     className="dh-draft-modal__close"
                     onClick={() => setShowDraftDiffSummary(false)}
                     type="button"
@@ -1724,6 +1726,7 @@ function ComparisonPanelContent({
                       ) : null}
                       <div className="dh-draft-diff-summary__changes">
                         <DraftDiffSummaryRows
+                          limited={draftDiffSummary.diff.summary.limited}
                           rows={draftDiffSummary.display.selectableRows}
                         />
                       </div>

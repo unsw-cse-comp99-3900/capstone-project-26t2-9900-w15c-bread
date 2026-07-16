@@ -17,6 +17,21 @@ describe('draft diff summary', () => {
     expect(result.diff.summary).toMatchObject({ added: 2, removed: 1 });
     expect(result.display.selectableRows).toHaveLength(2);
   });
+
+  test('marks an oversized draft comparison as limited instead of equal', () => {
+    const currentStorage = Array.from(
+      { length: 350 },
+      (_, index) => `<p>Current ${index}</p>`
+    ).join('');
+    const draftStorage = Array.from(
+      { length: 350 },
+      (_, index) => `<p>Draft ${index}</p>`
+    ).join('');
+    const result = buildDraftDiffSummary(currentStorage, draftStorage);
+
+    expect(result.diff.summary.limited).toBe(true);
+    expect(result.display.selectableRows).toHaveLength(0);
+  });
 });
 
 describe('comparison change grouping', () => {

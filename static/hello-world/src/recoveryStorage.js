@@ -8,6 +8,8 @@ const UNSUPPORTED_MISSING_RAW_ERROR =
   'Recovered content is missing raw Confluence storage for an unsupported block, so write-back is disabled to avoid data loss.';
 const MISSING_STORAGE_ERROR =
   'Recovered content is missing Confluence storage for one or more blocks, so write-back is disabled to avoid data loss.';
+const EMPTY_RECOVERY_ERROR =
+  'The selected draft is empty, so write-back is disabled. Keep at least one content block in the draft.';
 const UNSUPPORTED_PLACEHOLDER_STORAGE_RE =
   /data-dh-node-type=["']unsupported["']|Unsupported Confluence block/i;
 
@@ -673,8 +675,16 @@ export function buildRecoveryStorageHtml(
     }
   }
 
-  return {
-    html: normaliseCodeMacroStorageForWriteBack(storageParts.join('')),
-    error: '',
-  };
+  const html = normaliseCodeMacroStorageForWriteBack(storageParts.join(''));
+
+  // The resolver deliberately rejects an empty Storage body because replacing
+  // a complete page with an empty string is unsafe and Confluence may
+  // normalise it differently across editor versions. Surface that rule while
+  // the user is still reviewing the Draft instead of enabling a write button
+  // that can only fail after the network request.
+  if (!html.trim()) {
+    return { html: '', error: EMPTY_RECOVERY_ERROR };
+  }
+
+  return { html, error: '' };
 }

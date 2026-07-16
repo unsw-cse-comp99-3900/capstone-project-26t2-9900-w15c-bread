@@ -48,6 +48,18 @@ function decisionList(items, listId = 'decision-list-id', fallbackInsideList = f
 }
 
 describe('buildRecoveryStorageHtml', () => {
+  test('rejects an empty selected draft before write-back', () => {
+    const diff = buildRichTextDiffHtml('', '<p>Current-only content</p>', '', {});
+    const result = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map([['0', 'old']])
+    );
+
+    expect(result.html).toBe('');
+    expect(result.error).toContain('selected draft is empty');
+    expect(result.error).toContain('write-back is disabled');
+  });
+
   test('preserves the current-version default used by the existing UI', () => {
     const diff = buildRichTextDiffHtml('<p>old</p>', '<p>current</p>', '', {});
     const result = buildRecoveryStorageHtml(diff.blocks, new Map());
