@@ -4470,6 +4470,164 @@ function compactBlankLineCountChanges(blocks) {
   return compacted;
 }
 
+function listBlockStorageHtml(block, side) {
+  if (side === 'old') {
+    return block.oldRawHtml || block.oldHtml || block.html || '';
+  }
+
+  return block.newRawHtml || block.newHtml || block.html || '';
+}
+
+function listBlockRenderedHtml(block, side) {
+  if (side === 'old') {
+    return block.oldRenderedHtml || block.renderedHtml || block.oldHtml || '';
+  }
+
+  return block.newRenderedHtml || block.renderedHtml || block.newHtml || '';
+}
+
+function extractOrdinaryListSequence(blocks, side) {
+  const listBlocks = blocks.filter((block) => block.nodeType === 'list');
+  if (!listBlocks.length) return null;
+
+  const sequence = [];
+  let commonTag = '';
+
+  for (const block of listBlocks) {
+    const doc = new DOMParser().parseFromString(
+      normaliseStorageHtmlForParsing(listBlockStorageHtml(block, side)),
+      'text/html'
+    );
+    const list = doc.body.querySelector('ol, ul');
+    if (!list) return null;
+
+    const tag = list.tagName.toLowerCase();
+    if (commonTag && commonTag !== tag) return null;
+    commonTag = tag;
+
+    const items = Array.from(list.children).filter((child) => /^li$/i.test(child.tagName));
+    let ordinal = tag === 'ol' ? Number(list.getAttribute('start') || 1) : 0;
+    if (tag === 'ol' && !Number.isFinite(ordinal)) ordinal = 1;
+
+    items.forEach((item) => {
+      const explicitValue = tag === 'ol' ? Number(item.getAttribute('value')) : Number.NaN;
+      if (Number.isFinite(explicitValue)) ordinal = explicitValue;
+
+      // Include the effective ordered-list number in the identity. This keeps
+      // a genuine renumbering visible while allowing several correctly
+      // continued <ol start="…"> fragments to align with one merged list.
+      sequence.push(
+        `${tag}:${tag === 'ol' ? ordinal : ''}:${canonicalDomSignature(item)}`
+      );
+      if (tag === 'ol') ordinal++;
+    });
+  }
+
+  return { tag: commonTag, sequence };
+}
+
+function changeRunBlankLineCount(blocks) {
+  return blocks
+    .filter((block) => isBlankDiffResultBlock(block))
+    .reduce((count, block) => count + (block.blankLineCount || 1), 0);
+}
+
+function compactListBreakChangeRun(changeRun) {
+  if (!changeRun.length || changeRun.some((block) => !['removed', 'added'].includes(block.type))) {
+    return null;
+  }
+
+  const supportedNodeTypes = new Set(['list', 'blank_line_run', 'paragraph']);
+  if (
+    changeRun.some(
+      (block) =>
+        !supportedNodeTypes.has(block.nodeType) ||
+        (block.nodeType === 'paragraph' && !isBlankDiffResultBlock(block))
+    )
+  ) {
+    return null;
+  }
+
+  const oldBlocks = changeRun.filter((block) => block.type === 'removed');
+  const currentBlocks = changeRun.filter((block) => block.type === 'added');
+  const oldLists = extractOrdinaryListSequence(oldBlocks, 'old');
+  const currentLists = extractOrdinaryListSequence(currentBlocks, 'current');
+  if (!oldLists || !currentLists || oldLists.tag !== currentLists.tag) return null;
+  if (
+    oldLists.sequence.length !== currentLists.sequence.length ||
+    oldLists.sequence.some((item, index) => item !== currentLists.sequence[index])
+  ) {
+    return null;
+  }
+
+  const oldBlankLineCount = changeRunBlankLineCount(oldBlocks);
+  const newBlankLineCount = changeRunBlankLineCount(currentBlocks);
+  const blankLineDelta = newBlankLineCount - oldBlankLineCount;
+  if (!blankLineDelta) return null;
+
+  const oldStorage = oldBlocks.map((block) => listBlockStorageHtml(block, 'old')).join('');
+  const newStorage = currentBlocks
+    .map((block) => listBlockStorageHtml(block, 'current'))
+    .join('');
+  const oldRenderedHtml = oldBlocks
+    .map((block) => listBlockRenderedHtml(block, 'old'))
+    .join('');
+  const newRenderedHtml = currentBlocks
+    .map((block) => listBlockRenderedHtml(block, 'current'))
+    .join('');
+  const blankLineCount = Math.abs(blankLineDelta);
+  const changeType = blankLineDelta > 0 ? 'added' : 'removed';
+  const noun = blankLineCount === 1 ? 'blank line' : 'blank lines';
+
+  return {
+    type: 'modified',
+    tag: oldLists.tag,
+    nodeType: 'list_break_change',
+    text: currentLists.sequence.join('|'),
+    oldText: oldLists.sequence.join('|'),
+    newText: currentLists.sequence.join('|'),
+    oldHtml: oldStorage,
+    newHtml: newStorage,
+    oldRawHtml: oldStorage,
+    newRawHtml: newStorage,
+    oldRenderedHtml,
+    newRenderedHtml,
+    renderedHtml: `<div class="dh-blank-line-run-summary">${blankLineCount} ${noun} ${changeType}</div>`,
+    isListBreakChange: true,
+    oldBlankLineCount,
+    newBlankLineCount,
+    blankLineCount,
+    blankLineDelta,
+    added: blankLineDelta > 0 ? blankLineCount : 0,
+    removed: blankLineDelta < 0 ? blankLineCount : 0,
+    limited: false,
+  };
+}
+
+function compactListBreakChanges(blocks) {
+  const compacted = [];
+  let index = 0;
+
+  while (index < blocks.length) {
+    if (!blocks[index] || !['removed', 'added'].includes(blocks[index].type)) {
+      compacted.push(blocks[index]);
+      index++;
+      continue;
+    }
+
+    let end = index;
+    while (end < blocks.length && ['removed', 'added'].includes(blocks[end].type)) end++;
+    const changeRun = blocks.slice(index, end);
+    const listBreakChange = compactListBreakChangeRun(changeRun);
+
+    if (listBreakChange) compacted.push(listBreakChange);
+    else compacted.push(...changeRun);
+    index = end;
+  }
+
+  return compacted;
+}
+
 function buildDiffResult(blocks, summaryOverrides = {}) {
   const summary = createDiffSummary(summaryOverrides);
 
@@ -5887,10 +6045,10 @@ export function buildRichTextDiffHtml(
     j++;
   }
 
-  return buildDiffResult(
-    compactBlankLineCountChanges(decorateTableReplacementBlocks(blocks)),
-    { limited }
-  );
+  const decoratedBlocks = decorateTableReplacementBlocks(blocks);
+  const compactedBlankLines = compactBlankLineCountChanges(decoratedBlocks);
+
+  return buildDiffResult(compactListBreakChanges(compactedBlankLines), { limited });
 }
 
 export function countWords(text) {

@@ -566,6 +566,17 @@ function getGitHubStyleDiffParts(blockOrBlocks) {
 
   const block = blockOrBlocks;
 
+  if (block.isListBreakChange) {
+    const isAddition = block.blankLineDelta > 0;
+    return [{
+      type: isAddition ? 'added' : 'removed',
+      html: blankLineRunSummaryHtml(
+        block,
+        isAddition ? 'added' : 'removed'
+      ),
+    }];
+  }
+
   if (
     block.nodeType === 'table' &&
     block.tableDiff &&

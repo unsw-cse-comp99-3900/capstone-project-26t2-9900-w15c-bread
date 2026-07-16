@@ -105,3 +105,36 @@ describe('Draft Preview spacer recovery', () => {
     expect(recovered.html).toBe(currentStorage);
   });
 });
+
+describe('Draft Preview ordered-list break recovery', () => {
+  const oldStorage = [
+    '<ol><li>One</li></ol>',
+    '<p><br /></p>',
+    '<ol start="2"><li>Two</li></ol>',
+    '<p><br /></p>',
+    '<ol start="3"><li>Three</li></ol>',
+  ].join('');
+  const currentStorage = '<ol><li>One</li><li>Two</li><li>Three</li></ol>';
+
+  test('keeps the list-break change atomic and reconstructs either side exactly', () => {
+    const diff = buildRichTextDiffHtml(oldStorage, currentStorage, '', {});
+    const display = buildDiffDisplayRows(diff.blocks);
+    const row = display.selectableRows[0];
+    const keptCurrent = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map(),
+      display.blockChoiceKeys
+    );
+    const restoredOld = buildRecoveryStorageHtml(
+      diff.blocks,
+      new Map([[row.key, 'old']]),
+      display.blockChoiceKeys
+    );
+
+    expect(display.selectableRows).toHaveLength(1);
+    expect(row.blocks).toHaveLength(1);
+    expect(row.blocks[0].block.nodeType).toBe('list_break_change');
+    expect(keptCurrent).toMatchObject({ error: '', html: currentStorage });
+    expect(restoredOld).toMatchObject({ error: '', html: oldStorage });
+  });
+});

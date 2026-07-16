@@ -88,6 +88,41 @@ describe('type-specific diff safety', () => {
     expect(result.blocks[1].newHtml).toContain('<li>Preview a draft</li>');
   });
 
+  test('recognises removing blank lines that merge continued ordered lists', () => {
+    const oldHtml = [
+      '<ol><li>44444</li></ol>',
+      '<p><br /></p>',
+      '<ol start="2"><li>Ordered list item starting from 2</li><li>qwe</li><li>Second ordered list item</li></ol>',
+      '<p><br /></p>',
+      '<ol start="5"><li></li></ol>',
+    ].join('');
+    const currentHtml = [
+      '<ol>',
+      '<li>44444</li>',
+      '<li>Ordered list item starting from 2</li>',
+      '<li>qwe</li>',
+      '<li>Second ordered list item</li>',
+      '<li></li>',
+      '</ol>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldHtml, currentHtml, '', {});
+
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0]).toMatchObject({
+      type: 'modified',
+      nodeType: 'list_break_change',
+      isListBreakChange: true,
+      blankLineCount: 2,
+      blankLineDelta: -2,
+      added: 0,
+      removed: 2,
+      oldRawHtml: oldHtml,
+      newRawHtml: currentHtml,
+    });
+    expect(result.html).toContain('2 blank lines removed');
+    expect(result.html).not.toContain('Ordered list item starting from 2');
+  });
+
   test('nested unordered lists preserve an empty parent bullet on its own line', () => {
     const html =
       '<ul><li><ul><li>Nested item A-1<ul><li><ul><li>Deep item 1</li></ul></li></ul></li></ul></li><li>Top level item B</li></ul>';
