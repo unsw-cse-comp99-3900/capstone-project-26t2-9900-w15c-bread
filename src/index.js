@@ -71,19 +71,34 @@ async function fetchPageAttachments(pageId) {
 
     (data.results || []).forEach((attachment) => {
       const filename = attachment.title || attachment.filename;
+      const attachmentId = String(attachment.id || '').trim();
+      const attachmentFileId = String(attachment.fileId || '').trim();
       const rawDownload =
         attachment.downloadLink ||
         (attachment._links && attachment._links.download) ||
         attachment.webuiLink ||
         '';
 
-      if (!filename || !rawDownload) return;
+      if ((!filename && !attachmentId) || !rawDownload) return;
 
       const downloadUrl =
         rawDownload.startsWith('http') || !baseUrl ? rawDownload : `${baseUrl}${rawDownload}`;
 
-      attachments[filename] = downloadUrl;
-      attachments[filename.toLowerCase()] = downloadUrl;
+      if (filename) {
+        attachments[filename] = downloadUrl;
+        attachments[filename.toLowerCase()] = downloadUrl;
+      }
+
+      // New-editor image storage can deliberately use the sentinel filename
+      // "UNKNOWN_ATTACHMENT" and retain the real reference only as an
+      // attachment/media id. Keep an id-indexed entry alongside the familiar
+      // filename entries so those images can still be rendered in history.
+      if (attachmentId) {
+        attachments[`id:${attachmentId}`] = downloadUrl;
+      }
+      if (attachmentFileId) {
+        attachments[`id:${attachmentFileId}`] = downloadUrl;
+      }
     });
 
     const next = data._links && data._links.next;

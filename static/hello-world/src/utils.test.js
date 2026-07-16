@@ -1429,6 +1429,38 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect(rendered).toContain('<figcaption>Image caption</figcaption>');
   });
 
+  test('resolves UNKNOWN_ATTACHMENT images by attachment id', () => {
+    const html = [
+      '<ac:image ac:align="center" ac:width="320">',
+      '<ri:attachment ri:filename="UNKNOWN_ATTACHMENT" ri:attachment-id="att-123" />',
+      '</ac:image>',
+    ].join('');
+
+    const rendered = prepareConfluenceHtml(html, '', {
+      'id:att-123': 'https://example.com/resolved-by-id.png',
+    });
+
+    expect(rendered).toContain('src="https://example.com/resolved-by-id.png"');
+    expect(rendered).not.toContain('UNKNOWN_ATTACHMENT');
+    expect(rendered).not.toContain('data-image-placeholder="true"');
+  });
+
+  test('resolves UNKNOWN_ATTACHMENT images by their ADF media id', () => {
+    const html = [
+      '<ac:image>',
+      '<ac:adf-attribute key="id">media-456</ac:adf-attribute>',
+      '<ri:attachment ri:filename="UNKNOWN_ATTACHMENT" />',
+      '</ac:image>',
+    ].join('');
+
+    const rendered = prepareConfluenceHtml(html, '', {
+      'id:media-456': 'https://example.com/resolved-by-media-id.png',
+    });
+
+    expect(rendered).toContain('src="https://example.com/resolved-by-media-id.png"');
+    expect(rendered).not.toContain('UNKNOWN_ATTACHMENT');
+  });
+
   test('renders code macros with line structure and strips CDATA wrappers', () => {
     const html = [
       '<ac:structured-macro ac:name="code">',

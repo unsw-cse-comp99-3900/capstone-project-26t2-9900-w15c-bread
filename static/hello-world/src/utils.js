@@ -51,9 +51,25 @@ export function storageToPlainText(bodyValue) {
     .trim();
 }
 
-function lookupAttachmentUrl(filename, attachmentsByFilename) {
-  if (!filename || !attachmentsByFilename) return '';
-  return attachmentsByFilename[filename] || attachmentsByFilename[filename.toLowerCase()] || '';
+function lookupAttachmentUrl(filename, attachmentsByFilename, attachmentId = '') {
+  if (!attachmentsByFilename) return '';
+
+  const normalisedFilename = String(filename || '').trim();
+  const normalisedAttachmentId = String(attachmentId || '').trim();
+
+  // Prefer a real filename because it remains stable across ordinary storage
+  // representations. UNKNOWN_ATTACHMENT is a Confluence new-editor sentinel,
+  // not an actual filename, so it must fall through to the attachment id.
+  if (normalisedFilename && normalisedFilename.toUpperCase() !== 'UNKNOWN_ATTACHMENT') {
+    const filenameUrl =
+      attachmentsByFilename[normalisedFilename] ||
+      attachmentsByFilename[normalisedFilename.toLowerCase()];
+    if (filenameUrl) return filenameUrl;
+  }
+
+  return normalisedAttachmentId
+    ? attachmentsByFilename[`id:${normalisedAttachmentId}`] || ''
+    : '';
 }
 
 function escapeHtml(value) {
@@ -2409,6 +2425,28 @@ function expandAdfNodes(html, usersByAccountId = {}) {
   return removeAdfAttributes(expanded);
 }
 
+function preserveAdfImageAttachmentIds(html) {
+  return String(html || '').replace(/<ac:image\b[\s\S]*?<\/ac:image>/gi, (imageMarkup) => {
+    if (!/ri:filename=["']UNKNOWN_ATTACHMENT["']/i.test(imageMarkup)) {
+      return imageMarkup;
+    }
+
+    const mediaId = extractAdfAttribute(imageMarkup, ['id', 'mediaId', 'media-id']);
+    if (!mediaId || /data-dh-attachment-id=/i.test(imageMarkup)) return imageMarkup;
+
+    // ADF attributes are intentionally stripped before sanitisation. Copy only
+    // the media id onto the renderer's temporary attachment node first, so the
+    // later image pass can match it to the attachment API's `fileId` entry.
+    return imageMarkup.replace(
+      /<ri:attachment\b([^>]*?)(\/?)>/i,
+      (_tag, attributes, selfClosingSlash) =>
+        `<ri:attachment${attributes} data-dh-attachment-id="${escapeAttr(
+          mediaId
+        )}"${selfClosingSlash}>`
+    );
+  });
+}
+
 function expandKnownStructuredMacros(html) {
   return String(html || '').replace(
     /<ac:structured-macro\b[^>]*>[\s\S]*?<\/ac:structured-macro>/gi,
@@ -2783,7 +2821,7 @@ export function prepareConfluenceHtml(
           expandConfluenceTaskLists(
             expandAdfNodes(
               expandConfluenceLinks(
-                expandConfluenceCodeMacros(sourceHtml),
+                expandConfluenceCodeMacros(preserveAdfImageAttachmentIds(sourceHtml)),
                 baseUrl,
                 usersByAccountId
               ),
@@ -2817,14 +2855,28 @@ export function prepareConfluenceHtml(
       }
     )
     .replace(
-      /<ac:image[\s\S]*?<ri:attachment[^>]*(?:ri:filename|filename)=["']([^"']+)["'][^>]*>[\s\S]*?<\/ac:image>/gi,
-      (match, filename) => {
-        const url = lookupAttachmentUrl(filename, attachmentsByFilename);
+      /<ac:image\b[\s\S]*?<ri:attachment\b[^>]*>[\s\S]*?<\/ac:image>/gi,
+      (match) => {
+        const attachmentMarkup = /<ri:attachment\b[^>]*>/i.exec(match);
+        const attachmentTag = attachmentMarkup ? attachmentMarkup[0] : '';
+        const filename = extractAttr(attachmentTag, ['ri:filename', 'filename']);
+        const attachmentId =
+          extractAttr(attachmentTag, [
+            'ri:attachment-id',
+            'attachment-id',
+            'ri:content-id',
+            'content-id',
+            'data-dh-attachment-id',
+          ]) || extractAdfAttribute(match, ['id', 'mediaId', 'media-id']);
+        const url = lookupAttachmentUrl(filename, attachmentsByFilename, attachmentId);
         const imageMeta = extractImageStyle(match);
         if (url) {
           const renderedImage = renderImageFigure({
             src: url,
-            alt: extractImageAltText(match, filename),
+            alt: extractImageAltText(
+              match,
+              filename.toUpperCase() === 'UNKNOWN_ATTACHMENT' ? '' : filename
+            ),
             caption: extractImageCaption(match),
             imageStyle: imageMeta.imageStyle,
             imageWidth: imageMeta.imageWidth,
@@ -2835,8 +2887,12 @@ export function prepareConfluenceHtml(
           });
           return renderedImage;
         }
+        const unavailableLabel =
+          filename && filename.toUpperCase() !== 'UNKNOWN_ATTACHMENT'
+            ? filename
+            : 'Unavailable attachment';
         return `<figure data-dh-node-type="image"><div data-image-placeholder="true">Image attachment: ${escapeHtml(
-          filename
+          unavailableLabel
         )}</div></figure>`;
       }
     );
