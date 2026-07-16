@@ -1,6 +1,10 @@
 import { buildRichTextDiffHtml } from '../utils';
 import { buildRecoveryStorageHtml } from '../recoveryStorage';
-import { buildDiffDisplayRows, buildDraftDifferenceNotes } from './ComparisonPanel';
+import {
+  buildDiffDisplayRows,
+  buildDraftDifferenceNotes,
+  getGitHubStyleDiffParts,
+} from './ComparisonPanel';
 
 describe('Version Difference Notes', () => {
   test('compares Current as the old side and Draft as the new side', () => {
@@ -134,6 +138,11 @@ describe('Draft Preview ordered-list break recovery', () => {
     expect(display.selectableRows).toHaveLength(1);
     expect(row.blocks).toHaveLength(1);
     expect(row.blocks[0].block.nodeType).toBe('list_break_change');
+    const parts = getGitHubStyleDiffParts(row.blocks);
+    expect(parts.map((part) => part.type)).toEqual(['context', 'removed']);
+    expect(parts[0].html).toContain('<li>One</li>');
+    expect(parts[0].html).toContain('<li>Three</li>');
+    expect(parts[1].html).toContain('2 blank lines removed');
     expect(keptCurrent).toMatchObject({ error: '', html: currentStorage });
     expect(restoredOld).toMatchObject({ error: '', html: oldStorage });
   });

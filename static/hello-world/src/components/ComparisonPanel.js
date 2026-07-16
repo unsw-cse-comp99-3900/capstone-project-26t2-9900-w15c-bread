@@ -507,7 +507,7 @@ function getDiffBlockHtml(block) {
   );
 }
 
-function getGitHubStyleDiffParts(blockOrBlocks) {
+export function getGitHubStyleDiffParts(blockOrBlocks) {
   if (Array.isArray(blockOrBlocks)) {
     const tableBlocks = blockOrBlocks.map(({ block }) => block);
     const isBlankLineRun = Boolean(
@@ -568,13 +568,26 @@ function getGitHubStyleDiffParts(blockOrBlocks) {
 
   if (block.isListBreakChange) {
     const isAddition = block.blankLineDelta > 0;
-    return [{
-      type: isAddition ? 'added' : 'removed',
-      html: blankLineRunSummaryHtml(
-        block,
-        isAddition ? 'added' : 'removed'
-      ),
-    }];
+    const contextHtml = isAddition
+      ? block.newRenderedHtml
+      : block.oldRenderedHtml;
+
+    return [
+      {
+        // The list items did not change, so render them once as neutral
+        // context. Showing both complete lists in red and green would recreate
+        // the original noisy false-positive presentation.
+        type: 'context',
+        html: contextHtml || fallbackTextHtml(block.newText || block.oldText),
+      },
+      {
+        type: isAddition ? 'added' : 'removed',
+        html: blankLineRunSummaryHtml(
+          block,
+          isAddition ? 'added' : 'removed'
+        ),
+      },
+    ];
   }
 
   if (
@@ -695,7 +708,7 @@ function VersionDifferenceNotesRows({ rows, limited }) {
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
             key={`${row.key}-${part.type}-${partIndex}`}
           >
-            {part.type !== 'table-cell-level' ? (
+            {!['table-cell-level', 'context'].includes(part.type) ? (
               <span className="dh-github-diff-part__marker">
                 {part.type === 'added' ? '+' : '-'}
               </span>
@@ -991,7 +1004,7 @@ function DiffDisplayRows({
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
             key={`${key}-${part.type}-${partIndex}`}
           >
-            {part.type !== 'table-cell-level' ? (
+            {!['table-cell-level', 'context'].includes(part.type) ? (
               <span className="dh-github-diff-part__marker">
                 {part.type === 'added' ? '+' : '-'}
               </span>
