@@ -26,14 +26,148 @@ function canShareChoice(removedBlock, addedBlock) {
   if (!removedBlock || !addedBlock) return false;
   if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
 
+  const removedIsEmpty = !String(removedBlock.text || '').trim();
+  const addedIsEmpty = !String(addedBlock.text || '').trim();
+
   // The diff engine intentionally emits changed content as two simple result
   // blocks: the old block is removed and the new block is added. When those two
   // adjacent blocks occupy the same semantic role, the UI should treat them as
   // one recovery decision while still preserving the underlying result model.
   return (
     removedBlock.nodeType === addedBlock.nodeType &&
-    removedBlock.tag === addedBlock.tag
+    removedBlock.tag === addedBlock.tag &&
+    removedIsEmpty === addedIsEmpty
   );
+}
+
+function normalisePairingText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getCharacterBigrams(value) {
+  const text = normalisePairingText(value);
+  if (text.length < 2) return text ? [text] : [];
+  return Array.from({ length: text.length - 1 }, (_, index) => text.slice(index, index + 2));
+}
+
+function textPairingSimilarity(leftValue, rightValue) {
+  const left = normalisePairingText(leftValue);
+  const right = normalisePairingText(rightValue);
+  if (!left && !right) return 1;
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+
+  const rightCounts = new Map();
+  getCharacterBigrams(right).forEach((bigram) => {
+    rightCounts.set(bigram, (rightCounts.get(bigram) || 0) + 1);
+  });
+
+  let overlap = 0;
+  const leftBigrams = getCharacterBigrams(left);
+  leftBigrams.forEach((bigram) => {
+    const available = rightCounts.get(bigram) || 0;
+    if (!available) return;
+    overlap++;
+    rightCounts.set(bigram, available - 1);
+  });
+
+  return (2 * overlap) / (leftBigrams.length + getCharacterBigrams(right).length);
+}
+
+function pairChangeItems(removedItems, addedItems) {
+  const scores = Array.from(
+    { length: removedItems.length + 1 },
+    () => Array(addedItems.length + 1).fill(0)
+  );
+  const decisions = Array.from(
+    { length: removedItems.length + 1 },
+    () => Array(addedItems.length + 1).fill('')
+  );
+
+  // Align compatible blocks in source order. Similarity prevents a standalone
+  // insertion from being paired with an unrelated historical paragraph.
+  for (let removedIndex = removedItems.length - 1; removedIndex >= 0; removedIndex--) {
+    for (let addedIndex = addedItems.length - 1; addedIndex >= 0; addedIndex--) {
+      let bestScore = scores[removedIndex + 1][addedIndex];
+      let decision = 'skip-removed';
+
+      if (scores[removedIndex][addedIndex + 1] > bestScore) {
+        bestScore = scores[removedIndex][addedIndex + 1];
+        decision = 'skip-added';
+      }
+
+      const removedItem = removedItems[removedIndex];
+      const addedItem = addedItems[addedIndex];
+      if (canShareChoice(removedItem.block, addedItem.block)) {
+        const pairScore =
+          100 +
+          textPairingSimilarity(removedItem.block.text, addedItem.block.text) +
+          scores[removedIndex + 1][addedIndex + 1];
+        if (pairScore >= bestScore) {
+          bestScore = pairScore;
+          decision = 'pair';
+        }
+      }
+
+      scores[removedIndex][addedIndex] = bestScore;
+      decisions[removedIndex][addedIndex] = decision;
+    }
+  }
+
+  const pairs = [];
+  let removedIndex = 0;
+  let addedIndex = 0;
+  while (removedIndex < removedItems.length && addedIndex < addedItems.length) {
+    const decision = decisions[removedIndex][addedIndex];
+    if (decision === 'pair') {
+      pairs.push([removedItems[removedIndex], addedItems[addedIndex]]);
+      removedIndex++;
+      addedIndex++;
+    } else if (decision === 'skip-added') {
+      addedIndex++;
+    } else {
+      removedIndex++;
+    }
+  }
+
+  return pairs;
+}
+
+function isEmptyParagraphItem(item) {
+  return Boolean(item && item.block && isDisplayBlankLineBlock(item.block));
+}
+
+function attachUnpairedSpacerItems(groups, items, pairedItemPosition) {
+  items.forEach((item, itemPosition) => {
+    if (!isEmptyParagraphItem(item) || pairedItemPosition.has(item)) return;
+
+    let closestGroup = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    groups.forEach((group) => {
+      const anchor = group.find((candidate) => pairedItemPosition.has(candidate));
+      if (!anchor) return;
+
+      const anchorPosition = pairedItemPosition.get(anchor);
+      const start = Math.min(itemPosition, anchorPosition) + 1;
+      const end = Math.max(itemPosition, anchorPosition);
+      const separatedByVisibleContent = items
+        .slice(start, end)
+        .some((candidate) => !isEmptyParagraphItem(candidate));
+      if (separatedByVisibleContent) return;
+
+      const distance = Math.abs(itemPosition - anchorPosition);
+      if (distance < closestDistance) {
+        closestGroup = group;
+        closestDistance = distance;
+      }
+    });
+
+    if (closestGroup) closestGroup.push(item);
+  });
 }
 
 function createChangeDisplayRow(items, blockChoiceKeys) {
@@ -50,6 +184,30 @@ function createChangeDisplayRow(items, blockChoiceKeys) {
 }
 
 function buildChangeRunRows(items, blockChoiceKeys) {
+  const removedItems = items.filter(({ block }) => block.type === 'removed');
+  const addedItems = items.filter(({ block }) => block.type === 'added');
+  const visibleRemovedItems = removedItems.filter(
+    ({ block }) => !isDisplayBlankLineBlock(block)
+  );
+  const visibleAddedItems = addedItems.filter(
+    ({ block }) => !isDisplayBlankLineBlock(block)
+  );
+  const pairs = pairChangeItems(visibleRemovedItems, visibleAddedItems);
+  const groupedItems = pairs.map(([removedItem, addedItem]) => [removedItem, addedItem]);
+  const pairedRemovedPositions = new Map(
+    pairs.map(([removedItem]) => [removedItem, removedItems.indexOf(removedItem)])
+  );
+  const pairedAddedPositions = new Map(
+    pairs.map(([, addedItem]) => [addedItem, addedItems.indexOf(addedItem)])
+  );
+
+  // Empty editor paragraphs adjacent to a visible replacement must share its
+  // recovery key. Otherwise restoring the old text leaves current-only blank
+  // lines in Draft Preview and subsequently writes them back to Confluence.
+  attachUnpairedSpacerItems(groupedItems, removedItems, pairedRemovedPositions);
+  attachUnpairedSpacerItems(groupedItems, addedItems, pairedAddedPositions);
+
+  const usedItems = new Set(groupedItems.flat());
   const blankRunGroups = [];
   const itemsInBlankRuns = new Set();
   let itemIndex = 0;
@@ -59,7 +217,7 @@ function buildChangeRunRows(items, blockChoiceKeys) {
   // still produce several distinct prepared wrappers for consecutive empty
   // editor lines. One recovery choice must cover that whole adjacent run.
   while (itemIndex < items.length) {
-    if (!isDisplayBlankLineBlock(items[itemIndex].block)) {
+    if (usedItems.has(items[itemIndex]) || !isDisplayBlankLineBlock(items[itemIndex].block)) {
       itemIndex++;
       continue;
     }
@@ -67,6 +225,7 @@ function buildChangeRunRows(items, blockChoiceKeys) {
     const blankRun = [];
     while (
       itemIndex < items.length &&
+      !usedItems.has(items[itemIndex]) &&
       isDisplayBlankLineBlock(items[itemIndex].block)
     ) {
       blankRun.push(items[itemIndex]);
@@ -79,37 +238,18 @@ function buildChangeRunRows(items, blockChoiceKeys) {
     }
   }
 
-  const remainingItems = items.filter((item) => !itemsInBlankRuns.has(item));
-  const removedItems = remainingItems.filter(({ block }) => block.type === 'removed');
-  const addedItems = remainingItems.filter(({ block }) => block.type === 'added');
-
-  // LCS-based diff output can represent one changed region as all removed
-  // blocks followed by all added blocks. Pair compatible old and new blocks
-  // within that region so each logical replacement has one recovery choice.
-  const unusedAddedItems = new Set(addedItems);
-  const groupedItems = removedItems.map((removedItem) => {
-    const addedItem = addedItems.find(
-      (candidate) =>
-        unusedAddedItems.has(candidate) &&
-        canShareChoice(removedItem.block, candidate.block)
-    );
-
-    if (!addedItem) return [removedItem];
-
-    unusedAddedItems.delete(addedItem);
-    return [removedItem, addedItem];
-  });
-
-  const usedItems = new Set(groupedItems.flat());
   const displayGroups = [
     ...blankRunGroups,
     ...groupedItems,
-    ...remainingItems.filter((item) => !usedItems.has(item)).map((item) => [item]),
+    ...items
+      .filter((item) => !usedItems.has(item) && !itemsInBlankRuns.has(item))
+      .map((item) => [item]),
   ];
 
   // Sort groups by their first source position. Inside a paired group, the
   // removed block deliberately remains before the added block.
   return displayGroups
+    .map((group) => group.sort((left, right) => left.index - right.index))
     .sort((left, right) => {
       const leftIndex = Math.min(...left.map(({ index }) => index));
       const rightIndex = Math.min(...right.map(({ index }) => index));
@@ -246,6 +386,29 @@ export function buildDiffDisplayRows(blocks) {
     rows: nestedRows,
     selectableRows: collectSelectableDisplayRows(nestedRows),
     blockChoiceKeys,
+  };
+}
+
+export function buildDraftDifferenceNotes(
+  currentStorage,
+  draftStorage,
+  baseUrl = '',
+  attachmentsByFilename = {},
+  usersByAccountId = {}
+) {
+  // Treat Current as the old side and Draft as the new side so every marker
+  // describes the exact effect of pressing "Write to Current Page".
+  const diff = buildRichTextDiffHtml(
+    currentStorage,
+    draftStorage,
+    baseUrl,
+    attachmentsByFilename,
+    usersByAccountId
+  );
+
+  return {
+    diff,
+    display: buildDiffDisplayRows(diff.blocks || []),
   };
 }
 
@@ -481,6 +644,60 @@ function formatLayoutWidthVector(widths) {
   return safeWidths
     .map((width) => (width ? `${width}%` : 'auto'))
     .join(' / ');
+}
+
+function VersionDifferenceNotesRows({ rows, limited }) {
+  if (!(rows || []).length) {
+    return (
+      <div className="dh-version-notes__empty">
+        {limited
+          ? 'This page is too large for a detailed comparison. The versions may still differ.'
+          : 'The Draft is identical to the Current version.'}
+      </div>
+    );
+  }
+
+  return rows.map((row) => {
+    if (row.type === 'layout_width_change') {
+      const change = row.layoutWidthChange || {};
+      return (
+        <div className="dh-version-notes__change" key={row.key}>
+          <div className="dh-version-notes__change-title">Column widths changed</div>
+          <div className="dh-layout-width-change__values">
+            <span className="dh-layout-width-change__value dh-layout-width-change__value--old">
+              <span aria-hidden="true">-</span>{' '}
+              {formatLayoutWidthVector(change.oldWidths)}
+            </span>
+            <span className="dh-layout-width-change__value dh-layout-width-change__value--current">
+              <span aria-hidden="true">+</span>{' '}
+              {formatLayoutWidthVector(change.newWidths)}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="dh-version-notes__change" key={row.key}>
+        {getGitHubStyleDiffParts(row.blocks || []).map((part, partIndex) => (
+          <div
+            className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
+            key={`${row.key}-${part.type}-${partIndex}`}
+          >
+            {part.type !== 'table-cell-level' ? (
+              <span className="dh-github-diff-part__marker">
+                {part.type === 'added' ? '+' : '-'}
+              </span>
+            ) : null}
+            <div
+              className="dh-github-diff-part__content"
+              dangerouslySetInnerHTML={{ __html: part.html }}
+            />
+          </div>
+        ))}
+      </div>
+    );
+  });
 }
 
 function LayoutWidthChangeControl({
@@ -857,6 +1074,7 @@ function ComparisonPanelContent({
   const [blockChoices, setBlockChoices] = useState(new Map());
   const [activeBlockKey, setActiveBlockKey] = useState(null);
   const [draftPreview, setDraftPreview] = useState(null);
+  const [showVersionDifferenceNotes, setShowVersionDifferenceNotes] = useState(false);
   const [writeBack, setWriteBack] = useState({
     status: 'idle',
     error: '',
@@ -1019,6 +1237,7 @@ function ComparisonPanelContent({
     setBlockChoices(new Map());
     setActiveBlockKey(null);
     setDraftPreview(null);
+    setShowVersionDifferenceNotes(false);
     setWriteBack({ status: 'idle', error: '', page: null });
   }, [selectableBlocks, selectedVersion.number, currentVersion && currentVersion.number]);
 
@@ -1030,13 +1249,17 @@ function ComparisonPanelContent({
         event.key === 'Escape' &&
         writeBack.status !== 'loading'
       ) {
-        setDraftPreview(null);
+        if (showVersionDifferenceNotes) {
+          setShowVersionDifferenceNotes(false);
+        } else {
+          setDraftPreview(null);
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [draftPreview, writeBack.status]);
+  }, [draftPreview, showVersionDifferenceNotes, writeBack.status]);
 
   const handleChooseBlockVersion = (key, choice) => {
     setBlockChoices((previous) => {
@@ -1081,6 +1304,36 @@ function ComparisonPanelContent({
       richDiff.blocks,
     ]
   );
+  const versionDifferenceNotes = useMemo(() => {
+    if (!draftPreview || draftPreview.storageError) return null;
+
+    try {
+      return {
+        ...buildDraftDifferenceNotes(
+          currentBodyValue,
+          draftPreview.storageHtml,
+          baseUrl,
+          attachmentsByFilename || {},
+          mentionUsersByAccountId
+        ),
+        error: '',
+      };
+    } catch (error) {
+      console.error('[ComparisonPanel] Failed to build version difference notes', error);
+      return {
+        diff: emptyDiff,
+        display: { rows: [], selectableRows: [], blockChoiceKeys: new Map() },
+        error: 'Version Difference Notes could not safely render this Draft.',
+      };
+    }
+  }, [
+    attachmentsByFilename,
+    baseUrl,
+    currentBodyValue,
+    draftPreview,
+    emptyDiff,
+    mentionUsersByAccountId,
+  ]);
 
   const diffSummary = richDiff.summary || {
     added: richDiff.added || 0,
@@ -1106,6 +1359,7 @@ function ComparisonPanelContent({
     };
 
     setWriteBack({ status: 'idle', error: '', page: null });
+    setShowVersionDifferenceNotes(false);
     setDraftPreview(draft);
   };
 
@@ -1257,6 +1511,7 @@ function ComparisonPanelContent({
               event.target === event.currentTarget &&
               !operationIsLoading
             ) {
+              setShowVersionDifferenceNotes(false);
               setDraftPreview(null);
             }
           }}
@@ -1277,15 +1532,32 @@ function ComparisonPanelContent({
                   {' '}v{draftPreview.currentVersionNumber || '?'}
                 </p>
               </div>
-              <button
-                aria-label="Close draft preview"
-                className="dh-draft-modal__close"
-                disabled={operationIsLoading}
-                onClick={() => setDraftPreview(null)}
-                type="button"
-              >
-                ×
-              </button>
+              <div className="dh-draft-modal__header-actions">
+                <button
+                  className="dh-draft-modal__version-notes-button"
+                  disabled={
+                    operationIsLoading ||
+                    Boolean(draftPreview.storageError) ||
+                    !versionDifferenceNotes
+                  }
+                  onClick={() => setShowVersionDifferenceNotes(true)}
+                  type="button"
+                >
+                  Version Difference Notes
+                </button>
+                <button
+                  aria-label="Close draft preview"
+                  className="dh-draft-modal__close"
+                  disabled={operationIsLoading}
+                  onClick={() => {
+                    setShowVersionDifferenceNotes(false);
+                    setDraftPreview(null);
+                  }}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
             </header>
 
             <div className="dh-draft-modal__body">
@@ -1333,7 +1605,10 @@ function ComparisonPanelContent({
                 <button
                   disabled={operationIsLoading}
                   type="button"
-                  onClick={() => setDraftPreview(null)}
+                  onClick={() => {
+                    setShowVersionDifferenceNotes(false);
+                    setDraftPreview(null);
+                  }}
                 >
                   Back to changes
                 </button>
@@ -1355,6 +1630,83 @@ function ComparisonPanelContent({
               </div>
             </footer>
           </section>
+
+          {showVersionDifferenceNotes && versionDifferenceNotes ? (
+            <div
+              className="dh-version-notes-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  setShowVersionDifferenceNotes(false);
+                }
+              }}
+            >
+              <section
+                aria-labelledby="dh-version-notes-title"
+                aria-modal="true"
+                className="dh-version-notes-modal"
+                role="dialog"
+              >
+                <header className="dh-version-notes__header">
+                  <div>
+                    <h2 className="dh-draft-modal__title" id="dh-version-notes-title">
+                      Version Difference Notes
+                    </h2>
+                    <p className="dh-draft-modal__meta">
+                      Current v{draftPreview.currentVersionNumber || '?'} → Draft
+                    </p>
+                  </div>
+                  <button
+                    aria-label="Close version difference notes"
+                    className="dh-draft-modal__close"
+                    onClick={() => setShowVersionDifferenceNotes(false)}
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </header>
+
+                <div className="dh-version-notes__body">
+                  {versionDifferenceNotes.error ? (
+                    <div className="dh-draft-modal__result--error">
+                      {versionDifferenceNotes.error}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="dh-version-notes__chips">
+                        <span className="dh-change-chip dh-change-chip--added">
+                          + {versionDifferenceNotes.diff.summary.added} additions
+                        </span>
+                        <span className="dh-change-chip dh-change-chip--removed">
+                          - {versionDifferenceNotes.diff.summary.removed} removals
+                        </span>
+                        <span className="dh-change-chip">
+                          {versionDifferenceNotes.diff.summary.modifiedBlocks || 0} modified
+                        </span>
+                      </div>
+                      {versionDifferenceNotes.diff.summary.limited ? (
+                        <div className="dh-diff-warning">
+                          This page is large, so only a limited safe comparison is available.
+                        </div>
+                      ) : null}
+                      <div className="dh-version-notes__changes">
+                        <VersionDifferenceNotesRows
+                          limited={versionDifferenceNotes.diff.summary.limited}
+                          rows={versionDifferenceNotes.display.selectableRows}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <footer className="dh-version-notes__footer">
+                  <span>Red is removed from Current; green is added by Draft.</span>
+                  <button onClick={() => setShowVersionDifferenceNotes(false)} type="button">
+                    Close
+                  </button>
+                </footer>
+              </section>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

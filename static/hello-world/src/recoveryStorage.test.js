@@ -508,6 +508,46 @@ describe('buildRecoveryStorageHtml', () => {
     expect(result.html).not.toContain('</ri:user>');
   });
 
+  test('preserves self-closing ADF configuration without swallowing following content', () => {
+    const storage = [
+      '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>',
+      '<ac:adf-node type="extension">',
+      '<ac:adf-attribute key="parameters" />',
+      '<ac:adf-content><p>macro body</p></ac:adf-content>',
+      '</ac:adf-node>',
+      '<p>after macro</p>',
+      '</ac:layout-cell></ac:layout-section></ac:layout>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(storage, storage, '', {});
+    const recovered = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(recovered.error).toBe('');
+    expect(recovered.html).toBe(storage);
+    expect(recovered.html).toContain('<ac:adf-attribute key="parameters" />');
+    expect(recovered.html).not.toContain(
+      '<ac:adf-attribute key="parameters"><ac:adf-content>'
+    );
+  });
+
+  test('preserves self-closing macro parameters without swallowing the macro body', () => {
+    const storage = [
+      '<ac:structured-macro ac:name="example">',
+      '<ac:parameter ac:name="empty-option" />',
+      '<ac:rich-text-body><p>macro body</p></ac:rich-text-body>',
+      '</ac:structured-macro>',
+      '<p>after macro</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(storage, storage, '', {});
+    const recovered = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(recovered.error).toBe('');
+    expect(recovered.html).toBe(storage);
+    expect(recovered.html).toContain('<ac:parameter ac:name="empty-option" />');
+    expect(recovered.html).not.toContain(
+      '<ac:parameter ac:name="empty-option"><ac:rich-text-body>'
+    );
+  });
+
   test('restores HTML code CDATA without emptying the code block on the next diff', () => {
     const codeMacro = (heading) => [
       '<ac:structured-macro ac:name="code">',
