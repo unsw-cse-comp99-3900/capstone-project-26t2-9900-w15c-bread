@@ -11,6 +11,44 @@ import './SideBySideDiffView.css';
 
 const CHANGE_TYPES = new Set(['added', 'removed', 'modified']);
 
+// Confluence storage often carries layout wrappers and empty spacer paragraphs
+// (e.g. `<div data-dh-layout-cell="true"></div>`, `<p></p>`) that flip between
+// versions without representing a real content change. These blocks make it
+// through the diff engine because their raw html is a non-empty string, but
+// they render as empty color panes in the side-by-side view. Filter them out
+// of both the row list and the stats so the surface only shows meaningful
+// diffs.
+const EMPTY_IF_NO_TEXT_NODE_TYPES = new Set([
+  'paragraph',
+  'heading',
+  'list_item',
+  'blockquote',
+  'panel',
+]);
+const MEDIA_TAG_RE = /<(img|video|iframe|table|hr|figure|picture|audio|source|track|svg|canvas)[\s>]/i;
+const LAYOUT_WRAPPER_RE = /data-dh-layout-cell|data-dh-layout-section|data-dh-layout=/i;
+
+function isSemanticallyEmptyBlock(block) {
+  if (!block) return true;
+  const text = typeof block.text === 'string' ? block.text.trim() : '';
+  const newText = typeof block.newText === 'string' ? block.newText.trim() : '';
+  const oldText = typeof block.oldText === 'string' ? block.oldText.trim() : '';
+  if (text || newText || oldText) return false;
+
+  const html =
+    block.renderedHtml ||
+    block.newRenderedHtml ||
+    block.oldRenderedHtml ||
+    block.newHtml ||
+    block.oldHtml ||
+    block.html ||
+    '';
+  if (MEDIA_TAG_RE.test(html)) return false;
+  if (EMPTY_IF_NO_TEXT_NODE_TYPES.has(block.nodeType)) return true;
+  if (LAYOUT_WRAPPER_RE.test(html)) return true;
+  return false;
+}
+
 // The diff engine speaks in "what old had / what current has".
 // The side-by-side surface speaks in "what will happen if the user keeps
 // this row when writing back". We re-label as the write-back preview:
@@ -122,7 +160,10 @@ function buildRows(blocks, showUnchanged) {
       run.push(blocks[i]);
       i += 1;
     }
-    rows.push(...pairChangeRun(run, runStart));
+    const meaningful = run.filter((b) => !isSemanticallyEmptyBlock(b));
+    if (meaningful.length) {
+      rows.push(...pairChangeRun(meaningful, runStart));
+    }
   }
   return rows;
 }
@@ -394,7 +435,11 @@ function SideBySideDiffView({
     let additions = 0;
     let removals = 0;
     let modified = 0;
+    // Only count blocks that would actually render a row — empty layout
+    // wrappers and spacer paragraphs are filtered out in buildRows, and
+    // must be filtered out here too so the stat chips match the row list.
     (diff.blocks || []).forEach((b) => {
+      if (isSemanticallyEmptyBlock(b)) return;
       if (b.type === 'removed') additions += 1;
       else if (b.type === 'added') removals += 1;
     });
@@ -501,7 +546,7 @@ function SideBySideDiffView({
       {rows.length === 0 ? (
         <div className="sbs-state">No differences to display.</div>
       ) : (
-        <div className="sbs-rows">
+        <>
           <div className="sbs-row sbs-row--headings">
             <div className="sbs-col sbs-col--controls" />
             <div className="sbs-col sbs-col--pane sbs-heading">{oldLabel}</div>
@@ -509,6 +554,7 @@ function SideBySideDiffView({
             <div className="sbs-col sbs-col--pane sbs-heading">{newLabel}</div>
           </div>
 
+          <div className="sbs-rows">
           {rows.map((row, index) => {
             const key = `${row.kind}-${row.indices.join('-')}-${index}`;
             const choice = rowChoices.get(key);
@@ -592,7 +638,8 @@ function SideBySideDiffView({
               </Row>
             );
           })}
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

@@ -183,11 +183,12 @@
   margin-bottom: 8px;
 }
 
+/* Rendered as a sibling ABOVE `.sbs-rows` (not inside it) so the labels
+   stay pinned regardless of which ancestor is the actual scroll
+   container. Horizontal padding matches `.sbs-rows` so header columns
+   line up with content columns. */
 .sbs-row--headings {
-  margin-bottom: 4px;
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  padding: 8px 16px;
   background: #ffffff;
   border-bottom: 1px solid var(--dh-border);
 }
@@ -238,7 +239,11 @@
   min-height: 40px;
   width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
+  /* `break-word` breaks only when no legal wrap point exists; `anywhere`
+     tears every character, which turned narrow-column table cells into
+     vertical stacks of single letters. */
+  overflow-wrap: break-word;
+  word-break: normal;
   background: #ffffff;
 }
 
@@ -464,4 +469,48 @@
   .sbs-col--controls {
     flex: 0 0 72px;
   }
+}
+
+/* Narrow flex columns would otherwise force `<td>` to wrap at every
+   character. `overflow-x: auto` on `.sbs-rich` scrolls wide tables inside
+   the pane; `min-width: min-content` lets the table keep its natural
+   size; the explicit cell rules undo any inherited character-level
+   `overflow-wrap: anywhere`. */
+.sbs-rich {
+  overflow-x: auto;
+}
+
+.sbs-rich table {
+  min-width: min-content;
+  table-layout: auto;
+}
+
+.sbs-rich td,
+.sbs-rich th {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* Confluence layout macros render as CSS grid with fixed column ratios
+   (e.g. 1fr 2fr 1fr for `three_with_sidebars`). Inside a ~450px SBS
+   pane those columns shrink below one word's width and `overflow-wrap`
+   degrades to per-character breaking. Match the shared
+   `@media (max-width: 760px)` rule and stack cells vertically whenever
+   a layout appears inside an SBS pane, regardless of viewport width.
+   `!important` defeats any current or future grid/flex rule the shared
+   stylesheet layers on `[data-dh-layout-section='true']`. */
+.sbs-pane [data-dh-layout-section='true'] {
+  display: block !important;
+  grid-template-columns: none !important;
+  flex-direction: column !important;
+}
+
+.sbs-pane [data-dh-layout-section='true'] > [data-dh-layout-cell='true'] {
+  width: 100% !important;
+  flex: initial !important;
+  margin-bottom: 12px;
+}
+
+.sbs-pane [data-dh-layout-section='true'] > [data-dh-layout-cell='true']:last-child {
+  margin-bottom: 0;
 }
