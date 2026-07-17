@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Timeline from './components/Timeline';
 import ComparisonPanel from './components/ComparisonPanel';
+import SideBySideDiffView from './components/SideBySideDiffView';
 import { mockData } from './mockData';
 import './styles.css';
 
@@ -31,6 +32,7 @@ function App() {
   const [usingMock, setUsingMock] = useState(false);
   const [selectedNumber, setSelectedNumber] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [viewMode, setViewMode] = useState('inline');
 
   useEffect(() => {
     let cancelled = false;
@@ -114,9 +116,19 @@ function App() {
           <h1 className="dh-title">Dynamic History</h1>
           {data && data.pageTitle ? <span className="dh-subtitle">{data.pageTitle}</span> : null}
         </div>
-        <button className="dh-close" onClick={handleClose}>
-          Close
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="dh-close"
+            onClick={() =>
+              setViewMode((mode) => (mode === 'inline' ? 'side-by-side' : 'inline'))
+            }
+          >
+            {viewMode === 'inline' ? 'Side-by-side' : 'Inline'}
+          </button>
+          <button className="dh-close" onClick={handleClose}>
+            Close
+          </button>
+        </div>
       </header>
 
       {usingMock && (
@@ -137,15 +149,28 @@ function App() {
         </aside>
 
         <main className="dh-main">
-          <ComparisonPanel
-            pageId={data ? data.pageId : null}
-            pageTitle={data ? data.pageTitle : ''}
-            baseUrl={data ? data.baseUrl : ''}
-            attachmentsByFilename={data ? data.attachmentsByFilename : {}}
-            currentVersion={currentVersion}
-            selectedVersion={selectedVersion}
-            onPageUpdated={handlePageUpdated}
-          />
+          {viewMode === 'inline' ? (
+            <ComparisonPanel
+              pageId={data ? data.pageId : null}
+              pageTitle={data ? data.pageTitle : ''}
+              baseUrl={data ? data.baseUrl : ''}
+              attachmentsByFilename={data ? data.attachmentsByFilename : {}}
+              currentVersion={currentVersion}
+              selectedVersion={selectedVersion}
+              onPageUpdated={handlePageUpdated}
+            />
+          ) : (
+            <SideBySideDiffView
+              pageId={data ? data.pageId : null}
+              pageTitle={data ? data.pageTitle : ''}
+              baseUrl={data ? data.baseUrl : ''}
+              attachmentsByFilename={data ? data.attachmentsByFilename : {}}
+              currentVersion={currentVersion}
+              selectedVersion={selectedVersion}
+              activeView={viewMode}
+              onViewChange={setViewMode}
+            />
+          )}
         </main>
       </div>
     </div>
