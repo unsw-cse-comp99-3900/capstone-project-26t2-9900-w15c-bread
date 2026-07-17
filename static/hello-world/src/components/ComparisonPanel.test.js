@@ -19,7 +19,65 @@ describe('Version Difference Notes', () => {
       { type: 'added', text: 'Draft wording' },
       { type: 'added', text: 'Draft addition' },
     ]);
-    expect(result.diff.summary).toMatchObject({ added: 2, removed: 1 });
+    expect(result.diff.summary).toMatchObject({
+      added: 2,
+      removed: 1,
+      addedBlocks: 1,
+      removedBlocks: 0,
+      modifiedBlocks: 1,
+    });
+    expect(
+      result.display.selectableRows.map((row) => row.changeKind)
+    ).toEqual(['modified', 'added']);
+    // Semantic classification is display-only. The recovery engine still
+    // receives the safe removed/added Storage representation.
+    expect(changes.map((block) => block.type)).toEqual([
+      'removed',
+      'added',
+      'added',
+    ]);
+  });
+
+  test('recognises a formatting-only replacement as modified content', () => {
+    const result = buildDraftDifferenceNotes(
+      '<p>Important text</p>',
+      '<p><strong>Important text</strong></p>'
+    );
+
+    expect(result.diff.blocks.map((block) => block.type)).toEqual([
+      'removed',
+      'added',
+    ]);
+    expect(result.diff.summary).toMatchObject({
+      addedBlocks: 0,
+      removedBlocks: 0,
+      modifiedBlocks: 1,
+    });
+    expect(result.display.selectableRows).toMatchObject([
+      { changeKind: 'modified' },
+    ]);
+  });
+
+  test('keeps independent additions and removals out of the modified count', () => {
+    const addition = buildDraftDifferenceNotes(
+      '<p>Stable</p>',
+      '<p>Stable</p><p>Draft only</p>'
+    );
+    const removal = buildDraftDifferenceNotes(
+      '<p>Stable</p><p>Current only</p>',
+      '<p>Stable</p>'
+    );
+
+    expect(addition.diff.summary).toMatchObject({
+      addedBlocks: 1,
+      removedBlocks: 0,
+      modifiedBlocks: 0,
+    });
+    expect(removal.diff.summary).toMatchObject({
+      addedBlocks: 0,
+      removedBlocks: 1,
+      modifiedBlocks: 0,
+    });
   });
 
   test('reports an oversized comparison as limited rather than equal', () => {

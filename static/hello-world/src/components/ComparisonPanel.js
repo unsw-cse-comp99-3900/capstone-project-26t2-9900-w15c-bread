@@ -173,11 +173,37 @@ function attachUnpairedSpacerItems(groups, items, pairedItemPosition) {
 function createChangeDisplayRow(items, blockChoiceKeys) {
   const indices = items.map(({ index }) => index);
   const key = blockGroupSelectionKey(indices);
+  const visibleItems = items.filter(
+    ({ block }) => !isDisplayBlankLineBlock(block)
+  );
+  const hasRemovedContent = visibleItems.some(
+    ({ block }) => block.type === 'removed'
+  );
+  const hasAddedContent = visibleItems.some(
+    ({ block }) => block.type === 'added'
+  );
+
+  // Recovery deliberately keeps replacements as one removed Storage block and
+  // one added Storage block. The notes UI can still describe that paired row
+  // as a modification without changing either raw block or the write-back
+  // contract. Blank spacer blocks attached to the pair do not affect the
+  // classification because they are implementation context, not the content
+  // that was modified.
+  const changeKind = hasRemovedContent && hasAddedContent
+    ? 'modified'
+    : hasAddedContent
+      ? 'added'
+      : hasRemovedContent
+        ? 'removed'
+        : items.some(({ block }) => block.type === 'added')
+          ? 'added'
+          : 'removed';
 
   indices.forEach((blockIndex) => blockChoiceKeys.set(blockIndex, key));
 
   return {
     type: 'change',
+    changeKind,
     key,
     blocks: items,
   };
@@ -334,6 +360,7 @@ function collectSelectableDisplayRows(rows) {
       const widthRow = row.widthChoiceKey
         ? [{
             type: 'layout_width_change',
+            changeKind: 'modified',
             key: row.widthChoiceKey,
             blocks: row.widthItems,
             layoutWidthChange: row.block.layoutWidthChange,
@@ -405,10 +432,34 @@ export function buildDraftDifferenceNotes(
     attachmentsByFilename,
     usersByAccountId
   );
+  const display = buildDiffDisplayRows(diff.blocks || []);
+  const classifiedSummary = display.selectableRows.reduce(
+    (summary, row) => {
+      if (row.changeKind === 'modified') summary.modifiedBlocks++;
+      if (row.changeKind === 'added') summary.addedBlocks++;
+      if (row.changeKind === 'removed') summary.removedBlocks++;
+      return summary;
+    },
+    {
+      addedBlocks: 0,
+      removedBlocks: 0,
+      modifiedBlocks: 0,
+    }
+  );
 
   return {
-    diff,
-    display: buildDiffDisplayRows(diff.blocks || []),
+    // Preserve the low-level addition/removal totals while replacing only the
+    // block classification counters with the semantic display-row counts.
+    // This lets the chips report a modification and still show the exact red
+    // and green units contained in that modification.
+    diff: {
+      ...diff,
+      summary: {
+        ...diff.summary,
+        ...classifiedSummary,
+      },
+    },
+    display,
   };
 }
 
@@ -717,8 +768,15 @@ function VersionDifferenceNotesRows({ rows, limited }) {
       );
     }
 
+    const changeTitle = row.changeKind === 'modified'
+      ? 'Modified content'
+      : row.changeKind === 'added'
+        ? 'Added content'
+        : 'Removed content';
+
     return (
       <div className="dh-version-notes__change" key={row.key}>
+        <div className="dh-version-notes__change-title">{changeTitle}</div>
         {getGitHubStyleDiffParts(row.blocks || []).map((part, partIndex) => (
           <div
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}

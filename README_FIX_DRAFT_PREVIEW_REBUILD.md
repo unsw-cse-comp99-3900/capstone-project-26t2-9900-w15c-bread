@@ -52,6 +52,11 @@ Current version -> 当前选择组合生成的 Draft
 页面。超大页面无法安全生成详细差异时会明确显示 limited 状态，不会错误显示为
 `No changes`。
 
+Version Difference Notes 会在展示层识别语义修改：当一个可靠配对的 Current 删除块
+和 Draft 新增块表示同一处内容替换时，该行标记为 **Modified content** 并计入
+`modified`。纯新增和纯删除仍分别计数。底层继续保留 removed/added Storage 块，
+因此 modified 识别不会改变 Draft 的恢复和写回结果。
+
 ### 3. 更清晰的差异选择界面
 
 - GitHub 风格展示删除和增加内容；
@@ -126,6 +131,7 @@ HTML `DOMParser` 不理解部分 Confluence XML 自闭合标签。解析前现�
 `utils.test.js` 和 `recoveryStorage.test.js`，覆盖：
 
 - Version Difference Notes 的比较方向和 limited 状态；
+- Version Difference Notes 的文本修改、纯格式修改和独立新增/删除分类；
 - Draft Preview 空行恢复；
 - 有序列表换行的 Diff 和精确写回；
 - 大型表格写回按钮的可见性；
@@ -138,7 +144,7 @@ HTML `DOMParser` 不理解部分 Confluence XML 自闭合标签。解析前现�
 
 ```text
 Test Suites: 4 passed, 4 total
-Tests:       131 passed, 131 total
+Tests:       133 passed, 133 total
 Production build: Compiled successfully
 ```
 
