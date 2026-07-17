@@ -631,6 +631,22 @@ export function getGitHubStyleDiffParts(blockOrBlocks) {
   ];
 }
 
+export function getChangeChoiceActionConfig(diffParts, isActive) {
+  const isTableLevelDiff = (diffParts || []).some(
+    (part) => part.type === 'table-cell-level'
+  );
+
+  return {
+    // Large tables can extend well beyond the viewport. Their write-back
+    // controls must remain discoverable above the table instead of appearing
+    // only after its final row.
+    position: isTableLevelDiff ? 'before' : 'after',
+    visible: isTableLevelDiff || isActive,
+    currentLabel: isTableLevelDiff ? 'Keep current table' : 'Keep current change',
+    oldLabel: isTableLevelDiff ? 'Restore old table' : 'Restore old content',
+  };
+}
+
 function getLayoutWrapperProps(block, useCurrent = true) {
   const renderedBoundary = useCurrent
     ? block.newFullRenderedHtml || block.fullRenderedHtml
@@ -978,6 +994,28 @@ function DiffDisplayRows({
 
     const isActive = activeBlockKey === key;
     const diffParts = getGitHubStyleDiffParts(row.blocks);
+    const actionConfig = getChangeChoiceActionConfig(diffParts, isActive);
+    const actionControls = actionConfig.visible ? (
+      <div
+        className={`dh-choice-diff-module__actions dh-choice-diff-module__actions--${actionConfig.position}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          className="dh-choice-action dh-choice-action--current"
+          onClick={() => onChoose(key, 'current')}
+          type="button"
+        >
+          {actionConfig.currentLabel}
+        </button>
+        <button
+          className="dh-choice-action"
+          onClick={() => onChoose(key, 'old')}
+          type="button"
+        >
+          {actionConfig.oldLabel}
+        </button>
+      </div>
+    ) : null;
 
     return (
       <div
@@ -999,6 +1037,8 @@ function DiffDisplayRows({
         role="button"
         tabIndex={0}
       >
+        {actionConfig.position === 'before' ? actionControls : null}
+
         {diffParts.map((part, partIndex) => (
           <div
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
@@ -1016,27 +1056,7 @@ function DiffDisplayRows({
           </div>
         ))}
 
-        {isActive ? (
-          <div
-            className="dh-choice-diff-module__actions"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              className="dh-choice-action dh-choice-action--current"
-              onClick={() => onChoose(key, 'current')}
-              type="button"
-            >
-              Keep current change
-            </button>
-            <button
-              className="dh-choice-action"
-              onClick={() => onChoose(key, 'old')}
-              type="button"
-            >
-              Restore old content
-            </button>
-          </div>
-        ) : null}
+        {actionConfig.position === 'after' ? actionControls : null}
       </div>
     );
   });

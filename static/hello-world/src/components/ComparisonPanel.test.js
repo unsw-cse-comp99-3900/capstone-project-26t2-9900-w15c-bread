@@ -3,6 +3,7 @@ import { buildRecoveryStorageHtml } from '../recoveryStorage';
 import {
   buildDiffDisplayRows,
   buildDraftDifferenceNotes,
+  getChangeChoiceActionConfig,
   getGitHubStyleDiffParts,
 } from './ComparisonPanel';
 
@@ -145,5 +146,26 @@ describe('Draft Preview ordered-list break recovery', () => {
     expect(parts[1].html).toContain('2 blank lines removed');
     expect(keptCurrent).toMatchObject({ error: '', html: currentStorage });
     expect(restoredOld).toMatchObject({ error: '', html: oldStorage });
+  });
+});
+
+describe('large table write-back controls', () => {
+  test('keeps whole-table recovery controls visible above a cell-level diff', () => {
+    const config = getChangeChoiceActionConfig(
+      [{ type: 'table-cell-level', html: '<table></table>' }],
+      false
+    );
+
+    expect(config).toEqual({
+      position: 'before',
+      visible: true,
+      currentLabel: 'Keep current table',
+      oldLabel: 'Restore old table',
+    });
+  });
+
+  test('keeps ordinary change controls collapsed until the row is active', () => {
+    expect(getChangeChoiceActionConfig([{ type: 'removed', html: '<p>Old</p>' }], false))
+      .toMatchObject({ position: 'after', visible: false });
   });
 });

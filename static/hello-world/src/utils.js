@@ -1498,6 +1498,66 @@ export function normaliseCodeMacroStorageForWriteBack(html) {
   );
 }
 
+/**
+ * Repair a legacy panel whose body paragraph was detached during an earlier
+ * recovery. Confluence renders that malformed Storage as an empty coloured
+ * panel followed by an ordinary paragraph, which is the exact visual symptom
+ * this guard prevents.
+ *
+ * The repair is deliberately narrow. It only moves the immediately following
+ * paragraph when the panel body is visually empty and the paragraph begins
+ * with the display name implied by the macro type (for example, the legacy
+ * `warning` macro is the site's Error panel). A genuine empty panel followed
+ * by unrelated prose therefore remains byte-for-byte unchanged.
+ */
+export function normaliseDetachedPanelBodiesForWriteBack(html) {
+  const storage = String(html || '');
+  const panelAndParagraphRe =
+    /(<ac:structured-macro\b[^>]*>[\s\S]*?<\/ac:structured-macro>)(\s*)(<p\b[^>]*>[\s\S]*?<\/p>)/gi;
+
+  return storage.replace(
+    panelAndParagraphRe,
+    (fullMatch, macroMarkup, spacing, paragraphMarkup) => {
+      const openingTag = /^<ac:structured-macro\b[^>]*>/i.exec(macroMarkup)?.[0] || '';
+      const macroName = extractAttr(openingTag, ['ac:name', 'name']);
+      const panelType = panelTypeFromStructuredMacroName(macroName);
+      if (!panelType) return fullMatch;
+
+      const richTextBodyMatch =
+        /(<ac:rich-text-body\b[^>]*>)([\s\S]*?)(<\/ac:rich-text-body>)/i.exec(
+          macroMarkup
+        );
+      if (!richTextBodyMatch) return fullMatch;
+
+      const existingBody = richTextBodyMatch[2];
+      const bodyDocument = new DOMParser().parseFromString(existingBody, 'text/html');
+      const bodyHasSemanticContent = Boolean(
+        bodyDocument.body.querySelector(
+          'img, table, hr, pre, blockquote, ac\\:structured-macro, ac\\:adf-extension, ac\\:image, ri\\:attachment'
+        )
+      );
+      if (bodyHasSemanticContent || getReadableHtmlText(existingBody)) {
+        return fullMatch;
+      }
+
+      const paragraphText = getReadableHtmlText(paragraphMarkup);
+      const expectedLabel = panelTypeDisplayName(panelType);
+      const expectedLead = new RegExp(
+        `^${expectedLabel.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*(?:panel|:|：)`,
+        'i'
+      );
+      if (!expectedLead.test(paragraphText)) return fullMatch;
+
+      const repairedMacro = macroMarkup.replace(
+        richTextBodyMatch[0],
+        `${richTextBodyMatch[1]}${paragraphMarkup}${richTextBodyMatch[3]}`
+      );
+
+      return `${repairedMacro}${spacing}`;
+    }
+  );
+}
+
 function codeKeywordsForLanguage(language) {
   const common = ['false', 'null', 'true'];
   const keywordMap = {

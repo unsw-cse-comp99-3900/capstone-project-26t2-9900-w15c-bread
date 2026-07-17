@@ -734,6 +734,46 @@ describe('buildRecoveryStorageHtml', () => {
     expect(result.html).toContain('ac:macro-id="second"');
   });
 
+  test('reattaches a detached Error panel paragraph before write-back', () => {
+    const detachedErrorPanel = [
+      '<ac:structured-macro ac:name="warning" ac:macro-id="error-panel">',
+      '<ac:rich-text-body></ac:rich-text-body>',
+      '</ac:structured-macro>',
+      '<p>Error Panel: Used to test changes to the error panel type and body text.</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(detachedErrorPanel, detachedErrorPanel, '', {});
+    const result = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(result.error).toBe('');
+    expect(result.html).toContain(
+      '<ac:rich-text-body><p>Error Panel: Used to test changes to the error panel type and body text.</p></ac:rich-text-body>'
+    );
+    expect(result.html).not.toContain(
+      '</ac:structured-macro><p>Error Panel:'
+    );
+  });
+
+  test('does not move unrelated prose into an intentionally empty panel', () => {
+    const emptyErrorPanelWithProse = [
+      '<ac:structured-macro ac:name="warning" ac:macro-id="empty-error-panel">',
+      '<ac:rich-text-body></ac:rich-text-body>',
+      '</ac:structured-macro>',
+      '<p>This paragraph intentionally follows the empty panel.</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(
+      emptyErrorPanelWithProse,
+      emptyErrorPanelWithProse,
+      '',
+      {}
+    );
+    const result = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(result.error).toBe('');
+    expect(result.html).toContain(
+      '</ac:structured-macro><p>This paragraph intentionally follows the empty panel.</p>'
+    );
+  });
+
   test('omits restored current-only unsupported macros without duplicating the old macro', () => {
     const macro = (id) =>
       `<ac:structured-macro ac:name="tasks-report-macro" ac:macro-id="${id}"></ac:structured-macro>`;

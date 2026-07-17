@@ -1,6 +1,7 @@
 import {
   getStorageNodeOuterHtml,
   normaliseCodeMacroStorageForWriteBack,
+  normaliseDetachedPanelBodiesForWriteBack,
   normaliseStorageHtmlForParsing,
 } from './utils';
 
@@ -674,7 +675,9 @@ export function buildRecoveryStorageHtml(
   }
 
   return {
-    html: normaliseCodeMacroStorageForWriteBack(storageParts.join('')),
+    html: normaliseDetachedPanelBodiesForWriteBack(
+      normaliseCodeMacroStorageForWriteBack(storageParts.join(''))
+    ),
     error: '',
   };
 }
