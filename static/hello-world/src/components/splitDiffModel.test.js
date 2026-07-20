@@ -1,0 +1,203 @@
+import {
+  buildFullDocumentSplitRows,
+  buildFullDocumentSplitRowsFromDisplay,
+  buildFullDocumentSplitStats,
+  getSplitBlockHtml,
+  getSplitRowSideHtml,
+} from './splitDiffModel';
+
+function paragraph(type, text) {
+  return {
+    type,
+    nodeType: 'paragraph',
+    tag: 'p',
+    text,
+    renderedHtml: `<p>${text}</p>`,
+    oldHtml: type === 'removed' ? `<p>${text}</p>` : '',
+    newHtml: type === 'added' ? `<p>${text}</p>` : '',
+  };
+}
+
+test('keeps unchanged context around aligned modifications', () => {
+  const modified = {
+    type: 'modified',
+    nodeType: 'paragraph',
+    tag: 'p',
+    oldText: 'Historical wording',
+    newText: 'Current wording',
+    oldRenderedHtml: '<p>Historical wording</p>',
+    newRenderedHtml: '<p>Current wording</p>',
+  };
+  const rows = buildFullDocumentSplitRows([
+    paragraph('same', 'Heading context'),
+    modified,
+    paragraph('same', 'Ending context'),
+  ]);
+
+  expect(rows.map(({ kind }) => kind)).toEqual([
+    'unchanged',
+    'modified',
+    'unchanged',
+  ]);
+  expect(rows[0]).toMatchObject({
+    historical: expect.objectContaining({ text: 'Heading context' }),
+    current: expect.objectContaining({ text: 'Heading context' }),
+  });
+  expect(rows[1]).toMatchObject({
+    key: '1',
+    indices: [1],
+    historical: modified,
+    current: modified,
+  });
+  expect(rows[2].historical.text).toBe('Ending context');
+  expect(rows[2].current.text).toBe('Ending context');
+});
+
+test('uses actual version semantics for one-sided rows and stats', () => {
+  const rows = buildFullDocumentSplitRows([
+    paragraph('removed', 'Only historical'),
+    paragraph('same', 'Anchor'),
+    paragraph('added', 'Only current'),
+  ]);
+
+  expect(rows.map(({ kind }) => kind)).toEqual([
+    'historical-only',
+    'unchanged',
+    'current-only',
+  ]);
+  expect(rows[0]).toMatchObject({ historical: expect.any(Object), current: null });
+  expect(rows[2]).toMatchObject({ historical: null, current: expect.any(Object) });
+  expect(buildFullDocumentSplitStats(rows)).toEqual({
+    additions: 1,
+    removals: 1,
+    modified: 0,
+    total: 2,
+  });
+});
+
+test('never mirrors decorated modified HTML into both source panes', () => {
+  const block = {
+    type: 'modified',
+    oldRenderedHtml: '<p>Historical</p>',
+    newRenderedHtml: '<p>Current</p>',
+    renderedHtml: '<p>Combined decoration</p>',
+  };
+
+  expect(getSplitBlockHtml(block, 'historical')).toBe('<p>Historical</p>');
+  expect(getSplitBlockHtml(block, 'current')).toBe('<p>Current</p>');
+  expect(getSplitBlockHtml({ type: 'modified', renderedHtml: '<p>Combined</p>' }, 'historical')).toBe('');
+});
+
+test('keeps layout-width changes before their unchanged content', () => {
+  const layoutWidthChange = {
+    oldWidths: ['50', '50'],
+    newWidths: ['35', '65'],
+    changedColumnIndexes: [0, 1],
+  };
+  const rows = buildFullDocumentSplitRows([
+    {
+      type: 'same',
+      isStructuralBoundary: true,
+      layoutBoundaryEdge: 'start',
+      layoutWrapperTag: 'ac:layout-section',
+      layoutWidthChange,
+      text: '',
+    },
+    paragraph('same', 'Layout content'),
+  ]);
+
+  expect(rows.map(({ kind }) => kind)).toEqual(['layout-width', 'unchanged']);
+  expect(rows[0]).toMatchObject({
+    key: 'layout-width:0',
+    indices: [0],
+    layoutWidthChange,
+  });
+  expect(buildFullDocumentSplitStats(rows).modified).toBe(1);
+});
+
+test('renders blank-line count changes as two-sided modifications', () => {
+  const blankLineChange = {
+    type: 'added',
+    nodeType: 'blank_line_change',
+    isBlankLineCountChange: true,
+    oldRenderedHtml: '<div data-side="historical">2 blank lines</div>',
+    newRenderedHtml: '<div data-side="current">5 blank lines</div>',
+    oldBlankLineCount: 2,
+    newBlankLineCount: 5,
+  };
+
+  const rows = buildFullDocumentSplitRows([blankLineChange]);
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    kind: 'modified',
+    historicalBlocks: [blankLineChange],
+    currentBlocks: [blankLineChange],
+  });
+  expect(getSplitBlockHtml(rows[0].historical, 'historical')).toContain('2 blank lines');
+  expect(getSplitBlockHtml(rows[0].current, 'current')).toContain('5 blank lines');
+  expect(buildFullDocumentSplitStats(rows)).toEqual({
+    additions: 0,
+    removals: 0,
+    modified: 1,
+    total: 1,
+  });
+});
+
+test('adds side-specific word highlights without combining source panes', () => {
+  const rows = buildFullDocumentSplitRows([
+    paragraph('removed', 'The historical wording stays'),
+    paragraph('added', 'The current wording stays'),
+  ]);
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0].kind).toBe('modified');
+
+  const historical = getSplitRowSideHtml(rows[0], 'historical');
+  const current = getSplitRowSideHtml(rows[0], 'current');
+
+  expect(historical).toContain('sbs-inline-change--historical');
+  expect(historical).toContain('>historical</span>');
+  expect(historical).not.toContain('>current</span>');
+  expect(current).toContain('sbs-inline-change--current');
+  expect(current).toContain('>current</span>');
+  expect(current).not.toContain('>historical</span>');
+});
+
+test('keeps neighbouring content when a change row also contains a blank-line transition', () => {
+  const historicalParagraph = paragraph('removed', 'Historical paragraph');
+  const blankLineChange = {
+    type: 'added',
+    nodeType: 'blank_line_change',
+    isBlankLineCountChange: true,
+    oldRenderedHtml: '<p>Two blank lines</p>',
+    newRenderedHtml: '<p>Five blank lines</p>',
+  };
+  const currentParagraph = paragraph('added', 'Current paragraph');
+
+  const rows = buildFullDocumentSplitRowsFromDisplay({
+    rows: [{
+      type: 'change',
+      key: 'mixed-change',
+      changeKind: 'modified',
+      blocks: [
+        { block: historicalParagraph, index: 0 },
+        { block: blankLineChange, index: 1 },
+        { block: currentParagraph, index: 2 },
+      ],
+    }],
+  });
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0].kind).toBe('modified');
+  expect(rows[0].historicalBlocks).toEqual([
+    historicalParagraph,
+    blankLineChange,
+  ]);
+  expect(rows[0].currentBlocks).toEqual([
+    blankLineChange,
+    currentParagraph,
+  ]);
+  expect(getSplitRowSideHtml(rows[0], 'historical')).toContain('Historical paragraph');
+  expect(getSplitRowSideHtml(rows[0], 'current')).toContain('Current paragraph');
+});

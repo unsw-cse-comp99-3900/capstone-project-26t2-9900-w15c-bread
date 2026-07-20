@@ -508,6 +508,46 @@ describe('buildRecoveryStorageHtml', () => {
     expect(result.html).not.toContain('</ri:user>');
   });
 
+  test('preserves self-closing ADF configuration without swallowing following content', () => {
+    const storage = [
+      '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>',
+      '<ac:adf-node type="extension">',
+      '<ac:adf-attribute key="parameters" />',
+      '<ac:adf-content><p>macro body</p></ac:adf-content>',
+      '</ac:adf-node>',
+      '<p>after macro</p>',
+      '</ac:layout-cell></ac:layout-section></ac:layout>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(storage, storage, '', {});
+    const recovered = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(recovered.error).toBe('');
+    expect(recovered.html).toBe(storage);
+    expect(recovered.html).toContain('<ac:adf-attribute key="parameters" />');
+    expect(recovered.html).not.toContain(
+      '<ac:adf-attribute key="parameters"><ac:adf-content>'
+    );
+  });
+
+  test('preserves self-closing macro parameters without swallowing the macro body', () => {
+    const storage = [
+      '<ac:structured-macro ac:name="example">',
+      '<ac:parameter ac:name="empty-option" />',
+      '<ac:rich-text-body><p>macro body</p></ac:rich-text-body>',
+      '</ac:structured-macro>',
+      '<p>after macro</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(storage, storage, '', {});
+    const recovered = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(recovered.error).toBe('');
+    expect(recovered.html).toBe(storage);
+    expect(recovered.html).toContain('<ac:parameter ac:name="empty-option" />');
+    expect(recovered.html).not.toContain(
+      '<ac:parameter ac:name="empty-option"><ac:rich-text-body>'
+    );
+  });
+
   test('restores HTML code CDATA without emptying the code block on the next diff', () => {
     const codeMacro = (heading) => [
       '<ac:structured-macro ac:name="code">',
@@ -692,6 +732,46 @@ describe('buildRecoveryStorageHtml', () => {
     expect((result.html.match(/<ac:structured-macro\b/g) || [])).toHaveLength(2);
     expect(result.html).toContain('ac:macro-id="first"');
     expect(result.html).toContain('ac:macro-id="second"');
+  });
+
+  test('reattaches a detached Error panel paragraph before write-back', () => {
+    const detachedErrorPanel = [
+      '<ac:structured-macro ac:name="warning" ac:macro-id="error-panel">',
+      '<ac:rich-text-body></ac:rich-text-body>',
+      '</ac:structured-macro>',
+      '<p>Error Panel: Used to test changes to the error panel type and body text.</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(detachedErrorPanel, detachedErrorPanel, '', {});
+    const result = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(result.error).toBe('');
+    expect(result.html).toContain(
+      '<ac:rich-text-body><p>Error Panel: Used to test changes to the error panel type and body text.</p></ac:rich-text-body>'
+    );
+    expect(result.html).not.toContain(
+      '</ac:structured-macro><p>Error Panel:'
+    );
+  });
+
+  test('does not move unrelated prose into an intentionally empty panel', () => {
+    const emptyErrorPanelWithProse = [
+      '<ac:structured-macro ac:name="warning" ac:macro-id="empty-error-panel">',
+      '<ac:rich-text-body></ac:rich-text-body>',
+      '</ac:structured-macro>',
+      '<p>This paragraph intentionally follows the empty panel.</p>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(
+      emptyErrorPanelWithProse,
+      emptyErrorPanelWithProse,
+      '',
+      {}
+    );
+    const result = buildRecoveryStorageHtml(diff.blocks, new Map());
+
+    expect(result.error).toBe('');
+    expect(result.html).toContain(
+      '</ac:structured-macro><p>This paragraph intentionally follows the empty panel.</p>'
+    );
   });
 
   test('omits restored current-only unsupported macros without duplicating the old macro', () => {

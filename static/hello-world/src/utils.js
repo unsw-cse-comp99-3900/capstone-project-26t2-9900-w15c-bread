@@ -51,9 +51,25 @@ export function storageToPlainText(bodyValue) {
     .trim();
 }
 
-function lookupAttachmentUrl(filename, attachmentsByFilename) {
-  if (!filename || !attachmentsByFilename) return '';
-  return attachmentsByFilename[filename] || attachmentsByFilename[filename.toLowerCase()] || '';
+function lookupAttachmentUrl(filename, attachmentsByFilename, attachmentId = '') {
+  if (!attachmentsByFilename) return '';
+
+  const normalisedFilename = String(filename || '').trim();
+  const normalisedAttachmentId = String(attachmentId || '').trim();
+
+  // Prefer a real filename because it remains stable across ordinary storage
+  // representations. UNKNOWN_ATTACHMENT is a Confluence new-editor sentinel,
+  // not an actual filename, so it must fall through to the attachment id.
+  if (normalisedFilename && normalisedFilename.toUpperCase() !== 'UNKNOWN_ATTACHMENT') {
+    const filenameUrl =
+      attachmentsByFilename[normalisedFilename] ||
+      attachmentsByFilename[normalisedFilename.toLowerCase()];
+    if (filenameUrl) return filenameUrl;
+  }
+
+  return normalisedAttachmentId
+    ? attachmentsByFilename[`id:${normalisedAttachmentId}`] || ''
+    : '';
 }
 
 function escapeHtml(value) {
@@ -152,6 +168,8 @@ const STORAGE_PARSER_EMPTY_TAG_RE = new RegExp(
     .join('|')})\\b([^>]*)\\/>`,
   'gi'
 );
+const STORAGE_SELF_CLOSING_MARKER_ATTR = 'data-dh-parser-self-closing';
+const STORAGE_NAMESPACED_SELF_CLOSING_RE = /<((?:ac|ri):[a-z0-9-]+)\b([^>]*)\/>/gi;
 
 const STORAGE_CDATA_TOKEN_RE =
   /DHCDATAPROTECTEDSTART([0-9a-f]*)DHCDATAPROTECTEDEND/gi;
@@ -210,7 +228,14 @@ function restoreProtectedStorageCdata(html) {
  * by this helper when recovery content is sent back to Confluence.
  */
 export function normaliseStorageHtmlForParsing(html) {
-  return protectStorageCdataForParsing(html).replace(
+  const protectedStorage = protectStorageCdataForParsing(html);
+  const expandedNamespacedStorage = protectedStorage.replace(
+    STORAGE_NAMESPACED_SELF_CLOSING_RE,
+    (_match, tag, attributes) =>
+      `<${tag}${attributes} ${STORAGE_SELF_CLOSING_MARKER_ATTR}="true"></${tag}>`
+  );
+
+  return expandedNamespacedStorage.replace(
     STORAGE_PARSER_EMPTY_TAG_RE,
     (_match, tag, attributes) => `<${tag}${attributes}></${tag}>`
   );
@@ -218,6 +243,7 @@ export function normaliseStorageHtmlForParsing(html) {
 
 function getNodeAttributeHtml(node) {
   return Array.from(node.attributes || [])
+    .filter((attribute) => attribute.name !== STORAGE_SELF_CLOSING_MARKER_ATTR)
     .map((attribute) => ` ${attribute.name}="${escapeHtml(attribute.value)}"`)
     .join('');
 }
@@ -236,8 +262,11 @@ export function getStorageNodeOuterHtml(node) {
   const tag = String(node.tagName || '').toLowerCase();
   const attributes = getNodeAttributeHtml(node);
   const children = Array.from(node.childNodes || []).map(getStorageNodeOuterHtml).join('');
+  const wasNamespacedSelfClosing =
+    node.getAttribute(STORAGE_SELF_CLOSING_MARKER_ATTR) === 'true';
 
   if (
+    wasNamespacedSelfClosing ||
     CONFLUENCE_EMPTY_STORAGE_TAGS.has(tag) ||
     HTML_EMPTY_STORAGE_TAGS.has(tag) ||
     (CONDITIONAL_EMPTY_ADF_STORAGE_TAGS.has(tag) && !children)
@@ -1469,6 +1498,66 @@ export function normaliseCodeMacroStorageForWriteBack(html) {
   );
 }
 
+/**
+ * Repair a legacy panel whose body paragraph was detached during an earlier
+ * recovery. Confluence renders that malformed Storage as an empty coloured
+ * panel followed by an ordinary paragraph, which is the exact visual symptom
+ * this guard prevents.
+ *
+ * The repair is deliberately narrow. It only moves the immediately following
+ * paragraph when the panel body is visually empty and the paragraph begins
+ * with the display name implied by the macro type (for example, the legacy
+ * `warning` macro is the site's Error panel). A genuine empty panel followed
+ * by unrelated prose therefore remains byte-for-byte unchanged.
+ */
+export function normaliseDetachedPanelBodiesForWriteBack(html) {
+  const storage = String(html || '');
+  const panelAndParagraphRe =
+    /(<ac:structured-macro\b[^>]*>[\s\S]*?<\/ac:structured-macro>)(\s*)(<p\b[^>]*>[\s\S]*?<\/p>)/gi;
+
+  return storage.replace(
+    panelAndParagraphRe,
+    (fullMatch, macroMarkup, spacing, paragraphMarkup) => {
+      const openingTag = /^<ac:structured-macro\b[^>]*>/i.exec(macroMarkup)?.[0] || '';
+      const macroName = extractAttr(openingTag, ['ac:name', 'name']);
+      const panelType = panelTypeFromStructuredMacroName(macroName);
+      if (!panelType) return fullMatch;
+
+      const richTextBodyMatch =
+        /(<ac:rich-text-body\b[^>]*>)([\s\S]*?)(<\/ac:rich-text-body>)/i.exec(
+          macroMarkup
+        );
+      if (!richTextBodyMatch) return fullMatch;
+
+      const existingBody = richTextBodyMatch[2];
+      const bodyDocument = new DOMParser().parseFromString(existingBody, 'text/html');
+      const bodyHasSemanticContent = Boolean(
+        bodyDocument.body.querySelector(
+          'img, table, hr, pre, blockquote, ac\\:structured-macro, ac\\:adf-extension, ac\\:image, ri\\:attachment'
+        )
+      );
+      if (bodyHasSemanticContent || getReadableHtmlText(existingBody)) {
+        return fullMatch;
+      }
+
+      const paragraphText = getReadableHtmlText(paragraphMarkup);
+      const expectedLabel = panelTypeDisplayName(panelType);
+      const expectedLead = new RegExp(
+        `^${expectedLabel.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*(?:panel|:|：)`,
+        'i'
+      );
+      if (!expectedLead.test(paragraphText)) return fullMatch;
+
+      const repairedMacro = macroMarkup.replace(
+        richTextBodyMatch[0],
+        `${richTextBodyMatch[1]}${paragraphMarkup}${richTextBodyMatch[3]}`
+      );
+
+      return `${repairedMacro}${spacing}`;
+    }
+  );
+}
+
 function codeKeywordsForLanguage(language) {
   const common = ['false', 'null', 'true'];
   const keywordMap = {
@@ -2396,6 +2485,28 @@ function expandAdfNodes(html, usersByAccountId = {}) {
   return removeAdfAttributes(expanded);
 }
 
+function preserveAdfImageAttachmentIds(html) {
+  return String(html || '').replace(/<ac:image\b[\s\S]*?<\/ac:image>/gi, (imageMarkup) => {
+    if (!/ri:filename=["']UNKNOWN_ATTACHMENT["']/i.test(imageMarkup)) {
+      return imageMarkup;
+    }
+
+    const mediaId = extractAdfAttribute(imageMarkup, ['id', 'mediaId', 'media-id']);
+    if (!mediaId || /data-dh-attachment-id=/i.test(imageMarkup)) return imageMarkup;
+
+    // ADF attributes are intentionally stripped before sanitisation. Copy only
+    // the media id onto the renderer's temporary attachment node first, so the
+    // later image pass can match it to the attachment API's `fileId` entry.
+    return imageMarkup.replace(
+      /<ri:attachment\b([^>]*?)(\/?)>/i,
+      (_tag, attributes, selfClosingSlash) =>
+        `<ri:attachment${attributes} data-dh-attachment-id="${escapeAttr(
+          mediaId
+        )}"${selfClosingSlash}>`
+    );
+  });
+}
+
 function expandKnownStructuredMacros(html) {
   return String(html || '').replace(
     /<ac:structured-macro\b[^>]*>[\s\S]*?<\/ac:structured-macro>/gi,
@@ -2770,7 +2881,7 @@ export function prepareConfluenceHtml(
           expandConfluenceTaskLists(
             expandAdfNodes(
               expandConfluenceLinks(
-                expandConfluenceCodeMacros(sourceHtml),
+                expandConfluenceCodeMacros(preserveAdfImageAttachmentIds(sourceHtml)),
                 baseUrl,
                 usersByAccountId
               ),
@@ -2804,14 +2915,28 @@ export function prepareConfluenceHtml(
       }
     )
     .replace(
-      /<ac:image[\s\S]*?<ri:attachment[^>]*(?:ri:filename|filename)=["']([^"']+)["'][^>]*>[\s\S]*?<\/ac:image>/gi,
-      (match, filename) => {
-        const url = lookupAttachmentUrl(filename, attachmentsByFilename);
+      /<ac:image\b[\s\S]*?<ri:attachment\b[^>]*>[\s\S]*?<\/ac:image>/gi,
+      (match) => {
+        const attachmentMarkup = /<ri:attachment\b[^>]*>/i.exec(match);
+        const attachmentTag = attachmentMarkup ? attachmentMarkup[0] : '';
+        const filename = extractAttr(attachmentTag, ['ri:filename', 'filename']);
+        const attachmentId =
+          extractAttr(attachmentTag, [
+            'ri:attachment-id',
+            'attachment-id',
+            'ri:content-id',
+            'content-id',
+            'data-dh-attachment-id',
+          ]) || extractAdfAttribute(match, ['id', 'mediaId', 'media-id']);
+        const url = lookupAttachmentUrl(filename, attachmentsByFilename, attachmentId);
         const imageMeta = extractImageStyle(match);
         if (url) {
           const renderedImage = renderImageFigure({
             src: url,
-            alt: extractImageAltText(match, filename),
+            alt: extractImageAltText(
+              match,
+              filename.toUpperCase() === 'UNKNOWN_ATTACHMENT' ? '' : filename
+            ),
             caption: extractImageCaption(match),
             imageStyle: imageMeta.imageStyle,
             imageWidth: imageMeta.imageWidth,
@@ -2822,8 +2947,12 @@ export function prepareConfluenceHtml(
           });
           return renderedImage;
         }
+        const unavailableLabel =
+          filename && filename.toUpperCase() !== 'UNKNOWN_ATTACHMENT'
+            ? filename
+            : 'Unavailable attachment';
         return `<figure data-dh-node-type="image"><div data-image-placeholder="true">Image attachment: ${escapeHtml(
-          filename
+          unavailableLabel
         )}</div></figure>`;
       }
     );
@@ -4401,6 +4530,164 @@ function compactBlankLineCountChanges(blocks) {
   return compacted;
 }
 
+function listBlockStorageHtml(block, side) {
+  if (side === 'old') {
+    return block.oldRawHtml || block.oldHtml || block.html || '';
+  }
+
+  return block.newRawHtml || block.newHtml || block.html || '';
+}
+
+function listBlockRenderedHtml(block, side) {
+  if (side === 'old') {
+    return block.oldRenderedHtml || block.renderedHtml || block.oldHtml || '';
+  }
+
+  return block.newRenderedHtml || block.renderedHtml || block.newHtml || '';
+}
+
+function extractOrdinaryListSequence(blocks, side) {
+  const listBlocks = blocks.filter((block) => block.nodeType === 'list');
+  if (!listBlocks.length) return null;
+
+  const sequence = [];
+  let commonTag = '';
+
+  for (const block of listBlocks) {
+    const doc = new DOMParser().parseFromString(
+      normaliseStorageHtmlForParsing(listBlockStorageHtml(block, side)),
+      'text/html'
+    );
+    const list = doc.body.querySelector('ol, ul');
+    if (!list) return null;
+
+    const tag = list.tagName.toLowerCase();
+    if (commonTag && commonTag !== tag) return null;
+    commonTag = tag;
+
+    const items = Array.from(list.children).filter((child) => /^li$/i.test(child.tagName));
+    let ordinal = tag === 'ol' ? Number(list.getAttribute('start') || 1) : 0;
+    if (tag === 'ol' && !Number.isFinite(ordinal)) ordinal = 1;
+
+    items.forEach((item) => {
+      const explicitValue = tag === 'ol' ? Number(item.getAttribute('value')) : Number.NaN;
+      if (Number.isFinite(explicitValue)) ordinal = explicitValue;
+
+      // Include the effective ordered-list number in the identity. This keeps
+      // a genuine renumbering visible while allowing several correctly
+      // continued <ol start="…"> fragments to align with one merged list.
+      sequence.push(
+        `${tag}:${tag === 'ol' ? ordinal : ''}:${canonicalDomSignature(item)}`
+      );
+      if (tag === 'ol') ordinal++;
+    });
+  }
+
+  return { tag: commonTag, sequence };
+}
+
+function changeRunBlankLineCount(blocks) {
+  return blocks
+    .filter((block) => isBlankDiffResultBlock(block))
+    .reduce((count, block) => count + (block.blankLineCount || 1), 0);
+}
+
+function compactListBreakChangeRun(changeRun) {
+  if (!changeRun.length || changeRun.some((block) => !['removed', 'added'].includes(block.type))) {
+    return null;
+  }
+
+  const supportedNodeTypes = new Set(['list', 'blank_line_run', 'paragraph']);
+  if (
+    changeRun.some(
+      (block) =>
+        !supportedNodeTypes.has(block.nodeType) ||
+        (block.nodeType === 'paragraph' && !isBlankDiffResultBlock(block))
+    )
+  ) {
+    return null;
+  }
+
+  const oldBlocks = changeRun.filter((block) => block.type === 'removed');
+  const currentBlocks = changeRun.filter((block) => block.type === 'added');
+  const oldLists = extractOrdinaryListSequence(oldBlocks, 'old');
+  const currentLists = extractOrdinaryListSequence(currentBlocks, 'current');
+  if (!oldLists || !currentLists || oldLists.tag !== currentLists.tag) return null;
+  if (
+    oldLists.sequence.length !== currentLists.sequence.length ||
+    oldLists.sequence.some((item, index) => item !== currentLists.sequence[index])
+  ) {
+    return null;
+  }
+
+  const oldBlankLineCount = changeRunBlankLineCount(oldBlocks);
+  const newBlankLineCount = changeRunBlankLineCount(currentBlocks);
+  const blankLineDelta = newBlankLineCount - oldBlankLineCount;
+  if (!blankLineDelta) return null;
+
+  const oldStorage = oldBlocks.map((block) => listBlockStorageHtml(block, 'old')).join('');
+  const newStorage = currentBlocks
+    .map((block) => listBlockStorageHtml(block, 'current'))
+    .join('');
+  const oldRenderedHtml = oldBlocks
+    .map((block) => listBlockRenderedHtml(block, 'old'))
+    .join('');
+  const newRenderedHtml = currentBlocks
+    .map((block) => listBlockRenderedHtml(block, 'current'))
+    .join('');
+  const blankLineCount = Math.abs(blankLineDelta);
+  const changeType = blankLineDelta > 0 ? 'added' : 'removed';
+  const noun = blankLineCount === 1 ? 'blank line' : 'blank lines';
+
+  return {
+    type: 'modified',
+    tag: oldLists.tag,
+    nodeType: 'list_break_change',
+    text: currentLists.sequence.join('|'),
+    oldText: oldLists.sequence.join('|'),
+    newText: currentLists.sequence.join('|'),
+    oldHtml: oldStorage,
+    newHtml: newStorage,
+    oldRawHtml: oldStorage,
+    newRawHtml: newStorage,
+    oldRenderedHtml,
+    newRenderedHtml,
+    renderedHtml: `<div class="dh-blank-line-run-summary">${blankLineCount} ${noun} ${changeType}</div>`,
+    isListBreakChange: true,
+    oldBlankLineCount,
+    newBlankLineCount,
+    blankLineCount,
+    blankLineDelta,
+    added: blankLineDelta > 0 ? blankLineCount : 0,
+    removed: blankLineDelta < 0 ? blankLineCount : 0,
+    limited: false,
+  };
+}
+
+function compactListBreakChanges(blocks) {
+  const compacted = [];
+  let index = 0;
+
+  while (index < blocks.length) {
+    if (!blocks[index] || !['removed', 'added'].includes(blocks[index].type)) {
+      compacted.push(blocks[index]);
+      index++;
+      continue;
+    }
+
+    let end = index;
+    while (end < blocks.length && ['removed', 'added'].includes(blocks[end].type)) end++;
+    const changeRun = blocks.slice(index, end);
+    const listBreakChange = compactListBreakChangeRun(changeRun);
+
+    if (listBreakChange) compacted.push(listBreakChange);
+    else compacted.push(...changeRun);
+    index = end;
+  }
+
+  return compacted;
+}
+
 function buildDiffResult(blocks, summaryOverrides = {}) {
   const summary = createDiffSummary(summaryOverrides);
 
@@ -4744,6 +5031,8 @@ function buildCodeBlockDiff(oldBlock, currentBlock) {
     newText: currentBlock.text,
     oldHtml: oldBlock.html,
     newHtml: currentBlock.html,
+    oldRenderedHtml: oldBlock.renderedHtml || oldBlock.html,
+    newRenderedHtml: currentBlock.renderedHtml || currentBlock.html,
     renderedHtml: renderCodeDiffLines(
       lineDiff.segments,
       extractAttr(currentBlock.renderedHtml || currentBlock.html || '', ['data-language'])
@@ -5563,6 +5852,8 @@ function buildSideBySideTableDiff(oldBlock, currentBlock, oldRows, currentRows) 
     newText: currentBlock.text,
     oldHtml: oldBlock.html,
     newHtml: currentBlock.html,
+    oldRenderedHtml: oldBlock.renderedHtml || oldBlock.html,
+    newRenderedHtml: currentBlock.renderedHtml || currentBlock.html,
     renderedHtml: [
       '<div class="dh-table-diff-pair">',
       '<div class="dh-table-diff-panel dh-table-diff-panel--removed">',
@@ -5818,10 +6109,10 @@ export function buildRichTextDiffHtml(
     j++;
   }
 
-  return buildDiffResult(
-    compactBlankLineCountChanges(decorateTableReplacementBlocks(blocks)),
-    { limited }
-  );
+  const decoratedBlocks = decorateTableReplacementBlocks(blocks);
+  const compactedBlankLines = compactBlankLineCountChanges(decoratedBlocks);
+
+  return buildDiffResult(compactListBreakChanges(compactedBlankLines), { limited });
 }
 
 export function countWords(text) {

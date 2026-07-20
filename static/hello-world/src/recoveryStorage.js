@@ -1,8 +1,10 @@
 import {
   getStorageNodeOuterHtml,
   normaliseCodeMacroStorageForWriteBack,
+  normaliseDetachedPanelBodiesForWriteBack,
   normaliseStorageHtmlForParsing,
 } from './utils';
+import { blockSelectionKey } from './diffDisplay';
 
 const UNSUPPORTED_MISSING_RAW_ERROR =
   'Recovered content is missing raw Confluence storage for an unsupported block, so write-back is disabled to avoid data loss.';
@@ -10,10 +12,6 @@ const MISSING_STORAGE_ERROR =
   'Recovered content is missing Confluence storage for one or more blocks, so write-back is disabled to avoid data loss.';
 const UNSUPPORTED_PLACEHOLDER_STORAGE_RE =
   /data-dh-node-type=["']unsupported["']|Unsupported Confluence block/i;
-
-function blockSelectionKey(index) {
-  return String(index);
-}
 
 function getBlockChoice(index, blockChoices, blockChoiceKeys) {
   const key = blockChoiceKeys.get(index) || blockSelectionKey(index);
@@ -674,7 +672,9 @@ export function buildRecoveryStorageHtml(
   }
 
   return {
-    html: normaliseCodeMacroStorageForWriteBack(storageParts.join('')),
+    html: normaliseDetachedPanelBodiesForWriteBack(
+      normaliseCodeMacroStorageForWriteBack(storageParts.join(''))
+    ),
     error: '',
   };
 }
