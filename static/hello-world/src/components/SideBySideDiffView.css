@@ -1,0 +1,452 @@
+/* Full-document split diff. The minimum-width canvas deliberately keeps
+   both sources visible; narrow containers scroll horizontally like an IDE. */
+
+.sbs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* --- Empty / loading / error states --- */
+.sbs-state {
+  padding: 24px 20px;
+  color: var(--dh-subtle);
+  font-size: 14px;
+  overflow: auto;
+}
+
+.sbs-banner {
+  padding: 8px 20px;
+  background: var(--dh-yellow);
+  color: #974f0c;
+  font-size: 13px;
+  border-bottom: 1px solid #ffe380;
+}
+
+.sbs-empty {
+  color: #97a0af;
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* --- Page header (version chips, meta, stats) --- */
+.sbs-header {
+  padding: 8px 12px;
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 8px 14px;
+  border-bottom: 1px solid #f0f1f3;
+}
+
+.sbs-vchips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.sbs-vchip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: #f4f5f7;
+  color: var(--dh-text);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.sbs-vchip--current {
+  background: var(--dh-green-soft);
+  color: #006644;
+}
+
+.sbs-vs {
+  color: var(--dh-subtle);
+  font-size: 12px;
+}
+
+.sbs-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--dh-subtle);
+}
+
+.sbs-meta > span:not(:last-child)::after {
+  content: '·';
+  color: #c1c7d0;
+  margin-left: 8px;
+}
+
+.sbs-stats {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.sbs-stat {
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.sbs-stat--added {
+  color: #006644;
+  background: var(--dh-green-soft);
+  border-color: #b3f5ce;
+}
+
+.sbs-stat--deleted {
+  color: #bf2600;
+  background: var(--dh-red-soft);
+  border-color: #ffbdad;
+}
+
+.sbs-stat--modified {
+  color: #974f0c;
+  background: var(--dh-yellow);
+  border-color: #ffe380;
+}
+
+.sbs-stat--total {
+  color: var(--dh-text);
+  background: #f4f5f7;
+  border-color: var(--dh-border);
+}
+
+/* --- Full-document split canvas --- */
+.sbs-document-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  border-top: 1px solid var(--dh-border);
+}
+
+.sbs-document-canvas {
+  min-width: 1040px;
+}
+
+.sbs-rows {
+  padding: 8px 10px 20px;
+}
+
+.sbs-row {
+  display: grid;
+  grid-template-columns: minmax(460px, var(--sbs-left-fr, 1fr)) 44px minmax(460px, var(--sbs-right-fr, 1fr));
+  align-items: stretch;
+  margin-bottom: 6px;
+}
+
+.sbs-row--headings {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  padding: 6px 10px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--dh-border);
+  margin-bottom: 0;
+}
+
+.sbs-heading {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dh-subtle);
+}
+
+.sbs-pane-column {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+/* --- Pane: the colored block that carries pill + body together --- */
+.sbs-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  min-height: 40px;
+  width: 100%;
+  min-width: 0;
+  /* `break-word` breaks only when no legal wrap point exists; `anywhere`
+     tears every character, which turned narrow-column table cells into
+     vertical stacks of single letters. */
+  overflow-wrap: break-word;
+  word-break: normal;
+  background: #ffffff;
+}
+
+.sbs-pane--same {
+  background: #ffffff;
+  border-color: #f0f1f3;
+}
+
+.sbs-pane--added {
+  background: var(--dh-green-soft);
+  border-color: #b3f5ce;
+}
+
+.sbs-pane--deleted {
+  background: var(--dh-red-soft);
+  border-color: #ffbdad;
+}
+
+.sbs-pane--modified {
+  background: var(--dh-yellow);
+  border-color: #ffe380;
+}
+
+.sbs-pane--boundary {
+  background: #f4f5f7;
+  border-color: transparent;
+  padding: 6px 12px;
+  color: var(--dh-subtle);
+  font-size: 12px;
+}
+
+.sbs-pane--placeholder {
+  background: #fafbfc;
+  border: 1px dashed #dfe1e6;
+  color: #97a0af;
+  font-size: 13px;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.sbs-placeholder-text {
+  font-style: italic;
+}
+
+/* --- Status pill inside a pane --- */
+.sbs-pill {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.2px;
+}
+
+.sbs-pill--added {
+  color: #006644;
+  background: #abf5d1;
+}
+
+.sbs-pill--deleted {
+  color: #bf2600;
+  background: #ffbdad;
+}
+
+.sbs-pill--modified {
+  color: #974f0c;
+  background: #ffe380;
+}
+
+/* --- Body: wraps the rich content, allowed to grow with content --- */
+.sbs-pane__body {
+  width: 100%;
+  min-width: 0;
+}
+
+.sbs-pane__body > *:first-child {
+  margin-top: 0;
+}
+.sbs-pane__body > *:last-child {
+  margin-bottom: 0;
+}
+
+.sbs-inline-change {
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.sbs-inline-change--historical {
+  background: #ffbdad;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.sbs-inline-change--current {
+  background: #abf5d1;
+}
+
+/* `.dh-rich-page` (shared, styles.css) applies 24/28px padding meant for
+   the full-page canvas. When reused inside a compact pane the padding
+   fights the pane's own padding and pushes the body outside the colored
+   area. Zero it out locally without touching the shared file. */
+.sbs-pane__body .dh-rich-page,
+.sbs-pane__body > .dh-rich-page,
+.sbs-rich {
+  padding: 0;
+}
+
+/* --- VS Code-style center divider and merge actions --- */
+.sbs-divider {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 48px;
+}
+
+.sbs-divider::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  left: 50%;
+  width: 1px;
+  background: #dfe1e6;
+}
+
+.sbs-divider--heading::before {
+  top: -8px;
+  bottom: -8px;
+}
+
+.sbs-split-handle {
+  position: relative;
+  z-index: 2;
+  width: 14px;
+  height: 32px;
+  border: 1px solid #b3bac5;
+  border-radius: 7px;
+  background: #ffffff;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sbs-split-handle::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 6px;
+  width: 1px;
+  background: #7a869a;
+}
+
+.sbs-split-handle:hover,
+.sbs-split-handle:focus-visible {
+  border-color: var(--dh-blue);
+  box-shadow: 0 0 0 2px var(--dh-blue-soft);
+  outline: none;
+}
+
+.sbs-merge-arrow,
+.sbs-merge-undo {
+  position: relative;
+  z-index: 1;
+  appearance: none;
+  border: 1px solid #b3bac5;
+  background: #ffffff;
+  color: #42526e;
+  cursor: pointer;
+}
+
+.sbs-merge-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border-radius: 4px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.sbs-merge-arrow:hover {
+  border-color: var(--dh-blue);
+  color: var(--dh-blue);
+  background: #deebff;
+}
+
+.sbs-merge-arrow--active {
+  border-color: var(--dh-blue);
+  background: var(--dh-blue);
+  color: #ffffff;
+}
+
+.sbs-merge-undo {
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.sbs-divider--inert::after {
+  content: '';
+  position: relative;
+  z-index: 1;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #c1c7d0;
+}
+
+@media (max-width: 1180px) {
+  .sbs-header {
+    grid-template-columns: auto 1fr;
+  }
+
+  .sbs-stats {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Narrow flex columns would otherwise force `<td>` to wrap at every
+   character. `overflow-x: auto` on `.sbs-rich` scrolls wide tables inside
+   the pane; `min-width: min-content` lets the table keep its natural
+   size; the explicit cell rules undo any inherited character-level
+   `overflow-wrap: anywhere`. */
+.sbs-rich {
+  overflow-x: auto;
+}
+
+.sbs-rich table {
+  min-width: min-content;
+  table-layout: auto;
+}
+
+.sbs-rich td,
+.sbs-rich th {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* Confluence layout macros render as CSS grid with fixed column ratios
+   (e.g. 1fr 2fr 1fr for `three_with_sidebars`). Inside a ~450px SBS
+   pane those columns shrink below one word's width and `overflow-wrap`
+   degrades to per-character breaking. Match the shared
+   `@media (max-width: 760px)` rule and stack cells vertically whenever
+   a layout appears inside an SBS pane, regardless of viewport width.
+   `!important` defeats any current or future grid/flex rule the shared
+   stylesheet layers on `[data-dh-layout-section='true']`. */
+.sbs-pane [data-dh-layout-section='true'] {
+  display: block !important;
+  grid-template-columns: none !important;
+  flex-direction: column !important;
+}
+
+.sbs-pane [data-dh-layout-section='true'] > [data-dh-layout-cell='true'] {
+  width: 100% !important;
+  flex: initial !important;
+  margin-bottom: 12px;
+}
+
+.sbs-pane [data-dh-layout-section='true'] > [data-dh-layout-cell='true']:last-child {
+  margin-bottom: 0;
+}

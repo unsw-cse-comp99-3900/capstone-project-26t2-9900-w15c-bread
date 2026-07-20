@@ -1,447 +1,51 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   buildRichTextDiffHtml,
   countWords,
   extractMentionAccountIds,
   formatDateTime,
-  isBlankParagraphBlock,
   prepareConfluenceHtml,
   storageToPlainText,
 } from '../utils';
-import { buildRecoveryStorageHtml } from '../recoveryStorage';
+import {
+  buildCanonicalDiffSummary,
+  buildDiffDisplayRows,
+  isDisplayBlankLineBlock,
+} from '../diffDisplay';
+import useRecoveryWorkflow, {
+  getBlockRenderedPreviewHtml,
+} from '../useRecoveryWorkflow';
+import RecoveryPreviewModal from './RecoveryPreviewModal';
+import {
+  blankLineRunSummaryHtml,
+  buildDraftDifferenceNotes,
+  formatLayoutWidthVector,
+  getDiffBlockHtml,
+  getGitHubStyleDiffParts,
+} from './recoveryDiffDisplay';
 
-const CHANGE_BLOCK_TYPES = new Set(['added', 'removed', 'modified']);
+export { buildDiffDisplayRows } from '../diffDisplay';
+export { buildRecoveryPreviewHtml } from '../useRecoveryWorkflow';
+export {
+  buildDraftDifferenceNotes,
+  getGitHubStyleDiffParts,
+  RecoveryPreviewModal,
+};
 
-function blockSelectionKey(index) {
-  // Sprint 1 uses the diff block index as the selection id. Keep this isolated
-  // so a later stable block id can replace it without touching the UI logic.
-  return String(index);
-}
-
-function blockGroupSelectionKey(indices) {
-  return indices.map((index) => blockSelectionKey(index)).join(':');
-}
-
-function canShareChoice(removedBlock, addedBlock) {
-  if (!removedBlock || !addedBlock) return false;
-  if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
-
-  // The diff engine intentionally emits changed content as two simple result
-  // blocks: the old block is removed and the new block is added. When those two
-  // adjacent blocks occupy the same semantic role, the UI should treat them as
-  // one recovery decision while still preserving the underlying result model.
-  return (
-    removedBlock.nodeType === addedBlock.nodeType &&
-    removedBlock.tag === addedBlock.tag
+export function getChangeChoiceActionConfig(diffParts, isActive) {
+  const isTableLevelDiff = (diffParts || []).some(
+    (part) => part.type === 'table-cell-level'
   );
-}
-
-function createChangeDisplayRow(items, blockChoiceKeys) {
-  const indices = items.map(({ index }) => index);
-  const key = blockGroupSelectionKey(indices);
-
-  indices.forEach((blockIndex) => blockChoiceKeys.set(blockIndex, key));
 
   return {
-    type: 'change',
-    key,
-    blocks: items,
+    // Large tables can extend well beyond the viewport. Their write-back
+    // controls must remain discoverable above the table instead of appearing
+    // only after its final row.
+    position: isTableLevelDiff ? 'before' : 'after',
+    visible: isTableLevelDiff || isActive,
+    currentLabel: isTableLevelDiff ? 'Keep current table' : 'Keep current change',
+    oldLabel: isTableLevelDiff ? 'Restore old table' : 'Restore old content',
   };
-}
-
-function buildChangeRunRows(items, blockChoiceKeys) {
-  const blankRunGroups = [];
-  const itemsInBlankRuns = new Set();
-  let itemIndex = 0;
-
-  // Extraction normally converts a source-side run before the LCS diff runs.
-  // Keep this display-level fallback because historical Confluence Storage can
-  // still produce several distinct prepared wrappers for consecutive empty
-  // editor lines. One recovery choice must cover that whole adjacent run.
-  while (itemIndex < items.length) {
-    if (!isDisplayBlankLineBlock(items[itemIndex].block)) {
-      itemIndex++;
-      continue;
-    }
-
-    const blankRun = [];
-    while (
-      itemIndex < items.length &&
-      isDisplayBlankLineBlock(items[itemIndex].block)
-    ) {
-      blankRun.push(items[itemIndex]);
-      itemIndex++;
-    }
-
-    if (blankRun.length > 1) {
-      blankRunGroups.push(blankRun);
-      blankRun.forEach((item) => itemsInBlankRuns.add(item));
-    }
-  }
-
-  const remainingItems = items.filter((item) => !itemsInBlankRuns.has(item));
-  const removedItems = remainingItems.filter(({ block }) => block.type === 'removed');
-  const addedItems = remainingItems.filter(({ block }) => block.type === 'added');
-
-  // LCS-based diff output can represent one changed region as all removed
-  // blocks followed by all added blocks. Pair compatible old and new blocks
-  // within that region so each logical replacement has one recovery choice.
-  const unusedAddedItems = new Set(addedItems);
-  const groupedItems = removedItems.map((removedItem) => {
-    const addedItem = addedItems.find(
-      (candidate) =>
-        unusedAddedItems.has(candidate) &&
-        canShareChoice(removedItem.block, candidate.block)
-    );
-
-    if (!addedItem) return [removedItem];
-
-    unusedAddedItems.delete(addedItem);
-    return [removedItem, addedItem];
-  });
-
-  const usedItems = new Set(groupedItems.flat());
-  const displayGroups = [
-    ...blankRunGroups,
-    ...groupedItems,
-    ...remainingItems.filter((item) => !usedItems.has(item)).map((item) => [item]),
-  ];
-
-  // Sort groups by their first source position. Inside a paired group, the
-  // removed block deliberately remains before the added block.
-  return displayGroups
-    .sort((left, right) => {
-      const leftIndex = Math.min(...left.map(({ index }) => index));
-      const rightIndex = Math.min(...right.map(({ index }) => index));
-      return leftIndex - rightIndex;
-    })
-    .map((group) => createChangeDisplayRow(group, blockChoiceKeys));
-}
-
-function nestStructuralDisplayRows(rows, blockChoiceKeys) {
-  const root = [];
-  const stack = [{ children: root, wrapperTag: '' }];
-
-  rows.forEach((row) => {
-    const block = row.type === 'same' ? row.block : null;
-    if (!block || !block.isStructuralBoundary) {
-      stack[stack.length - 1].children.push(row);
-      return;
-    }
-
-    if (block.layoutBoundaryEdge === 'start') {
-      const parent = stack[stack.length - 1];
-      const widthChoiceKey = block.layoutWidthChange
-        ? `layout-width:${row.index}`
-        : '';
-      const wrapper = {
-        type: 'layout_structure',
-        key: row.key,
-        block,
-        index: row.index,
-        wrapperTag: block.layoutWrapperTag,
-        children: [],
-        layoutCellCount: 0,
-        widthChoiceKey,
-        widthItems: widthChoiceKey ? [{ block, index: row.index }] : [],
-        layoutWidthAffected: false,
-      };
-
-      if (widthChoiceKey) {
-        // The section start controls preview rendering (grid/flex mode), while
-        // the affected cell starts control the recoverable Storage widths.
-        // Giving them one key makes the complete width vector atomic.
-        blockChoiceKeys.set(row.index, widthChoiceKey);
-      }
-
-      if (
-        block.layoutWrapperTag === 'ac:layout-cell' &&
-        parent.wrapperTag === 'ac:layout-section'
-      ) {
-        const columnIndex = parent.layoutCellCount;
-        parent.layoutCellCount++;
-        wrapper.layoutWidthAffected = Boolean(
-          parent.block.layoutWidthChange &&
-          parent.block.layoutWidthChange.changedColumnIndexes.includes(columnIndex)
-        );
-
-        if (wrapper.layoutWidthAffected && parent.widthChoiceKey) {
-          parent.widthItems.push({ block, index: row.index });
-          blockChoiceKeys.set(row.index, parent.widthChoiceKey);
-        }
-      }
-
-      parent.children.push(wrapper);
-      stack.push(wrapper);
-      return;
-    }
-
-    if (
-      block.layoutBoundaryEdge === 'end' &&
-      stack.length > 1 &&
-      stack[stack.length - 1].wrapperTag === block.layoutWrapperTag
-    ) {
-      stack.pop();
-    }
-  });
-
-  return root;
-}
-
-function collectSelectableDisplayRows(rows) {
-  return rows.flatMap((row) => {
-    if (row.type === 'layout_structure') {
-      const widthRow = row.widthChoiceKey
-        ? [{
-            type: 'layout_width_change',
-            key: row.widthChoiceKey,
-            blocks: row.widthItems,
-            layoutWidthChange: row.block.layoutWidthChange,
-          }]
-        : [];
-      return [
-        ...widthRow,
-        ...collectSelectableDisplayRows(row.children || []),
-      ];
-    }
-    return row.type === 'change' ? [row] : [];
-  });
-}
-
-export function buildDiffDisplayRows(blocks) {
-  const rows = [];
-  const blockChoiceKeys = new Map();
-
-  for (let index = 0; index < (blocks || []).length; index++) {
-    const block = blocks[index];
-
-    if (!CHANGE_BLOCK_TYPES.has(block.type)) {
-      rows.push({
-        type: 'same',
-        key: blockSelectionKey(index),
-        block,
-        index,
-      });
-      continue;
-    }
-
-    const changeRun = [];
-    let runIndex = index;
-
-    while (
-      runIndex < blocks.length &&
-      CHANGE_BLOCK_TYPES.has(blocks[runIndex].type)
-    ) {
-      changeRun.push({ block: blocks[runIndex], index: runIndex });
-      runIndex++;
-    }
-
-    rows.push(...buildChangeRunRows(changeRun, blockChoiceKeys));
-    index = runIndex - 1;
-  }
-
-  const nestedRows = nestStructuralDisplayRows(rows, blockChoiceKeys);
-
-  return {
-    rows: nestedRows,
-    selectableRows: collectSelectableDisplayRows(nestedRows),
-    blockChoiceKeys,
-  };
-}
-
-function fallbackTextHtml(text) {
-  if (!text) return '';
-  const doc = new DOMParser().parseFromString('', 'text/html');
-  const paragraph = doc.createElement('p');
-  paragraph.textContent = text;
-  return paragraph.outerHTML;
-}
-
-function isBlankLineRunBlock(block) {
-  return Boolean(
-    block &&
-    (block.nodeType === 'blank_line_run' ||
-      block.nodeType === 'blank_line_change') &&
-    Number.isInteger(block.blankLineCount) &&
-    block.blankLineCount > 0
-  );
-}
-
-function isDisplayBlankLineBlock(block) {
-  return isBlankLineRunBlock(block) || isBlankParagraphBlock(block);
-}
-
-function blankLineRunSummaryHtml(block, suffix) {
-  const count = block.blankLineCount;
-  const noun = count === 1 ? 'blank line' : 'blank lines';
-  return `<div class="dh-blank-line-run-summary">${count} ${noun} ${suffix}</div>`;
-}
-
-function getBlockRenderedPreviewHtml(block, selected) {
-  if (!block) return '';
-
-  if (block.isBlankLineCountChange) {
-    return selected
-      ? block.newRenderedHtml || block.renderedHtml || ''
-      : block.oldRenderedHtml || block.renderedHtml || '';
-  }
-
-  if (block.isStructuralBoundary) {
-    return selected
-      ? block.newFullRenderedHtml || block.fullRenderedHtml || ''
-      : block.oldFullRenderedHtml || block.fullRenderedHtml || '';
-  }
-
-  if (block.type === 'same') {
-    return block.renderedHtml || block.html || '';
-  }
-
-  if (block.type === 'added') {
-    return selected ? block.renderedHtml || fallbackTextHtml(block.text) : '';
-  }
-
-  if (block.type === 'removed') {
-    return selected ? '' : block.renderedHtml || fallbackTextHtml(block.text);
-  }
-
-  if (block.type === 'modified') {
-    return selected
-      ? block.newRenderedHtml || block.renderedHtml || fallbackTextHtml(block.newText)
-      : block.oldRenderedHtml || fallbackTextHtml(block.oldText);
-  }
-
-  return block.renderedHtml || fallbackTextHtml(block.text);
-}
-
-export function buildRecoveryPreviewHtml(
-  blocks,
-  blockChoices = new Map(),
-  blockChoiceKeys = new Map()
-) {
-  return (blocks || [])
-    .map((block, index) => {
-      const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
-      const useCurrent = (blockChoices.get(choiceKey) || 'current') !== 'old';
-
-      // Preview the already-rendered Diff unit exactly once. The write-back
-      // Storage intentionally contains both an ADF Decision and its fallback;
-      // rendering that reconstructed Storage here was the post-merge change
-      // that made two Decisions appear as four in Draft Preview.
-      return getBlockRenderedPreviewHtml(block, useCurrent);
-    })
-    .join('');
-}
-
-function getDiffBlockHtml(block) {
-  return (
-    block.renderedHtml ||
-    block.newRenderedHtml ||
-    block.oldRenderedHtml ||
-    block.newHtml ||
-    block.oldHtml ||
-    block.html ||
-    fallbackTextHtml(block.newText || block.oldText || block.text)
-  );
-}
-
-function getGitHubStyleDiffParts(blockOrBlocks) {
-  if (Array.isArray(blockOrBlocks)) {
-    const tableBlocks = blockOrBlocks.map(({ block }) => block);
-    const isBlankLineRun = Boolean(
-      tableBlocks.length && tableBlocks.every(isDisplayBlankLineBlock)
-    );
-
-    if (isBlankLineRun) {
-      // The underlying block retains every original empty paragraph for exact
-      // recovery. The comparison surface intentionally summarizes the run so
-      // ten Enter presses produce one compact decision instead of ten empty
-      // red/green boxes.
-      return ['removed', 'added'].flatMap((type) => {
-        const matchingBlocks = tableBlocks.filter((block) => block.type === type);
-        if (!matchingBlocks.length) return [];
-
-        const blankLineCount = matchingBlocks.reduce(
-          (count, block) => count + (block.blankLineCount || 1),
-          0
-        );
-
-        return [{
-          type,
-          html: blankLineRunSummaryHtml(
-            { blankLineCount },
-            type === 'added' ? 'added' : 'removed'
-          ),
-        }];
-      });
-    }
-
-    const sharedTableDiff = tableBlocks[0] && tableBlocks[0].tableDiff;
-    const isCellLevelTablePair = Boolean(
-      tableBlocks.length === 2 &&
-        tableBlocks[0].type === 'removed' &&
-        tableBlocks[1].type === 'added' &&
-        tableBlocks.every((block) => block.nodeType === 'table') &&
-        sharedTableDiff &&
-        sharedTableDiff.mode === 'cell_level' &&
-        sharedTableDiff.comparisonHtml &&
-        tableBlocks[1].tableDiff === sharedTableDiff
-    );
-
-    if (isCellLevelTablePair) {
-      // Keep the underlying removed/added blocks untouched for whole-table
-      // recovery. Only the comparison surface consumes this merged table, so
-      // unchanged cells appear once while the existing selection keys still
-      // choose the complete previous or current table.
-      return [{
-        type: 'table-cell-level',
-        html: sharedTableDiff.comparisonHtml,
-      }];
-    }
-
-    return blockOrBlocks.flatMap(({ block }) => getGitHubStyleDiffParts(block));
-  }
-
-  const block = blockOrBlocks;
-
-  if (
-    block.nodeType === 'table' &&
-    block.tableDiff &&
-    block.tableDiff.mode === 'cell_level' &&
-    block.tableDiff.comparisonHtml
-  ) {
-    return [{
-      type: 'table-cell-level',
-      html: block.tableDiff.comparisonHtml,
-    }];
-  }
-
-  if (block.type === 'added') {
-    return [{
-      type: 'added',
-      html: block.renderedHtml || block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.text),
-    }];
-  }
-
-  if (block.type === 'removed') {
-    return [{
-      type: 'removed',
-      html: block.renderedHtml || block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.text),
-    }];
-  }
-
-  // Internally the diff engine still identifies a related old/new pair as a
-  // modified block. The UI deliberately presents it as GitHub-style removal
-  // and addition rows so users only need to understand "-" and "+".
-  return [
-    {
-      type: 'removed',
-      html: block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.oldText),
-    },
-    {
-      type: 'added',
-      html: block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.newText),
-    },
-  ];
 }
 
 function getLayoutWrapperProps(block, useCurrent = true) {
@@ -470,17 +74,6 @@ function getLayoutWrapperProps(block, useCurrent = true) {
   });
 
   return props;
-}
-
-function formatLayoutWidthVector(widths) {
-  const safeWidths = widths || [];
-  if (!safeWidths.length || safeWidths.every((width) => !width)) {
-    return 'Template default';
-  }
-
-  return safeWidths
-    .map((width) => (width ? `${width}%` : 'auto'))
-    .join(' / ');
 }
 
 function LayoutWidthChangeControl({
@@ -737,6 +330,28 @@ function DiffDisplayRows({
 
     const isActive = activeBlockKey === key;
     const diffParts = getGitHubStyleDiffParts(row.blocks);
+    const actionConfig = getChangeChoiceActionConfig(diffParts, isActive);
+    const actionControls = actionConfig.visible ? (
+      <div
+        className={`dh-choice-diff-module__actions dh-choice-diff-module__actions--${actionConfig.position}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          className="dh-choice-action dh-choice-action--current"
+          onClick={() => onChoose(key, 'current')}
+          type="button"
+        >
+          {actionConfig.currentLabel}
+        </button>
+        <button
+          className="dh-choice-action"
+          onClick={() => onChoose(key, 'old')}
+          type="button"
+        >
+          {actionConfig.oldLabel}
+        </button>
+      </div>
+    ) : null;
 
     return (
       <div
@@ -758,12 +373,14 @@ function DiffDisplayRows({
         role="button"
         tabIndex={0}
       >
+        {actionConfig.position === 'before' ? actionControls : null}
+
         {diffParts.map((part, partIndex) => (
           <div
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
             key={`${key}-${part.type}-${partIndex}`}
           >
-            {part.type !== 'table-cell-level' ? (
+            {!['table-cell-level', 'context'].includes(part.type) ? (
               <span className="dh-github-diff-part__marker">
                 {part.type === 'added' ? '+' : '-'}
               </span>
@@ -775,27 +392,7 @@ function DiffDisplayRows({
           </div>
         ))}
 
-        {isActive ? (
-          <div
-            className="dh-choice-diff-module__actions"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              className="dh-choice-action dh-choice-action--current"
-              onClick={() => onChoose(key, 'current')}
-              type="button"
-            >
-              Keep current change
-            </button>
-            <button
-              className="dh-choice-action"
-              onClick={() => onChoose(key, 'old')}
-              type="button"
-            >
-              Restore old content
-            </button>
-          </div>
-        ) : null}
+        {actionConfig.position === 'after' ? actionControls : null}
       </div>
     );
   });
@@ -818,7 +415,11 @@ function ComparisonPanel({
   attachmentsByFilename,
   currentVersion,
   selectedVersion,
+  recoveryChoices,
+  onPreviewActionChange,
+  onSelectableKeysChange,
   onPageUpdated,
+  onDiffSummaryChange,
 }) {
   if (!selectedVersion) {
     return (
@@ -840,7 +441,11 @@ function ComparisonPanel({
       attachmentsByFilename={attachmentsByFilename}
       currentVersion={currentVersion}
       selectedVersion={selectedVersion}
+      recoveryChoices={recoveryChoices}
+      onPreviewActionChange={onPreviewActionChange}
+      onSelectableKeysChange={onSelectableKeysChange}
       onPageUpdated={onPageUpdated}
+      onDiffSummaryChange={onDiffSummaryChange}
     />
   );
 }
@@ -852,16 +457,13 @@ function ComparisonPanelContent({
   attachmentsByFilename,
   currentVersion,
   selectedVersion,
+  recoveryChoices,
+  onPreviewActionChange,
+  onSelectableKeysChange,
   onPageUpdated,
+  onDiffSummaryChange,
 }) {
-  const [blockChoices, setBlockChoices] = useState(new Map());
   const [activeBlockKey, setActiveBlockKey] = useState(null);
-  const [draftPreview, setDraftPreview] = useState(null);
-  const [writeBack, setWriteBack] = useState({
-    status: 'idle',
-    error: '',
-    page: null,
-  });
   const [mentionUsersByAccountId, setMentionUsersByAccountId] = useState({});
 
   const currentBodyValue =
@@ -1015,72 +617,62 @@ function ComparisonPanelContent({
   );
   const selectableBlocks = diffDisplay.selectableRows;
 
+  const createVersionDifferenceNotes = useCallback((draft) => {
+    try {
+      return {
+        ...buildDraftDifferenceNotes(
+          currentBodyValue,
+          draft.storageHtml,
+          baseUrl,
+          attachmentsByFilename || {},
+          mentionUsersByAccountId
+        ),
+        error: '',
+      };
+    } catch (error) {
+      console.error('[ComparisonPanel] Failed to build version difference notes', error);
+      return {
+        diff: emptyDiff,
+        display: { rows: [], selectableRows: [], blockChoiceKeys: new Map() },
+        error: 'Version Difference Notes could not safely render this Draft.',
+      };
+    }
+  }, [
+    attachmentsByFilename,
+    baseUrl,
+    currentBodyValue,
+    emptyDiff,
+    mentionUsersByAccountId,
+  ]);
+
+  const recovery = useRecoveryWorkflow({
+    blocks: richDiff.blocks || [],
+    display: diffDisplay,
+    pageId,
+    selectedVersion,
+    currentVersion,
+    onPageUpdated,
+    createVersionDifferenceNotes,
+    recoveryChoices,
+  });
+  const {
+    blockChoices,
+    chooseBlock,
+    undoChoice,
+  } = recovery;
+
   useEffect(() => {
-    setBlockChoices(new Map());
     setActiveBlockKey(null);
-    setDraftPreview(null);
-    setWriteBack({ status: 'idle', error: '', page: null });
-  }, [selectableBlocks, selectedVersion.number, currentVersion && currentVersion.number]);
-
-  useEffect(() => {
-    if (!draftPreview) return undefined;
-
-    const handleKeyDown = (event) => {
-      if (
-        event.key === 'Escape' &&
-        writeBack.status !== 'loading'
-      ) {
-        setDraftPreview(null);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [draftPreview, writeBack.status]);
+  }, [selectedVersion.number, currentVersion && currentVersion.number]);
 
   const handleChooseBlockVersion = (key, choice) => {
-    setBlockChoices((previous) => {
-      const next = new Map(previous);
-      next.set(key, choice);
-      return next;
-    });
+    chooseBlock(key, choice);
     setActiveBlockKey(null);
   };
-
   const handleUndoBlockChoice = (key) => {
-    setBlockChoices((previous) => {
-      const next = new Map(previous);
-      next.delete(key);
-      return next;
-    });
+    undoChoice(key);
     setActiveBlockKey(null);
   };
-
-  const recoveryStorage = useMemo(
-    () =>
-      buildRecoveryStorageHtml(
-        richDiff.blocks || [],
-        blockChoices,
-        diffDisplay.blockChoiceKeys
-      ),
-    [blockChoices, diffDisplay.blockChoiceKeys, richDiff.blocks]
-  );
-  const renderedPreviewHtml = useMemo(
-    () =>
-      recoveryStorage.error
-        ? ''
-        : buildRecoveryPreviewHtml(
-            richDiff.blocks || [],
-            blockChoices,
-            diffDisplay.blockChoiceKeys
-          ),
-    [
-      blockChoices,
-      diffDisplay.blockChoiceKeys,
-      recoveryStorage.error,
-      richDiff.blocks,
-    ]
-  );
 
   const diffSummary = richDiff.summary || {
     added: richDiff.added || 0,
@@ -1091,67 +683,36 @@ function ComparisonPanelContent({
   const totalChanges = diffSummary.added + diffSummary.removed;
   const showChangeSelection = hasComparisonBase && !isCurrent && selectableBlocks.length > 0;
 
-  const handlePreviewDraft = () => {
-    const draft = {
-      selectedVersionNumber: selectedVersion.number,
-      currentVersionNumber: currentVersion ? currentVersion.number : null,
-      changeChoices: selectableBlocks.map((row) => ({
-        blockIndices: row.blocks.map(({ index }) => index),
-        choice: blockChoices.get(row.key) || 'current',
-      })),
-      previewHtml: renderedPreviewHtml,
-      storageHtml: recoveryStorage.html,
-      storageError: recoveryStorage.error,
-      createdAt: new Date().toISOString(),
-    };
+  useEffect(() => {
+    if (typeof onSelectableKeysChange !== 'function') return;
+    onSelectableKeysChange(
+      showChangeSelection ? selectableBlocks.map((row) => row.key) : []
+    );
+  }, [onSelectableKeysChange, selectableBlocks, showChangeSelection]);
 
-    setWriteBack({ status: 'idle', error: '', page: null });
-    setDraftPreview(draft);
-  };
+  useEffect(() => {
+    if (typeof onPreviewActionChange !== 'function') return undefined;
+    onPreviewActionChange(showChangeSelection ? recovery.openPreview : null);
+    return () => onPreviewActionChange(null);
+  }, [onPreviewActionChange, recovery.openPreview, showChangeSelection]);
 
-  const handleConfirmWriteBack = async () => {
-    if (
-      !draftPreview ||
-      draftPreview.storageError ||
-      writeBack.status === 'loading'
-    ) return;
+  useEffect(() => {
+    if (typeof onDiffSummaryChange !== 'function') return;
+    onDiffSummaryChange(
+      selectedVersion.number,
+      buildCanonicalDiffSummary(richDiff, diffDisplay)
+    );
+  }, [
+    diffDisplay,
+    diffSummary.added,
+    diffSummary.modifiedBlocks,
+    diffSummary.removed,
+    onDiffSummaryChange,
+    richDiff,
+    selectedVersion.number,
+  ]);
 
-    setWriteBack({ status: 'loading', error: '', page: null });
 
-    try {
-      const { invoke } = await import('@forge/bridge');
-      const updatedPage = await invoke('writeRecoveredPage', {
-        pageId,
-        bodyValue: draftPreview.storageHtml,
-        expectedVersionNumber: draftPreview.currentVersionNumber,
-      });
-
-      if (updatedPage && updatedPage.ok === false) {
-        throw new Error(
-          updatedPage.error || 'Confluence rejected the recovered page update.'
-        );
-      }
-
-      if (!updatedPage || !updatedPage.id || !updatedPage.versionNumber) {
-        throw new Error('Confluence did not return the updated page details.');
-      }
-
-      setWriteBack({ status: 'success', error: '', page: updatedPage });
-      if (typeof onPageUpdated === 'function') {
-        onPageUpdated(updatedPage);
-      }
-    } catch (error) {
-      setWriteBack({
-        status: 'error',
-        error: error && error.message
-          ? error.message
-          : 'Confluence could not write the recovered content.',
-        page: null,
-      });
-    }
-  };
-
-  const operationIsLoading = writeBack.status === 'loading';
 
   return (
     <div className="dh-compare">
@@ -1197,23 +758,6 @@ function ComparisonPanelContent({
       </div>
 
       <div className="dh-content-panel">
-        {showChangeSelection ? (
-          <div className="dh-inline-selection-toolbar">
-            <div>
-              <h2 className="dh-inline-selection-toolbar__title">Choose content versions</h2>
-              <p className="dh-inline-selection-toolbar__meta">
-                {blockChoices.size} of {selectableBlocks.length} changes decided
-              </p>
-            </div>
-
-            <div className="dh-inline-selection-toolbar__actions">
-              <button className="dh-primary-button" type="button" onClick={handlePreviewDraft}>
-                Preview Draft
-              </button>
-            </div>
-          </div>
-        ) : null}
-
         {diffSummary.limited && hasComparisonBase ? (
           <div className="dh-diff-warning">
             Some content is large, so the preview uses a safer line-level comparison where full
@@ -1249,114 +793,7 @@ function ComparisonPanelContent({
         )}
       </div>
 
-      {draftPreview ? (
-        <div
-          className="dh-draft-modal-backdrop"
-          onMouseDown={(event) => {
-            if (
-              event.target === event.currentTarget &&
-              !operationIsLoading
-            ) {
-              setDraftPreview(null);
-            }
-          }}
-        >
-          <section
-            aria-labelledby="dh-draft-preview-title"
-            aria-modal="true"
-            className="dh-draft-modal"
-            role="dialog"
-          >
-            <header className="dh-draft-modal__header">
-              <div>
-                <h2 className="dh-draft-modal__title" id="dh-draft-preview-title">
-                  Draft Preview
-                </h2>
-                <p className="dh-draft-modal__meta">
-                  v{draftPreview.selectedVersionNumber} selection to
-                  {' '}v{draftPreview.currentVersionNumber || '?'}
-                </p>
-              </div>
-              <button
-                aria-label="Close draft preview"
-                className="dh-draft-modal__close"
-                disabled={operationIsLoading}
-                onClick={() => setDraftPreview(null)}
-                type="button"
-              >
-                ×
-              </button>
-            </header>
-
-            <div className="dh-draft-modal__body">
-              {draftPreview.previewHtml ? (
-                <article className="dh-rich-page dh-rich-page--preview">
-                  <section
-                    className="dh-rendered-page-body"
-                    dangerouslySetInnerHTML={{ __html: draftPreview.previewHtml }}
-                  />
-                </article>
-              ) : (
-                <div className="dh-empty-content">
-                  No selected changes are available for the draft preview.
-                </div>
-              )}
-            </div>
-
-            <footer className="dh-draft-modal__footer">
-              <div className="dh-draft-modal__result" aria-live="polite">
-                {draftPreview.storageError ? (
-                  <span className="dh-draft-modal__result--error">
-                    {draftPreview.storageError}
-                  </span>
-                ) : null}
-                {!draftPreview.storageError &&
-                writeBack.status === 'idle'
-                  ? 'Review the result, then write it to the current page.'
-                  : null}
-                {writeBack.status === 'loading'
-                  ? 'Writing recovered content to the current page…'
-                  : null}
-                {writeBack.status === 'error' ? (
-                  <span className="dh-draft-modal__result--error">
-                    {writeBack.error}
-                  </span>
-                ) : null}
-                {writeBack.status === 'success' ? (
-                  <span className="dh-draft-modal__result--success">
-                    Current page updated to v{writeBack.page.versionNumber}.
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="dh-draft-modal__footer-actions">
-                <button
-                  disabled={operationIsLoading}
-                  type="button"
-                  onClick={() => setDraftPreview(null)}
-                >
-                  Back to changes
-                </button>
-
-                <button
-                  className="dh-write-back-button"
-                  disabled={
-                    operationIsLoading ||
-                    writeBack.status === 'success' ||
-                    Boolean(draftPreview.storageError)
-                  }
-                  onClick={handleConfirmWriteBack}
-                  type="button"
-                >
-                  {writeBack.status === 'loading'
-                    ? 'Writing…'
-                    : 'Write to Current Page'}
-                </button>
-              </div>
-            </footer>
-          </section>
-        </div>
-      ) : null}
+      <RecoveryPreviewModal workflow={recovery} />
     </div>
   );
 }
