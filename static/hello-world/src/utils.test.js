@@ -11,6 +11,21 @@ function visiblePreviewText(html) {
 }
 
 describe('buildRichTextDiffHtml replacement grouping', () => {
+  test('preserves one stable identity on both endpoints of an exact image move', () => {
+    const image = '<p><img src="https://example.com/moved.png" alt="Moved image" /></p>';
+    const result = buildRichTextDiffHtml(
+      `${image}<p>Stable anchor</p>`,
+      `<p>Stable anchor</p>${image}`,
+      '',
+      {}
+    );
+    const removed = result.blocks.find((block) => block.type === 'removed');
+    const added = result.blocks.find((block) => block.type === 'added');
+
+    expect(removed.diffIdentity).toBeTruthy();
+    expect(added.diffIdentity).toBe(removed.diffIdentity);
+  });
+
   test('represents a low-similarity paragraph replacement as removed then added blocks', () => {
     const result = buildRichTextDiffHtml(
       '<p>456456</p>',
@@ -1153,6 +1168,104 @@ describe('Sprint 2 diff classification and display requirements', () => {
     ).toHaveLength(1);
     expect(result.blocks[1].renderedHtml).toContain('data-dh-bg-color="light-green"');
   });
+
+  test('two changed table cells produce source-specific table renderings', () => {
+    const result = buildRichTextDiffHtml(
+      '<table><tbody><tr><th>Item</th><th>Value</th></tr><tr><td>A</td><td>Old one</td></tr><tr><td>B</td><td>Old two</td></tr></tbody></table>',
+      '<table><tbody><tr><th>Item</th><th>Value</th></tr><tr><td>A</td><td>New one</td></tr><tr><td>B</td><td>New two</td></tr></tbody></table>',
+      '',
+      {}
+    );
+    const tableDiff = result.blocks[0].tableDiff;
+    const inlineDoc = new DOMParser().parseFromString(tableDiff.comparisonHtml, 'text/html');
+    const historicalDoc = new DOMParser().parseFromString(
+      tableDiff.historicalComparisonHtml,
+      'text/html'
+    );
+    const currentDoc = new DOMParser().parseFromString(
+      tableDiff.currentComparisonHtml,
+      'text/html'
+    );
+
+    expect(tableDiff.mode).toBe('cell_level');
+    expect(tableDiff.changedCells).toHaveLength(2);
+    expect(inlineDoc.querySelectorAll('.dh-table-cell-diff--modified')).toHaveLength(2);
+    expect(historicalDoc.querySelectorAll('td, th')).toHaveLength(6);
+    expect(currentDoc.querySelectorAll('td, th')).toHaveLength(6);
+    expect(
+      historicalDoc.querySelectorAll('.dh-table-cell-diff--historical')
+    ).toHaveLength(2);
+    expect(currentDoc.querySelectorAll('.dh-table-cell-diff--current')).toHaveLength(2);
+    expect(historicalDoc.body.textContent).toContain('Old one');
+    expect(historicalDoc.body.textContent).toContain('Old two');
+    expect(historicalDoc.body.textContent).not.toContain('New one');
+    expect(currentDoc.body.textContent).toContain('New one');
+    expect(currentDoc.body.textContent).toContain('New two');
+    expect(currentDoc.body.textContent).not.toContain('Old one');
+  });
+
+  test('source-specific tables preserve formatting around word-level changes', () => {
+    const result = buildRichTextDiffHtml(
+      '<table><tbody><tr><td>Keep <strong>old</strong> value</td></tr></tbody></table>',
+      '<table><tbody><tr><td>Keep <strong>new</strong> value</td></tr></tbody></table>',
+      '',
+      {}
+    );
+    const tableDiff = result.blocks[0].tableDiff;
+
+    expect(tableDiff.historicalComparisonHtml).toContain(
+      '<strong><span class="sbs-inline-change sbs-inline-change--historical">old</span></strong>'
+    );
+    expect(tableDiff.currentComparisonHtml).toContain(
+      '<strong><span class="sbs-inline-change sbs-inline-change--current">new</span></strong>'
+    );
+  });
+
+  test('source-specific tables expose formatting-only cell changes', () => {
+    const result = buildRichTextDiffHtml(
+      '<table><tbody><tr><td>Keep plain value</td></tr></tbody></table>',
+      '<table><tbody><tr><td>Keep <strong>plain</strong> value</td></tr></tbody></table>',
+      '',
+      {}
+    );
+    const tableDiff = result.blocks[0].tableDiff;
+
+    expect(tableDiff.historicalComparisonHtml).toContain(
+      'Keep <span class="sbs-inline-change sbs-inline-change--historical">plain</span> value'
+    );
+    expect(tableDiff.currentComparisonHtml).toContain(
+      '<strong><span class="sbs-inline-change sbs-inline-change--current">plain</span></strong>'
+    );
+  });
+
+  test.each([
+    [
+      'added',
+      '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>',
+      'currentComparisonHtml',
+      'historicalComparisonHtml',
+      'added',
+    ],
+    [
+      'removed',
+      '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
+      'historicalComparisonHtml',
+      'currentComparisonHtml',
+      'removed',
+    ],
+  ])(
+    'a terminal row %s is marked only in the source table where it exists',
+    (_name, oldHtml, newHtml, markedSide, neutralSide, tone) => {
+      const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+      const tableDiff = result.blocks[0].tableDiff;
+
+      expect(tableDiff[markedSide]).toContain(`dh-table-structure-diff--${tone}`);
+      expect(tableDiff[neutralSide]).not.toContain('dh-table-structure-diff--added');
+      expect(tableDiff[neutralSide]).not.toContain('dh-table-structure-diff--removed');
+    }
+  );
 
   test.each([
     ['added row', '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>', '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>'],

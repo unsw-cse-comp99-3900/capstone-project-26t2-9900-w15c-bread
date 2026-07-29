@@ -41,8 +41,160 @@ test('renders the full comparison without duplicating workspace controls', () =>
   expect(html).toContain('Restore historical content');
   expect(html).toContain('title="Use Historical in Draft"');
   expect(html).toContain('title="Use Current in Draft"');
-  expect(html).toContain('sbs-pane--deleted');
-  expect(html).toContain('sbs-pane--added');
+  expect((html.match(/sbs-pane--modified/g) || [])).toHaveLength(2);
+  expect(html).not.toContain('sbs-pane--deleted');
+  expect(html).not.toContain('sbs-pane--added');
+});
+
+test('keeps a cell-level table row neutral while marking only source cells', () => {
+  const version = (number, value) => ({
+    number,
+    authorName: 'User',
+    createdAt: '2026-07-19T00:00:00.000Z',
+    body: { value },
+  });
+  const html = renderToStaticMarkup(
+    <SideBySideDiffView
+      pageId="123"
+      pageTitle="Page"
+      baseUrl=""
+      attachmentsByFilename={{}}
+      selectedVersion={version(
+        2,
+        '<table><tbody><tr><td>A</td><td>Old one</td></tr><tr><td>B</td><td>Old two</td></tr></tbody></table>'
+      )}
+      currentVersion={version(
+        3,
+        '<table><tbody><tr><td>A</td><td>New one</td></tr><tr><td>B</td><td>New two</td></tr></tbody></table>'
+      )}
+    />
+  );
+
+  expect((html.match(/sbs-pane--table/g) || [])).toHaveLength(2);
+  expect(html).not.toContain('sbs-pane--deleted');
+  expect(html).not.toContain('sbs-pane--added');
+  expect((html.match(/dh-table-cell-diff--historical/g) || [])).toHaveLength(2);
+  expect((html.match(/dh-table-cell-diff--current/g) || [])).toHaveLength(2);
+  expect(html).not.toContain('dh-table-cell-version--previous');
+  expect(html).not.toContain('dh-table-cell-version--current');
+});
+
+test('uses a frame independent from structural table shadows for changed cells', () => {
+  const css = fs.readFileSync(path.join(__dirname, 'SideBySideDiffView.css'), 'utf8');
+
+  expect(css).toMatch(
+    /\.sbs-pane--table \.dh-table-cell-diff--historical\s*\{[\s\S]*?outline:\s*2px solid var\(--dh-red\)/
+  );
+  expect(css).toMatch(
+    /\.sbs-pane--table \.dh-table-cell-diff--current\s*\{[\s\S]*?outline:\s*2px solid #36b37e/
+  );
+});
+
+test('frames and labels the selected source pane, then clears the choice', () => {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const version = (number, value) => ({
+    number,
+    authorName: 'User',
+    createdAt: '2026-07-19T00:00:00.000Z',
+    body: { value },
+  });
+
+  act(() => {
+    ReactDOM.render(
+      <SideBySideDiffView
+        pageId="123"
+        pageTitle="Page"
+        baseUrl=""
+        attachmentsByFilename={{}}
+        selectedVersion={version(2, '<p>Old text</p>')}
+        currentVersion={version(3, '<p>Current text</p>')}
+      />,
+      container
+    );
+  });
+
+  act(() => {
+    container.querySelector('[aria-label="Restore historical content"]').click();
+  });
+  expect(
+    container.querySelector('[data-split-side="historical"] .sbs-pane--selected')
+  ).not.toBeNull();
+  expect(
+    container.querySelector('[data-split-side="historical"] .sbs-selection-badge').textContent
+  ).toBe('Selected for draft');
+  expect(
+    container.querySelector('[data-split-side="current"] .sbs-pane--selected')
+  ).toBeNull();
+
+  act(() => {
+    container.querySelector('[aria-label="Keep current content"]').click();
+  });
+  expect(
+    container.querySelector('[data-split-side="current"] .sbs-pane--selected')
+  ).not.toBeNull();
+
+  act(() => {
+    container.querySelector('[aria-label="Undo content choice"]').click();
+  });
+  expect(container.querySelector('.sbs-pane--selected')).toBeNull();
+  expect(container.querySelector('.sbs-selection-badge')).toBeNull();
+
+  act(() => {
+    ReactDOM.unmountComponentAtNode(container);
+  });
+  container.remove();
+});
+
+test('renders relocated image endpoints as independent removal and addition', () => {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const version = (number, value) => ({
+    number,
+    authorName: 'User',
+    createdAt: '2026-07-19T00:00:00.000Z',
+    body: { value },
+  });
+  const image =
+    '<p><img src="https://example.com/relocated.png" alt="Relocated image" /></p>';
+
+  act(() => {
+    ReactDOM.render(
+      <SideBySideDiffView
+        pageId="123"
+        pageTitle="Page"
+        baseUrl=""
+        attachmentsByFilename={{}}
+        selectedVersion={version(7, `${image}<p>Stable anchor</p>`)}
+        currentVersion={version(9, `<p>Stable anchor</p>${image}`)}
+      />,
+      container
+    );
+  });
+
+  expect(container.textContent).not.toContain('Moved from');
+  expect(container.textContent).not.toContain('Moved to');
+  expect(container.textContent).not.toContain('1 moved');
+  expect(container.querySelectorAll('[data-move-id]')).toHaveLength(0);
+  expect(container.textContent).toContain('1 additions');
+  expect(container.textContent).toContain('1 removals');
+
+  act(() => {
+    container
+      .querySelector(
+        '[data-split-row-kind="historical-only"] [aria-label="Restore historical content"]'
+      )
+      .click();
+  });
+  expect(container.querySelectorAll('.sbs-pane--selected')).toHaveLength(1);
+  expect(consoleError).not.toHaveBeenCalled();
+
+  act(() => {
+    ReactDOM.unmountComponentAtNode(container);
+  });
+  container.remove();
+  consoleError.mockRestore();
 });
 
 test('uses the shared choice interface and reports workspace actions', () => {

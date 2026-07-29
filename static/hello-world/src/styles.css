@@ -258,35 +258,6 @@ body {
   color: var(--dh-text);
   margin: 0 0 8px;
 }
-
-.dh-comparison-error {
-  max-width: 520px;
-  margin: 48px auto;
-  padding: 20px;
-  border: 1px solid #ffbdad;
-  border-radius: 6px;
-  background: var(--dh-red-soft);
-  color: var(--dh-text);
-}
-
-.dh-comparison-error h2 {
-  margin: 0 0 8px;
-  font-size: 16px;
-}
-
-.dh-comparison-error p {
-  margin: 0 0 16px;
-  color: var(--dh-subtle);
-}
-
-.dh-comparison-error button {
-  border: 1px solid var(--dh-blue);
-  border-radius: 4px;
-  background: var(--dh-blue);
-  color: #ffffff;
-  padding: 6px 12px;
-  cursor: pointer;
-}
 .dh-main__empty-text {
   font-size: 14px;
   margin: 0;
@@ -2212,6 +2183,35 @@ body {
 
 .dh-rendered-page-body {
   display: block;
+}
+
+.dh-comparison-error {
+  max-width: 520px;
+  margin: 48px auto;
+  padding: 20px;
+  border: 1px solid #ffbdad;
+  border-radius: 6px;
+  background: var(--dh-red-soft);
+  color: var(--dh-text);
+}
+
+.dh-comparison-error h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.dh-comparison-error p {
+  margin: 0 0 16px;
+  color: var(--dh-subtle);
+}
+
+.dh-comparison-error button {
+  border: 1px solid var(--dh-blue);
+  border-radius: 4px;
+  background: var(--dh-blue);
+  color: #ffffff;
+  padding: 6px 12px;
+  cursor: pointer;
 }
 
 .dh-primary-button {

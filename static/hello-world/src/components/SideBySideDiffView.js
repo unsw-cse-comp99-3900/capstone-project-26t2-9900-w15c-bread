@@ -18,6 +18,7 @@ import {
   buildFullDocumentSplitRowsFromDisplay,
   buildFullDocumentSplitStats,
   getSplitRowSideHtml,
+  isCellLevelTableRow,
 } from './splitDiffModel';
 import './SideBySideDiffView.css';
 
@@ -51,9 +52,20 @@ function RichContent({ html }) {
   );
 }
 
-function Pane({ tone, statusLabel, html }) {
+function SelectionBadge() {
+  return <span className="sbs-selection-badge">Selected for draft</span>;
+}
+
+function Pane({ tone, statusLabel, html, selected = false, tableAware = false }) {
+  const className = [
+    'sbs-pane',
+    `sbs-pane--${tone}`,
+    tableAware ? 'sbs-pane--table' : '',
+    selected ? 'sbs-pane--selected' : '',
+  ].filter(Boolean).join(' ');
   return (
-    <div className={`sbs-pane sbs-pane--${tone}`}>
+    <div className={className}>
+      {selected ? <SelectionBadge /> : null}
       {statusLabel ? (
         <span className={`sbs-pill sbs-pill--${tone}`}>{statusLabel}</span>
       ) : null}
@@ -64,9 +76,10 @@ function Pane({ tone, statusLabel, html }) {
   );
 }
 
-function Placeholder({ text }) {
+function Placeholder({ text, selected = false }) {
   return (
-    <div className="sbs-pane sbs-pane--placeholder">
+    <div className={`sbs-pane sbs-pane--placeholder${selected ? ' sbs-pane--selected' : ''}`}>
+      {selected ? <SelectionBadge /> : null}
       <span className="sbs-placeholder-text">{text}</span>
     </div>
   );
@@ -119,7 +132,10 @@ function DividerControls({ row, choice, onChoose }) {
 
 function Row({ row, children }) {
   return (
-    <div className="sbs-row" data-split-row-kind={row.kind}>
+    <div
+      className="sbs-row"
+      data-split-row-kind={row.kind}
+    >
       {children}
     </div>
   );
@@ -471,11 +487,14 @@ function SideBySideDiffView({
 
             <div className="sbs-rows">
               {rows.map((row, index) => {
-                const key = row.key || `${row.kind}-${row.indices.join('-')}-${index}`;
-                const choice = recovery.blockChoices.get(key);
+                const choiceKey = row.key || `${row.kind}-${row.indices.join('-')}-${index}`;
+                const renderKey = choiceKey;
+                const choice = recovery.blockChoices.get(choiceKey);
+                const historicalSelected = choice === 'old';
+                const currentSelected = choice === 'current';
                 const onChoose = (next) => {
-                  if (next == null) recovery.undoChoice(key);
-                  else recovery.chooseBlock(key, next);
+                  if (next == null) recovery.undoChoice(choiceKey);
+                  else recovery.chooseBlock(choiceKey, next);
                 };
 
                 let historicalPane;
@@ -483,48 +502,75 @@ function SideBySideDiffView({
                 if (row.kind === 'layout-width') {
                   historicalPane = (
                     <Pane
-                      tone="deleted"
+                      tone="modified"
                       statusLabel="Old widths"
                       html={`<p>${formatLayoutWidthVector(row.layoutWidthChange.oldWidths)}</p>`}
+                      selected={historicalSelected}
+                    />
+                  );
+                  currentPane = (
+                    <Pane
+                      tone="modified"
+                      statusLabel="Current widths"
+                      html={`<p>${formatLayoutWidthVector(row.layoutWidthChange.newWidths)}</p>`}
+                      selected={currentSelected}
+                    />
+                  );
+                } else if (row.kind === 'historical-only') {
+                  historicalPane = (
+                    <Pane
+                      tone="deleted"
+                      statusLabel="Removed"
+                      html={getSplitRowSideHtml(row, 'historical')}
+                      selected={historicalSelected}
+                    />
+                  );
+                  currentPane = (
+                    <Placeholder
+                      text="Not present in Current"
+                      selected={currentSelected}
+                    />
+                  );
+                } else if (row.kind === 'current-only') {
+                  historicalPane = (
+                    <Placeholder
+                      text="Not present in Historical"
+                      selected={historicalSelected}
                     />
                   );
                   currentPane = (
                     <Pane
                       tone="added"
-                      statusLabel="Current widths"
-                      html={`<p>${formatLayoutWidthVector(row.layoutWidthChange.newWidths)}</p>`}
+                      statusLabel="Added"
+                      html={getSplitRowSideHtml(row, 'current')}
+                      selected={currentSelected}
                     />
-                  );
-                } else if (row.kind === 'historical-only') {
-                  historicalPane = (
-                    <Pane tone="deleted" statusLabel="Removed" html={getSplitRowSideHtml(row, 'historical')} />
-                  );
-                  currentPane = <Placeholder text="Not present in Current" />;
-                } else if (row.kind === 'current-only') {
-                  historicalPane = <Placeholder text="Not present in Historical" />;
-                  currentPane = (
-                    <Pane tone="added" statusLabel="Added" html={getSplitRowSideHtml(row, 'current')} />
                   );
                 } else {
                   const unchanged = row.kind === 'unchanged';
+                  const tableAware = isCellLevelTableRow(row);
                   historicalPane = (
                     <Pane
-                      tone={unchanged ? 'same' : 'deleted'}
+                      tone={unchanged ? 'same' : 'modified'}
                       statusLabel={unchanged ? '' : 'Modified'}
                       html={getSplitRowSideHtml(row, 'historical')}
+                      selected={historicalSelected}
+                      tableAware={tableAware}
                     />
                   );
                   currentPane = (
                     <Pane
-                      tone={unchanged ? 'same' : 'added'}
+                      tone={unchanged ? 'same' : 'modified'}
                       statusLabel={unchanged ? '' : 'Modified'}
                       html={getSplitRowSideHtml(row, 'current')}
+                      selected={currentSelected}
+                      tableAware={tableAware}
                     />
                   );
                 }
 
                 return (
-                  <Row key={key} row={row}>
+                  <Row key={renderKey} row={row}>
                     <PaneCol side="historical">{historicalPane}</PaneCol>
                     <DividerControls row={row} choice={choice} onChoose={onChoose} />
                     <PaneCol side="current">{currentPane}</PaneCol>

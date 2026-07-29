@@ -385,6 +385,24 @@ describe('Draft Preview ordered-list break recovery', () => {
 });
 
 describe('large table write-back controls', () => {
+  test('renders two changed cells inside one Inline comparison table', () => {
+    const diff = buildRichTextDiffHtml(
+      '<table><tbody><tr><td>A</td><td>Old one</td></tr><tr><td>B</td><td>Old two</td></tr></tbody></table>',
+      '<table><tbody><tr><td>A</td><td>New one</td></tr><tr><td>B</td><td>New two</td></tr></tbody></table>',
+      '',
+      {}
+    );
+    const display = buildDiffDisplayRows(diff.blocks);
+    const parts = getGitHubStyleDiffParts(display.selectableRows[0].blocks);
+    const doc = new DOMParser().parseFromString(parts[0].html, 'text/html');
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('table-cell-level');
+    expect(doc.querySelectorAll('table')).toHaveLength(1);
+    expect(doc.querySelectorAll('.dh-table-cell-diff--modified')).toHaveLength(2);
+    expect(doc.querySelectorAll('td')).toHaveLength(4);
+  });
+
   test('keeps whole-table recovery controls visible above a cell-level diff', () => {
     const config = getChangeChoiceActionConfig(
       [{ type: 'table-cell-level', html: '<table></table>' }],

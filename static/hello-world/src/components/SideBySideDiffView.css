@@ -109,9 +109,9 @@
 }
 
 .sbs-stat--modified {
-  color: #974f0c;
-  background: var(--dh-yellow);
-  border-color: #ffe380;
+  color: #42526e;
+  background: #f4f5f7;
+  border-color: #dfe1e6;
 }
 
 .sbs-stat--total {
@@ -191,6 +191,21 @@
   border-color: #f0f1f3;
 }
 
+.sbs-pane--table {
+  background: #f4f5f7;
+  border-color: #dfe1e6;
+}
+
+.sbs-pane--table .dh-table-cell-diff--historical {
+  outline: 2px solid var(--dh-red);
+  outline-offset: -2px;
+}
+
+.sbs-pane--table .dh-table-cell-diff--current {
+  outline: 2px solid #36b37e;
+  outline-offset: -2px;
+}
+
 .sbs-pane--added {
   background: var(--dh-green-soft);
   border-color: #b3f5ce;
@@ -202,8 +217,27 @@
 }
 
 .sbs-pane--modified {
-  background: var(--dh-yellow);
-  border-color: #ffe380;
+  background: #f4f5f7;
+  border-color: #dfe1e6;
+}
+
+.sbs-pane--selected {
+  position: relative;
+  z-index: 2;
+  border-color: var(--dh-blue);
+  outline: 3px solid var(--dh-blue);
+  outline-offset: -2px;
+}
+
+.sbs-selection-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #ffffff;
+  background: var(--dh-blue);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .sbs-pane--boundary {
@@ -249,8 +283,8 @@
 }
 
 .sbs-pill--modified {
-  color: #974f0c;
-  background: #ffe380;
+  color: #42526e;
+  background: #dfe1e6;
 }
 
 /* --- Body: wraps the rich content, allowed to grow with content --- */

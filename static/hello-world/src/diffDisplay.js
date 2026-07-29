@@ -77,13 +77,25 @@ function pairChangeItems(removedItems, addedItems) {
       const removedItem = removedItems[removedIndex];
       const addedItem = addedItems[addedIndex];
       if (canShareChoice(removedItem.block, addedItem.block)) {
-        const pairScore =
-          100 +
-          textPairingSimilarity(removedItem.block.text, addedItem.block.text) +
-          scores[removedIndex + 1][addedIndex + 1];
-        if (pairScore >= bestScore) {
-          bestScore = pairScore;
-          decision = 'pair';
+        const similarity = textPairingSimilarity(
+          removedItem.block.text,
+          addedItem.block.text
+        );
+        const bothEmpty =
+          !normalisePairingText(removedItem.block.text) &&
+          !normalisePairingText(addedItem.block.text);
+        const exactEmptyIdentity = Boolean(
+          bothEmpty &&
+          removedItem.block.diffIdentity &&
+          removedItem.block.diffIdentity === addedItem.block.diffIdentity
+        );
+        if (similarity >= 0.25 || exactEmptyIdentity) {
+          const pairScore =
+            1 + similarity + scores[removedIndex + 1][addedIndex + 1];
+          if (pairScore >= bestScore) {
+            bestScore = pairScore;
+            decision = 'pair';
+          }
         }
       }
       scores[removedIndex][addedIndex] = bestScore;
@@ -301,7 +313,10 @@ export function buildDiffDisplayRows(blocks) {
     }
     const changeRun = [];
     let runIndex = index;
-    while (runIndex < blocks.length && CHANGE_BLOCK_TYPES.has(blocks[runIndex].type)) {
+    while (
+      runIndex < blocks.length &&
+      CHANGE_BLOCK_TYPES.has(blocks[runIndex].type)
+    ) {
       changeRun.push({ block: blocks[runIndex], index: runIndex });
       runIndex++;
     }
