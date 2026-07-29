@@ -6,6 +6,7 @@ import {
   recoveryChoicesReducer,
   recoveryWorkflowReducer,
 } from './useRecoveryWorkflow';
+import { buildDiffDisplayRows } from './diffDisplay';
 
 describe('recovery workflow model', () => {
   test('applies one choice to every selectable change and resets the batch', () => {
@@ -106,5 +107,58 @@ describe('recovery workflow model', () => {
       type: 'modified',
       renderedHtml: '<p>decorated only</p>',
     }])).toBe('');
+  });
+
+  test('uses independent choices for relocated source and destination endpoints', () => {
+    const blocks = [
+      {
+        type: 'removed',
+        nodeType: 'paragraph',
+        tag: 'p',
+        text: 'Relocated',
+        oldHtml: '<p>Relocated</p>',
+        renderedHtml: '<p>Relocated</p>',
+        diffIdentity: 'paragraph:relocated',
+      },
+      {
+        type: 'same',
+        nodeType: 'paragraph',
+        tag: 'p',
+        text: 'Anchor',
+        html: '<p>Anchor</p>',
+        renderedHtml: '<p>Anchor</p>',
+      },
+      {
+        type: 'added',
+        nodeType: 'paragraph',
+        tag: 'p',
+        text: 'Relocated',
+        newHtml: '<p>Relocated</p>',
+        renderedHtml: '<p>Relocated</p>',
+        diffIdentity: 'paragraph:relocated',
+      },
+    ];
+    const display = buildDiffDisplayRows(blocks);
+    const removedKey = display.blockChoiceKeys.get(0);
+    const addedKey = display.blockChoiceKeys.get(2);
+
+    expect(buildRecoveryPreviewHtml(blocks, new Map(), display.blockChoiceKeys)).toBe(
+      '<p>Anchor</p><p>Relocated</p>'
+    );
+    expect(removedKey).not.toBe(addedKey);
+    expect(
+      buildRecoveryPreviewHtml(
+        blocks,
+        new Map([[removedKey, 'old']]),
+        display.blockChoiceKeys
+      )
+    ).toBe('<p>Relocated</p><p>Anchor</p><p>Relocated</p>');
+    expect(
+      buildRecoveryPreviewHtml(
+        blocks,
+        new Map([[addedKey, 'old']]),
+        display.blockChoiceKeys
+      )
+    ).toBe('<p>Anchor</p>');
   });
 });

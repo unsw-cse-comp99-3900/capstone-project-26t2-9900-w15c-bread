@@ -1,3 +1,5 @@
+import { buildRichSideBySideInlineHtml } from './richInlineDiff';
+
 // Small formatting helpers for the timeline.
 
 export function formatDateTime(iso) {
@@ -4333,6 +4335,10 @@ function extractAtomicRawStorageBlock(preparedHtml, rawHtml, storageGroup) {
 function makeAddedBlock(block) {
   return {
     type: 'added',
+    // Display alignment needs the original canonical identity to recognise a
+    // block that was moved across an unchanged anchor. `key` is intentionally
+    // not used as a recovery key; it is comparison metadata only.
+    diffIdentity: block.diffIdentity || block.key,
     tag: block.tag,
     nodeType: block.nodeType,
     text: block.text,
@@ -4359,6 +4365,7 @@ function makeAddedBlock(block) {
 function makeRemovedBlock(block) {
   return {
     type: 'removed',
+    diffIdentity: block.diffIdentity || block.key,
     tag: block.tag,
     nodeType: block.nodeType,
     text: block.text,
@@ -5464,6 +5471,52 @@ function renderChangedTableCell(cell, oldCell, currentCell) {
   ].join('');
 }
 
+function buildSourceSpecificTableComparison(
+  sourceBlock,
+  sourceCells,
+  oppositeCells,
+  structuralCells,
+  side
+) {
+  const doc = new DOMParser().parseFromString(
+    sourceBlock.renderedHtml || sourceBlock.html || '',
+    'text/html'
+  );
+  const table = doc.body.querySelector('table');
+  if (!table) return '';
+
+  table.classList.add(
+    'dh-table-diff',
+    'dh-table-diff--cell-level',
+    'dh-table-diff--source-specific'
+  );
+
+  sourceCells.forEach((sourceCell, key) => {
+    const oppositeCell = oppositeCells.get(key);
+    if (!oppositeCell || sourceCell.signature === oppositeCell.signature) return;
+
+    const cell = findRenderedTableCell(table, sourceCell);
+    if (!cell) return;
+    const historicalCell = side === 'historical' ? sourceCell : oppositeCell;
+    const currentCell = side === 'current' ? sourceCell : oppositeCell;
+    const comparison = buildRichSideBySideInlineHtml(
+      historicalCell.html,
+      currentCell.html
+    );
+    cell.innerHTML = side === 'historical'
+      ? comparison.historicalHtml
+      : comparison.currentHtml;
+    cell.classList.add('dh-table-cell-diff', `dh-table-cell-diff--${side}`);
+  });
+
+  decorateTableStructureChange(
+    table,
+    structuralCells,
+    side === 'historical' ? 'removed' : 'added'
+  );
+  return table.outerHTML;
+}
+
 function decorateTableStructureChange(table, changedCells, changeType) {
   if (!table || !changedCells.length) return;
 
@@ -5752,8 +5805,25 @@ function buildCellLevelTableComparison(oldBlock, currentBlock, compatibility) {
   decorateTableStructureChange(table, addedCells, 'added');
   decorateTableStructureChange(table, removedCells, 'removed');
 
+  const historicalComparisonHtml = buildSourceSpecificTableComparison(
+    oldBlock,
+    compatibility.oldCells,
+    compatibility.currentCells,
+    removedCells,
+    'historical'
+  );
+  const currentComparisonHtml = buildSourceSpecificTableComparison(
+    currentBlock,
+    compatibility.currentCells,
+    compatibility.oldCells,
+    addedCells,
+    'current'
+  );
+
   return {
     comparisonHtml: table.outerHTML,
+    historicalComparisonHtml,
+    currentComparisonHtml,
     changedCells,
     addedCells,
     removedCells,
@@ -5994,6 +6064,7 @@ function decorateTableReplacementBlocks(blocks) {
     }
 
     const oldComparableBlock = {
+      key: removedBlock.diffIdentity,
       tag: removedBlock.tag,
       nodeType: removedBlock.nodeType,
       text: removedBlock.text,
@@ -6005,6 +6076,7 @@ function decorateTableReplacementBlocks(blocks) {
       canInlineDiff: isTextDiffableTag(removedBlock.tag),
     };
     const currentComparableBlock = {
+      key: addedBlock.diffIdentity,
       tag: addedBlock.tag,
       nodeType: addedBlock.nodeType,
       text: addedBlock.text,

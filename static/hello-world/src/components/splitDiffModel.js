@@ -1,4 +1,5 @@
 import { buildDiffDisplayRows } from '../diffDisplay';
+import { buildRichSideBySideInlineHtml } from '../richInlineDiff';
 
 function fallbackTextHtml(text) {
   if (!text) return '';
@@ -39,84 +40,50 @@ export function getSplitBlockHtml(block, side) {
   );
 }
 
-function tokenizeInlineText(text) {
-  return (String(text || '').match(/[\u3400-\u9fff]|\s+|[A-Za-z0-9_]+|[^\s]/g) || []);
-}
-
-function buildInlineParts(oldText, currentText) {
-  const historical = tokenizeInlineText(oldText);
-  const current = tokenizeInlineText(currentText);
-  if (historical.length * current.length > 40000) return [];
-
-  const table = Array.from(
-    { length: historical.length + 1 },
-    () => Array(current.length + 1).fill(0)
-  );
-  for (let oldIndex = historical.length - 1; oldIndex >= 0; oldIndex--) {
-    for (let currentIndex = current.length - 1; currentIndex >= 0; currentIndex--) {
-      table[oldIndex][currentIndex] = historical[oldIndex] === current[currentIndex]
-        ? table[oldIndex + 1][currentIndex + 1] + 1
-        : Math.max(table[oldIndex + 1][currentIndex], table[oldIndex][currentIndex + 1]);
-    }
+function getCellLevelTableDiff(row) {
+  if (
+    !row ||
+    row.kind !== 'modified' ||
+    !Array.isArray(row.historicalBlocks) ||
+    !Array.isArray(row.currentBlocks) ||
+    row.historicalBlocks.length !== 1 ||
+    row.currentBlocks.length !== 1
+  ) {
+    return null;
   }
 
-  const parts = [];
-  const append = (type, value) => {
-    const last = parts[parts.length - 1];
-    if (last && last.type === type) last.text += value;
-    else parts.push({ type, text: value });
-  };
-  let oldIndex = 0;
-  let currentIndex = 0;
-  while (oldIndex < historical.length || currentIndex < current.length) {
-    if (
-      oldIndex < historical.length &&
-      currentIndex < current.length &&
-      historical[oldIndex] === current[currentIndex]
-    ) {
-      append('same', historical[oldIndex]);
-      oldIndex++;
-      currentIndex++;
-    } else if (
-      currentIndex >= current.length ||
-      (oldIndex < historical.length &&
-        table[oldIndex + 1][currentIndex] >= table[oldIndex][currentIndex + 1])
-    ) {
-      append('removed', historical[oldIndex]);
-      oldIndex++;
-    } else {
-      append('added', current[currentIndex]);
-      currentIndex++;
-    }
+  const historicalBlock = row.historicalBlocks[0];
+  const currentBlock = row.currentBlocks[0];
+  const tableDiff = historicalBlock && historicalBlock.tableDiff;
+  if (
+    !historicalBlock ||
+    !currentBlock ||
+    historicalBlock.nodeType !== 'table' ||
+    currentBlock.nodeType !== 'table' ||
+    !tableDiff ||
+    tableDiff.mode !== 'cell_level' ||
+    currentBlock.tableDiff !== tableDiff ||
+    !tableDiff.historicalComparisonHtml ||
+    !tableDiff.currentComparisonHtml
+  ) {
+    return null;
   }
-  return parts;
+
+  return tableDiff;
 }
 
-function decorateSimpleInlineHtml(html, expectedText, parts, side) {
-  if (!html || !parts.length) return html;
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const roots = Array.from(doc.body.children);
-  if (roots.length !== 1 || roots[0].querySelector('*')) return html;
-  if ((roots[0].textContent || '').trim() !== String(expectedText || '').trim()) return html;
-
-  const root = roots[0];
-  root.textContent = '';
-  const changedType = side === 'historical' ? 'removed' : 'added';
-  parts.forEach((part) => {
-    if (part.type !== 'same' && part.type !== changedType) return;
-    if (part.type === 'same') {
-      root.appendChild(doc.createTextNode(part.text));
-      return;
-    }
-    const highlight = doc.createElement('span');
-    highlight.className = `sbs-inline-change sbs-inline-change--${side}`;
-    highlight.textContent = part.text;
-    root.appendChild(highlight);
-  });
-  return doc.body.innerHTML;
+export function isCellLevelTableRow(row) {
+  return Boolean(getCellLevelTableDiff(row));
 }
 
 export function getSplitRowSideHtml(row, side) {
+  const tableDiff = getCellLevelTableDiff(row);
+  if (tableDiff) {
+    return side === 'historical'
+      ? tableDiff.historicalComparisonHtml
+      : tableDiff.currentComparisonHtml;
+  }
+
   const blocks = side === 'historical' ? row.historicalBlocks : row.currentBlocks;
   const baseHtml = (blocks || [])
     .map((block) => getSplitBlockHtml(block, side))
@@ -129,18 +96,10 @@ export function getSplitRowSideHtml(row, side) {
     return baseHtml;
   }
 
-  const historicalBlock = row.historicalBlocks[0];
-  const currentBlock = row.currentBlocks[0];
-  const historicalText = historicalBlock.oldText || historicalBlock.text;
-  const currentText = currentBlock.newText || currentBlock.text;
-  if (!historicalText || !currentText || historicalText === currentText) return baseHtml;
-
-  return decorateSimpleInlineHtml(
-    baseHtml,
-    side === 'historical' ? historicalText : currentText,
-    buildInlineParts(historicalText, currentText),
-    side
-  );
+  const historicalHtml = getSplitBlockHtml(row.historicalBlocks[0], 'historical');
+  const currentHtml = getSplitBlockHtml(row.currentBlocks[0], 'current');
+  const comparison = buildRichSideBySideInlineHtml(historicalHtml, currentHtml);
+  return side === 'historical' ? comparison.historicalHtml : comparison.currentHtml;
 }
 
 function createChangeRow(row) {
@@ -159,6 +118,8 @@ function createChangeRow(row) {
         block.isBlankLineCountChange || ['added', 'modified'].includes(block.type)
     )
     .map(({ block }) => block);
+  const hasRemovedContent = historicalBlocks.length > 0;
+  const hasAddedContent = currentBlocks.length > 0;
   const indices = row.blocks.map(({ index }) => index);
 
   if (hasBlankLineChange || row.changeKind === 'modified') {
@@ -173,7 +134,7 @@ function createChangeRow(row) {
     };
   }
 
-  if (row.changeKind === 'removed') {
+  if (hasRemovedContent && !hasAddedContent) {
     return {
       kind: 'historical-only',
       key: row.key,
@@ -253,5 +214,8 @@ export function buildFullDocumentSplitStats(rows) {
     },
     { additions: 0, removals: 0, modified: 0 }
   );
-  return { ...stats, total: stats.additions + stats.removals + stats.modified };
+  return {
+    ...stats,
+    total: stats.additions + stats.removals + stats.modified,
+  };
 }
