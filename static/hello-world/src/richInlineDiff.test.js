@@ -38,3 +38,69 @@ test('compares matching tables cell by cell without highlighting unchanged cells
     '#deebff'
   );
 });
+
+test('separates word additions and removals from formatting-only changes', () => {
+  const result = buildRichSideBySideInlineHtml(
+    '<p>A have do something</p>',
+    '<p>A and B do <strong>something</strong></p>'
+  );
+
+  expect(result.historicalHtml).toContain(
+    '<span class="sbs-inline-change sbs-inline-change--historical">have</span>'
+  );
+  const currentDocument = new DOMParser().parseFromString(
+    result.currentHtml,
+    'text/html'
+  );
+  expect(
+    Array.from(
+      currentDocument.querySelectorAll('.sbs-inline-change--current')
+    ).map((node) => node.textContent.trim())
+  ).toEqual(
+    expect.arrayContaining(['and', 'B'])
+  );
+  expect(result.historicalHtml).toContain(
+    '<span class="sbs-inline-change sbs-inline-change--format">something</span>'
+  );
+  expect(result.currentHtml).toContain(
+    '<strong><span class="sbs-inline-change sbs-inline-change--format">something</span></strong>'
+  );
+});
+
+test('ignores whitespace-only text changes instead of drawing highlight bars', () => {
+  const result = buildRichSideBySideInlineHtml(
+    '<p>alpha  beta</p>',
+    '<p>alpha      beta</p>'
+  );
+
+  expect(result.historicalHtml).not.toContain('sbs-inline-change');
+  expect(result.currentHtml).not.toContain('sbs-inline-change');
+});
+
+test('ignores formatting introduced by the diff highlighter itself', () => {
+  const result = buildRichSideBySideInlineHtml(
+    '<p>Stable text</p>',
+    [
+      '<p><span class="sbs-inline-change sbs-inline-change--current"',
+      ' style="background: #abf5d1">Stable text</span></p>',
+    ].join('')
+  );
+
+  expect(result.historicalHtml).not.toContain('sbs-inline-change');
+  expect(
+    (result.currentHtml.match(/sbs-inline-change--format/g) || [])
+  ).toHaveLength(0);
+});
+
+test('does not decorate a source text-highlight background-only change', () => {
+  const result = buildRichSideBySideInlineHtml(
+    '<p>Customer support workflows remain available.</p>',
+    '<p>Customer support <mark data-dh-bg-color="green">workflows</mark> remain available.</p>'
+  );
+
+  expect(result.historicalHtml).not.toContain('sbs-inline-change');
+  expect(result.currentHtml).not.toContain('sbs-inline-change');
+  expect(result.currentHtml).toContain(
+    '<mark data-dh-bg-color="green">workflows</mark>'
+  );
+});

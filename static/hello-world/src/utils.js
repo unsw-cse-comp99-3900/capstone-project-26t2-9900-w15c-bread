@@ -3232,7 +3232,17 @@ function normaliseBlockText(node) {
     node.nodeType === Node.ELEMENT_NODE &&
     (node.getAttribute('data-dh-node-type') === 'code_block' || /^pre|code$/i.test(node.tagName))
   ) {
-    return normaliseLineEndings(node.textContent || '').trimEnd();
+    const renderedLines = Array.from(
+      node.querySelectorAll('[data-dh-code-line-content="true"]')
+    ).filter((line) => line.closest('[data-dh-node-type="code_block"]') === node);
+    // Enhanced code blocks represent each visual line as a sibling span and
+    // intentionally do not place newline text nodes between them. Reading the
+    // container's textContent would therefore collapse the entire block into
+    // one line and make inserted blank lines look like changed indentation.
+    const codeText = renderedLines.length
+      ? renderedLines.map((line) => line.textContent || '').join('\n')
+      : node.textContent || '';
+    return normaliseLineEndings(codeText).trimEnd();
   }
 
   return visibleTextContent(node).replace(/\s+/g, ' ').trim();
@@ -3301,7 +3311,115 @@ function shouldIncludeSignatureAttribute(name) {
   );
 }
 
-function canonicalDomSignature(node) {
+const INLINE_TEXT_FORMAT_TAGS = new Set([
+  'a',
+  'b',
+  'code',
+  'del',
+  'em',
+  'i',
+  'mark',
+  's',
+  'span',
+  'strike',
+  'strong',
+  'sub',
+  'sup',
+  'u',
+]);
+const TEXT_HIGHLIGHT_BACKGROUND_ATTRIBUTES = new Set([
+  'bgcolor',
+  'data-background-color',
+  'data-background-colour',
+  'data-dh-bg-color',
+  'data-highlight-color',
+  'data-highlight-colour',
+]);
+
+function styleWithoutTextHighlightBackground(styleText) {
+  return String(styleText || '')
+    .split(';')
+    .map((declaration) => declaration.trim())
+    .filter(Boolean)
+    .filter((declaration) => {
+      const separatorIndex = declaration.indexOf(':');
+      if (separatorIndex === -1) return true;
+      const property = declaration.slice(0, separatorIndex).trim().toLowerCase();
+      return property !== 'background' && property !== 'background-color';
+    })
+    .join(';');
+}
+
+function elementHasTextHighlightBackground(element) {
+  if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+  const tag = String(element.tagName || '').toLowerCase();
+  if (!INLINE_TEXT_FORMAT_TAGS.has(tag)) return false;
+  if (tag === 'mark') return true;
+  if (
+    Array.from(element.attributes || []).some((attribute) =>
+      TEXT_HIGHLIGHT_BACKGROUND_ATTRIBUTES.has(attribute.name.toLowerCase())
+    )
+  ) {
+    return true;
+  }
+  return /(?:^|;)\s*background(?:-color)?\s*:/i.test(
+    element.getAttribute('style') || ''
+  );
+}
+
+function normaliseTextHighlightsForSignature(root) {
+  if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+  const elements = [root, ...Array.from(root.querySelectorAll('*'))];
+
+  elements.forEach((element) => {
+    if (!element.parentNode && element !== root) return;
+    if (!elementHasTextHighlightBackground(element)) return;
+
+    TEXT_HIGHLIGHT_BACKGROUND_ATTRIBUTES.forEach((attributeName) => {
+      element.removeAttribute(attributeName);
+    });
+    if (element.hasAttribute('style')) {
+      const remainingStyle = styleWithoutTextHighlightBackground(
+        element.getAttribute('style')
+      );
+      if (remainingStyle) element.setAttribute('style', remainingStyle);
+      else element.removeAttribute('style');
+    }
+
+    const tag = String(element.tagName || '').toLowerCase();
+    const hasRemainingSignatureAttributes = Array.from(
+      element.attributes || []
+    ).some((attribute) =>
+      shouldIncludeSignatureAttribute(attribute.name.toLowerCase())
+    );
+    if (!['mark', 'span'].includes(tag)) return;
+
+    if (hasRemainingSignatureAttributes && tag === 'mark') {
+      // A mark may also carry an independent text colour or another semantic
+      // attribute. Convert only the highlight wrapper to a neutral span so the
+      // remaining formatting still participates in the comparison.
+      const span = element.ownerDocument.createElement('span');
+      Array.from(element.attributes || []).forEach((attribute) => {
+        span.setAttribute(attribute.name, attribute.value);
+      });
+      while (element.firstChild) span.appendChild(element.firstChild);
+      element.parentNode.replaceChild(span, element);
+      return;
+    }
+    if (hasRemainingSignatureAttributes) return;
+
+    // Background-only mark/span wrappers are transparent for identity. Move
+    // their children into the parent; normalize() below merges the resulting
+    // adjacent text nodes so wrapper boundaries cannot create a false diff.
+    const parent = element.parentNode;
+    while (element.firstChild) parent.insertBefore(element.firstChild, element);
+    parent.removeChild(element);
+  });
+
+  root.normalize();
+}
+
+function canonicalDomSignatureNode(node) {
   if (!node) return '';
 
   if (node.nodeType === Node.TEXT_NODE) {
@@ -3336,13 +3454,30 @@ function canonicalDomSignature(node) {
       return;
     }
 
-    const signature = canonicalDomSignature(child);
+    const signature = canonicalDomSignatureNode(child);
     if (!signature) return;
     childParts.push(signature);
     previousWasBreak = false;
   });
 
   return `${tag}[${attrs.join('|')}](${childParts.join('|')})`;
+}
+
+function canonicalDomSignature(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+    return canonicalDomSignatureNode(node);
+  }
+
+  // Compare a clone so the rendered current-version HTML keeps its real
+  // highlight background even though that background is ignored for identity.
+  const clone = node.cloneNode(true);
+  const wrapper = node.ownerDocument.createElement('div');
+  wrapper.appendChild(clone);
+  normaliseTextHighlightsForSignature(wrapper);
+  return Array.from(wrapper.childNodes || [])
+    .map(canonicalDomSignatureNode)
+    .filter(Boolean)
+    .join('|');
 }
 
 function imageRawSignature(rawHtml) {
@@ -5002,14 +5137,23 @@ function canPairForInlineDiff(oldBlock, currentBlock) {
   return textSimilarity(oldBlock.text, currentBlock.text) >= 0.25;
 }
 
-function renderCodeDiffLines(segments, language = '') {
+function renderCodeDiffLines(segments, language = '', side = 'combined') {
+  const includedTypes = side === 'historical'
+    ? new Set(['same', 'removed'])
+    : side === 'current'
+      ? new Set(['same', 'added'])
+      : new Set(['same', 'removed', 'added']);
   const html = segments
-    .map((segment) =>
-      renderCodeBlockHtml(
-        segment.lines.join('\n'),
-        language,
-        `dh-code-diff-line dh-code-diff-line--${segment.type}`
-      )
+    .filter((segment) => includedTypes.has(segment.type))
+    .flatMap((segment) =>
+      segment.lines.map((line) => {
+        const blankClass = line.trim() ? '' : ' dh-code-diff-line--blank';
+        return renderCodeBlockHtml(
+          line,
+          language,
+          `dh-code-diff-line dh-code-diff-line--${segment.type}${blankClass}`
+        );
+      })
     )
     .join('');
 
@@ -5020,6 +5164,14 @@ function renderCodeDiffLines(segments, language = '') {
 function buildCodeBlockDiff(oldBlock, currentBlock) {
   const lineDiff = buildLineDiff(oldBlock.text, currentBlock.text);
   const inline = [];
+  const historicalLanguage = extractAttr(
+    oldBlock.renderedHtml || oldBlock.html || '',
+    ['data-language']
+  );
+  const currentLanguage = extractAttr(
+    currentBlock.renderedHtml || currentBlock.html || '',
+    ['data-language']
+  );
 
   lineDiff.segments.forEach((segment) => {
     segment.lines.forEach((line, index) => {
@@ -5042,8 +5194,20 @@ function buildCodeBlockDiff(oldBlock, currentBlock) {
     newRenderedHtml: currentBlock.renderedHtml || currentBlock.html,
     renderedHtml: renderCodeDiffLines(
       lineDiff.segments,
-      extractAttr(currentBlock.renderedHtml || currentBlock.html || '', ['data-language'])
+      currentLanguage
     ),
+    codeDiff: {
+      historicalComparisonHtml: renderCodeDiffLines(
+        lineDiff.segments,
+        historicalLanguage,
+        'historical'
+      ),
+      currentComparisonHtml: renderCodeDiffLines(
+        lineDiff.segments,
+        currentLanguage,
+        'current'
+      ),
+    },
     inline,
     added: lineDiff.added,
     removed: lineDiff.removed,
@@ -5455,6 +5619,14 @@ function renderChangedTableCell(cell, oldCell, currentCell) {
   const currentBackgroundAttr = currentCell.backgroundColor
     ? ` data-dh-bg-color="${escapeAttr(currentCell.backgroundColor)}"`
     : '';
+  // Inline tables render both versions inside one physical cell. Decorate the
+  // two values before inserting them so word additions remain green/red while
+  // unchanged text whose visual formatting changed receives the same yellow
+  // marker used by ordinary Inline content and source-specific table panes.
+  const comparison = buildRichSideBySideInlineHtml(
+    oldCell.html,
+    currentCell.html
+  );
 
   cell.classList.add('dh-table-cell-diff', 'dh-table-cell-diff--modified');
   // The outer cell comes from the current table. Move its background onto the
@@ -5463,10 +5635,10 @@ function renderChangedTableCell(cell, oldCell, currentCell) {
   cell.removeAttribute('data-dh-bg-color');
   cell.innerHTML = [
     `<div class="dh-table-cell-version dh-table-cell-version--previous"${oldBackgroundAttr}>`,
-    `<div class="dh-table-cell-version__value">${oldCell.html || '&nbsp;'}</div>`,
+    `<div class="dh-table-cell-version__value">${comparison.historicalHtml || '&nbsp;'}</div>`,
     '</div>',
     `<div class="dh-table-cell-version dh-table-cell-version--current"${currentBackgroundAttr}>`,
-    `<div class="dh-table-cell-version__value">${currentCell.html || '&nbsp;'}</div>`,
+    `<div class="dh-table-cell-version__value">${comparison.currentHtml || '&nbsp;'}</div>`,
     '</div>',
   ].join('');
 }
@@ -6051,14 +6223,26 @@ function canDecorateTableReplacement(removedBlock, addedBlock) {
   return removedBlock.nodeType === 'table' && addedBlock.nodeType === 'table';
 }
 
-function decorateTableReplacementBlocks(blocks) {
+function canDecorateCodeReplacement(removedBlock, addedBlock) {
+  if (!removedBlock || !addedBlock) return false;
+  if (removedBlock.type !== 'removed' || addedBlock.type !== 'added') return false;
+  return (
+    removedBlock.nodeType === 'code_block' &&
+    addedBlock.nodeType === 'code_block'
+  );
+}
+
+function decorateReplacementBlocks(blocks) {
   const decorated = [];
 
   for (let index = 0; index < blocks.length; index++) {
     const removedBlock = blocks[index];
     const addedBlock = blocks[index + 1];
 
-    if (!canDecorateTableReplacement(removedBlock, addedBlock)) {
+    if (
+      !canDecorateTableReplacement(removedBlock, addedBlock) &&
+      !canDecorateCodeReplacement(removedBlock, addedBlock)
+    ) {
       decorated.push(removedBlock);
       continue;
     }
@@ -6088,7 +6272,21 @@ function decorateTableReplacementBlocks(blocks) {
       canInlineDiff: isTextDiffableTag(addedBlock.tag),
     };
 
-    decorated.push(...buildTableReplacementBlocks(oldComparableBlock, currentComparableBlock));
+    if (canDecorateTableReplacement(removedBlock, addedBlock)) {
+      decorated.push(
+        ...buildTableReplacementBlocks(oldComparableBlock, currentComparableBlock)
+      );
+    } else {
+      // Keep removed/added Storage blocks intact for recovery, just as tables
+      // do, and attach a shared display-only code comparison to both sides.
+      const codeDiff = buildCodeBlockDiff(
+        oldComparableBlock,
+        currentComparableBlock
+      ).codeDiff;
+      removedBlock.codeDiff = codeDiff;
+      addedBlock.codeDiff = codeDiff;
+      decorated.push(removedBlock, addedBlock);
+    }
     index++;
   }
 
@@ -6181,7 +6379,7 @@ export function buildRichTextDiffHtml(
     j++;
   }
 
-  const decoratedBlocks = decorateTableReplacementBlocks(blocks);
+  const decoratedBlocks = decorateReplacementBlocks(blocks);
   const compactedBlankLines = compactBlankLineCountChanges(decoratedBlocks);
 
   return buildDiffResult(compactListBreakChanges(compactedBlankLines), { limited });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { buildRichTextDiffHtml } from '../utils';
 import { buildDiffDisplayRows, isDisplayBlankLineBlock } from '../diffDisplay';
+import { buildRichSideBySideInlineHtml } from '../richInlineDiff';
 
 export function buildDraftDifferenceNotes(
   currentStorage,
@@ -62,6 +63,50 @@ export function getDiffBlockHtml(block) {
   );
 }
 
+function getRemovedBlockHtml(block) {
+  return (
+    block.renderedHtml ||
+    block.oldRenderedHtml ||
+    block.oldHtml ||
+    fallbackTextHtml(block.oldText || block.text)
+  );
+}
+
+function getAddedBlockHtml(block) {
+  return (
+    block.renderedHtml ||
+    block.newRenderedHtml ||
+    block.newHtml ||
+    fallbackTextHtml(block.newText || block.text)
+  );
+}
+
+function buildPairedRichTextPartHtml(blocks) {
+  // Display rows can contain spacer blocks in addition to the actual old/new
+  // content pair. Ignore those spacers when identifying the replacement, then
+  // leave them untouched so the existing blank-line summary remains visible.
+  const visibleBlocks = blocks.filter((block) => !isDisplayBlankLineBlock(block));
+  const removedBlocks = visibleBlocks.filter((block) => block.type === 'removed');
+  const addedBlocks = visibleBlocks.filter((block) => block.type === 'added');
+  if (
+    removedBlocks.length !== 1 ||
+    addedBlocks.length !== 1 ||
+    removedBlocks[0].nodeType === 'table' ||
+    addedBlocks[0].nodeType === 'table'
+  ) {
+    return null;
+  }
+
+  const comparison = buildRichSideBySideInlineHtml(
+    getRemovedBlockHtml(removedBlocks[0]),
+    getAddedBlockHtml(addedBlocks[0])
+  );
+  return new Map([
+    [removedBlocks[0], comparison.historicalHtml],
+    [addedBlocks[0], comparison.currentHtml],
+  ]);
+}
+
 export function getGitHubStyleDiffParts(blockOrBlocks) {
   if (Array.isArray(blockOrBlocks)) {
     const tableBlocks = blockOrBlocks.map(({ block }) => block);
@@ -100,6 +145,42 @@ export function getGitHubStyleDiffParts(blockOrBlocks) {
     if (isCellLevelTablePair) {
       return [{ type: 'table-cell-level', html: sharedTableDiff.comparisonHtml }];
     }
+    const sharedCodeDiff = tableBlocks[0] && tableBlocks[0].codeDiff;
+    const isLineAwareCodePair = Boolean(
+      tableBlocks.length === 2 &&
+        tableBlocks[0].type === 'removed' &&
+        tableBlocks[1].type === 'added' &&
+        tableBlocks.every((block) => block.nodeType === 'code_block') &&
+        sharedCodeDiff &&
+        sharedCodeDiff.historicalComparisonHtml &&
+        sharedCodeDiff.currentComparisonHtml &&
+        tableBlocks[1].codeDiff === sharedCodeDiff
+    );
+    if (isLineAwareCodePair) {
+      return [
+        {
+          type: 'removed',
+          html: sharedCodeDiff.historicalComparisonHtml,
+        },
+        {
+          type: 'added',
+          html: sharedCodeDiff.currentComparisonHtml,
+        },
+      ];
+    }
+    const pairedRichTextHtml = buildPairedRichTextPartHtml(tableBlocks);
+    if (pairedRichTextHtml) {
+      // This is deliberately a presentation-only transformation. The caller
+      // still receives one removed and one added part, and recovery continues
+      // to operate on the original Storage blocks and selection keys.
+      return blockOrBlocks.flatMap(({ block }) => {
+        if (!pairedRichTextHtml.has(block)) return getGitHubStyleDiffParts(block);
+        return [{
+          type: block.type,
+          html: pairedRichTextHtml.get(block),
+        }];
+      });
+    }
     return blockOrBlocks.flatMap(({ block }) => getGitHubStyleDiffParts(block));
   }
 
@@ -126,26 +207,47 @@ export function getGitHubStyleDiffParts(blockOrBlocks) {
   ) {
     return [{ type: 'table-cell-level', html: block.tableDiff.comparisonHtml }];
   }
+  if (
+    block.nodeType === 'code_block' &&
+    block.codeDiff &&
+    block.codeDiff.historicalComparisonHtml &&
+    block.codeDiff.currentComparisonHtml
+  ) {
+    return [
+      {
+        type: 'removed',
+        html: block.codeDiff.historicalComparisonHtml,
+      },
+      {
+        type: 'added',
+        html: block.codeDiff.currentComparisonHtml,
+      },
+    ];
+  }
   if (block.type === 'added') {
     return [{
       type: 'added',
-      html: block.renderedHtml || block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.text),
+      html: getAddedBlockHtml(block),
     }];
   }
   if (block.type === 'removed') {
     return [{
       type: 'removed',
-      html: block.renderedHtml || block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.text),
+      html: getRemovedBlockHtml(block),
     }];
   }
+  const comparison = buildRichSideBySideInlineHtml(
+    block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.oldText),
+    block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.newText)
+  );
   return [
     {
       type: 'removed',
-      html: block.oldRenderedHtml || block.oldHtml || fallbackTextHtml(block.oldText),
+      html: comparison.historicalHtml,
     },
     {
       type: 'added',
-      html: block.newRenderedHtml || block.newHtml || fallbackTextHtml(block.newText),
+      html: comparison.currentHtml,
     },
   ];
 }

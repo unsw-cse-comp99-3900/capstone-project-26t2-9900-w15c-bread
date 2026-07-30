@@ -72,6 +72,36 @@ function getCellLevelTableDiff(row) {
   return tableDiff;
 }
 
+function getLineAwareCodeDiff(row) {
+  if (
+    !row ||
+    row.kind !== 'modified' ||
+    !Array.isArray(row.historicalBlocks) ||
+    !Array.isArray(row.currentBlocks) ||
+    row.historicalBlocks.length !== 1 ||
+    row.currentBlocks.length !== 1
+  ) {
+    return null;
+  }
+
+  const historicalBlock = row.historicalBlocks[0];
+  const currentBlock = row.currentBlocks[0];
+  const codeDiff = historicalBlock && historicalBlock.codeDiff;
+  if (
+    !historicalBlock ||
+    !currentBlock ||
+    historicalBlock.nodeType !== 'code_block' ||
+    currentBlock.nodeType !== 'code_block' ||
+    !codeDiff ||
+    !codeDiff.historicalComparisonHtml ||
+    !codeDiff.currentComparisonHtml
+  ) {
+    return null;
+  }
+
+  return codeDiff;
+}
+
 export function isCellLevelTableRow(row) {
   return Boolean(getCellLevelTableDiff(row));
 }
@@ -82,6 +112,16 @@ export function getSplitRowSideHtml(row, side) {
     return side === 'historical'
       ? tableDiff.historicalComparisonHtml
       : tableDiff.currentComparisonHtml;
+  }
+
+  const codeDiff = getLineAwareCodeDiff(row);
+  if (codeDiff) {
+    // Code uses line identity rather than the rich-text word tokenizer. This
+    // preserves blank-line additions without turning indentation spaces into
+    // red/green inline bars.
+    return side === 'historical'
+      ? codeDiff.historicalComparisonHtml
+      : codeDiff.currentComparisonHtml;
   }
 
   const blocks = side === 'historical' ? row.historicalBlocks : row.currentBlocks;

@@ -882,13 +882,79 @@ describe('Sprint 2 diff classification and display requirements', () => {
     ['bold', '<p>Text</p>', '<p><strong>Text</strong></p>'],
     ['italic', '<p>Text</p>', '<p><em>Text</em></p>'],
     ['text colour', '<p><span style="color: #172b4d">Text</span></p>', '<p><span style="color: #0052cc">Text</span></p>'],
-    ['text highlight', '<p><mark data-dh-bg-color="yellow">Text</mark></p>', '<p><mark data-dh-bg-color="green">Text</mark></p>'],
     ['link href', '<p><a href="https://example.com/a">Text</a></p>', '<p><a href="https://example.com/b">Text</a></p>'],
   ])('paragraph %s changes produce a block diff', (_name, oldHtml, newHtml) => {
     const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
 
     expect(result.blocks.map((block) => block.type)).toEqual(['removed', 'added']);
     expect(result.blocks.map((block) => block.nodeType)).toEqual(['paragraph', 'paragraph']);
+  });
+
+  test.each([
+    [
+      'added',
+      '<p>Customer support workflows remain available.</p>',
+      '<p>Customer support <span data-highlight-colour="LIGHT_GREEN">workflows</span> remain available.</p>',
+      'light-green',
+    ],
+    [
+      'removed',
+      '<p>Customer support <mark data-dh-bg-color="yellow">workflows</mark> remain available.</p>',
+      '<p>Customer support workflows remain available.</p>',
+      '',
+    ],
+    [
+      'changed colour',
+      '<p>Customer support <mark data-dh-bg-color="yellow">workflows</mark> remain available.</p>',
+      '<p>Customer support <mark data-dh-bg-color="green">workflows</mark> remain available.</p>',
+      'green',
+    ],
+    [
+      'changed inline background style',
+      '<p>Customer support <span style="background-color: #fff0b3">workflows</span> remain available.</p>',
+      '<p>Customer support <span style="background-color: #abf5d1">workflows</span> remain available.</p>',
+      'light-green',
+    ],
+  ])(
+    'text highlight background %s is ignored by diff classification',
+    (_name, oldHtml, newHtml, expectedCurrentHighlight) => {
+      const result = buildRichTextDiffHtml(oldHtml, newHtml, '', {});
+
+      expect(result.blocks.map((block) => block.type)).toEqual(['same']);
+      expect(result.summary).toMatchObject({
+        added: 0,
+        removed: 0,
+        addedBlocks: 0,
+        removedBlocks: 0,
+        modifiedBlocks: 0,
+        unchangedBlocks: 1,
+      });
+      if (expectedCurrentHighlight) {
+        expect(result.blocks[0].renderedHtml).toContain(
+          `data-dh-bg-color="${expectedCurrentHighlight}"`
+        );
+      }
+    }
+  );
+
+  test('text highlight background inside a table cell remains unchanged content', () => {
+    const result = buildRichTextDiffHtml(
+      '<table><tbody><tr><td>Customer support workflows</td></tr></tbody></table>',
+      '<table><tbody><tr><td>Customer support <mark data-dh-bg-color="green">workflows</mark></td></tr></tbody></table>',
+      '',
+      {}
+    );
+
+    expect(result.blocks.map((block) => block.type)).toEqual(['same']);
+    expect(result.summary).toMatchObject({
+      added: 0,
+      removed: 0,
+      modifiedBlocks: 0,
+      unchangedBlocks: 1,
+    });
+    expect(result.blocks[0].renderedHtml).toContain(
+      '<mark data-dh-bg-color="green">workflows</mark>'
+    );
   });
 
   test('equivalent inline tags and attribute ordering do not create false diffs', () => {
@@ -1231,10 +1297,10 @@ describe('Sprint 2 diff classification and display requirements', () => {
     const tableDiff = result.blocks[0].tableDiff;
 
     expect(tableDiff.historicalComparisonHtml).toContain(
-      'Keep <span class="sbs-inline-change sbs-inline-change--historical">plain</span> value'
+      'Keep <span class="sbs-inline-change sbs-inline-change--format">plain</span> value'
     );
     expect(tableDiff.currentComparisonHtml).toContain(
-      '<strong><span class="sbs-inline-change sbs-inline-change--current">plain</span></strong>'
+      '<strong><span class="sbs-inline-change sbs-inline-change--format">plain</span></strong>'
     );
   });
 

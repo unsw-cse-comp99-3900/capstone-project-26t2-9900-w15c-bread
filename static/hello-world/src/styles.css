@@ -1985,6 +1985,14 @@ body {
   text-decoration: line-through;
 }
 
+.dh-code-diff-line--removed.dh-code-diff-line--blank {
+  /*
+   * Keep the line-level red background so a removed blank line remains
+   * visible, but never draw a strike through indentation-only content.
+   */
+  text-decoration: none;
+}
+
 .dh-rich-diff-unchanged {
   display: flow-root;
 }
@@ -2059,6 +2067,30 @@ body {
 .dh-github-diff-part__content {
   min-width: 0;
   padding: 8px 12px;
+}
+
+/*
+ * Word-level highlights are shared by Inline and Side-by-side views. The
+ * `sbs` class prefix is retained to avoid rewriting existing rendered diff
+ * markup, but these rules intentionally live in the shared stylesheet.
+ */
+.sbs-inline-change {
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.sbs-inline-change--historical {
+  background: #ffbdad;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.sbs-inline-change--current {
+  background: #abf5d1;
+}
+
+.sbs-inline-change--format {
+  background: #ffe380;
 }
 
 .dh-github-diff-part--table-cell-level .dh-github-diff-part__content {

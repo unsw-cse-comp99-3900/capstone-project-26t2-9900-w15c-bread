@@ -81,12 +81,16 @@ test('keeps a cell-level table row neutral while marking only source cells', () 
 
 test('uses a frame independent from structural table shadows for changed cells', () => {
   const css = fs.readFileSync(path.join(__dirname, 'SideBySideDiffView.css'), 'utf8');
+  const sharedCss = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
 
   expect(css).toMatch(
     /\.sbs-pane--table \.dh-table-cell-diff--historical\s*\{[\s\S]*?outline:\s*2px solid var\(--dh-red\)/
   );
   expect(css).toMatch(
     /\.sbs-pane--table \.dh-table-cell-diff--current\s*\{[\s\S]*?outline:\s*2px solid #36b37e/
+  );
+  expect(sharedCss).toMatch(
+    /\.sbs-inline-change--format\s*\{[\s\S]*?background:\s*#ffe380/
   );
 });
 

@@ -20,6 +20,63 @@ function paragraph(type, text) {
   };
 }
 
+test('uses line-aware code HTML without striking indentation around added blank lines', () => {
+  const codeMacro = (code) => [
+    '<ac:structured-macro ac:name="code">',
+    '<ac:parameter ac:name="language">json</ac:parameter>',
+    `<ac:plain-text-body><![CDATA[${code}]]></ac:plain-text-body>`,
+    '</ac:structured-macro>',
+  ].join('');
+  const historicalCode = [
+    '{',
+    '  "items": [',
+    '    {"sku": "NS-LAMP-02", "quantity": 1, "unitPrice": 12900}',
+    '  ],',
+    '  "paymentMethodToken": "pmt_tok_6f8c"',
+    '}',
+  ].join('\n');
+  const currentCode = [
+    '{',
+    '  "items": [',
+    '    {"sku": "NS-LAMP-02", "quantity": 1, "unitPrice": 12900}',
+    '  ',
+    '  ',
+    '  ',
+    '  ],',
+    '  "paymentMethodToken": "pmt_tok_6f8c"',
+    '}',
+  ].join('\n');
+  const diff = buildRichTextDiffHtml(
+    codeMacro(historicalCode),
+    codeMacro(currentCode),
+    '',
+    {}
+  );
+  const row = buildFullDocumentSplitRows(diff.blocks)[0];
+  const historicalHtml = getSplitRowSideHtml(row, 'historical');
+  const currentHtml = getSplitRowSideHtml(row, 'current');
+  const historicalDoc = new DOMParser().parseFromString(
+    historicalHtml,
+    'text/html'
+  );
+  const currentDoc = new DOMParser().parseFromString(currentHtml, 'text/html');
+
+  expect(row.historical.nodeType).toBe('code_block');
+  expect(
+    historicalDoc.querySelectorAll('.dh-code-diff-line--removed')
+  ).toHaveLength(0);
+  expect(
+    currentDoc.querySelectorAll('.dh-code-diff-line--added')
+  ).toHaveLength(3);
+  expect(
+    Array.from(
+      currentDoc.querySelectorAll('.dh-code-diff-line--added')
+    ).every((line) => !line.textContent.trim())
+  ).toBe(true);
+  expect(historicalHtml).not.toContain('sbs-inline-change');
+  expect(currentHtml).not.toContain('sbs-inline-change');
+});
+
 test('uses source-specific table HTML for a cell-level split row', () => {
   const diff = buildRichTextDiffHtml(
     '<table><tbody><tr><td>A</td><td>Old one</td></tr><tr><td>B</td><td>Old two</td></tr></tbody></table>',
@@ -309,10 +366,10 @@ test('highlights formatting-only changes while retaining each source format', ()
   const current = getSplitRowSideHtml(row, 'current');
 
   expect(historical).toContain(
-    'the <span class="sbs-inline-change sbs-inline-change--historical">plain</span> wording'
+    'the <span class="sbs-inline-change sbs-inline-change--format">plain</span> wording'
   );
   expect(current).toContain(
-    '<strong><span class="sbs-inline-change sbs-inline-change--current">plain</span></strong>'
+    '<strong><span class="sbs-inline-change sbs-inline-change--format">plain</span></strong>'
   );
 });
 
@@ -323,7 +380,6 @@ test.each([
   ['strike', '<s>plain</s>'],
   ['inline code', '<code>plain</code>'],
   ['text color', '<span data-dh-text-color="red">plain</span>'],
-  ['background highlight', '<mark data-dh-bg-color="yellow">plain</mark>'],
 ])('highlights a %s-only change without flattening its markup', (_label, formatted) => {
   const block = {
     type: 'modified',
@@ -337,13 +393,32 @@ test.each([
   const row = buildFullDocumentSplitRows([block])[0];
 
   expect(getSplitRowSideHtml(row, 'historical')).toContain(
-    '<span class="sbs-inline-change sbs-inline-change--historical">plain</span>'
+    '<span class="sbs-inline-change sbs-inline-change--format">plain</span>'
   );
   expect(getSplitRowSideHtml(row, 'current')).toContain(
     formatted.replace(
       'plain',
-      '<span class="sbs-inline-change sbs-inline-change--current">plain</span>'
+      '<span class="sbs-inline-change sbs-inline-change--format">plain</span>'
     )
+  );
+});
+
+test('does not create a split change row for text highlight background only', () => {
+  const diff = buildRichTextDiffHtml(
+    '<p>Customer support workflows remain available.</p>',
+    '<p>Customer support <mark data-dh-bg-color="green">workflows</mark> remain available.</p>',
+    '',
+    {}
+  );
+  const rows = buildFullDocumentSplitRows(diff.blocks);
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0].kind).toBe('unchanged');
+  expect(getSplitRowSideHtml(rows[0], 'current')).toContain(
+    'data-dh-bg-color="green"'
+  );
+  expect(getSplitRowSideHtml(rows[0], 'current')).not.toContain(
+    'sbs-inline-change--format'
   );
 });
 

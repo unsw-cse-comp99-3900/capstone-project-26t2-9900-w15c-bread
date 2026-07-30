@@ -300,21 +300,6 @@
   margin-bottom: 0;
 }
 
-.sbs-inline-change {
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
-.sbs-inline-change--historical {
-  background: #ffbdad;
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
-}
-
-.sbs-inline-change--current {
-  background: #abf5d1;
-}
-
 /* `.dh-rich-page` (shared, styles.css) applies 24/28px padding meant for
    the full-page canvas. When reused inside a compact pane the padding
    fights the pane's own padding and pushes the body outside the colored

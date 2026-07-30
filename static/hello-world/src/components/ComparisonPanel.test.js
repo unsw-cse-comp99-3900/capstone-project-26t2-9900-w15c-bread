@@ -273,6 +273,100 @@ describe('Version Difference Notes', () => {
   });
 });
 
+describe('Inline rich-text change highlighting', () => {
+  test('separates added words from formatting-only changes in one sentence', () => {
+    const diff = buildRichTextDiffHtml(
+      '<p>A have do something</p>',
+      '<p>A and B do <strong>something</strong></p>',
+      '',
+      {}
+    );
+    const display = buildDiffDisplayRows(diff.blocks);
+    const parts = getGitHubStyleDiffParts(display.selectableRows[0].blocks);
+    const historicalDocument = new DOMParser().parseFromString(
+      parts.find((part) => part.type === 'removed').html,
+      'text/html'
+    );
+    const currentDocument = new DOMParser().parseFromString(
+      parts.find((part) => part.type === 'added').html,
+      'text/html'
+    );
+
+    expect(
+      Array.from(
+        historicalDocument.querySelectorAll('.sbs-inline-change--historical')
+      ).map((node) => node.textContent.trim())
+    ).toContain('have');
+    expect(
+      Array.from(
+        currentDocument.querySelectorAll('.sbs-inline-change--current')
+      ).map((node) => node.textContent.trim())
+    ).toEqual(expect.arrayContaining(['and', 'B']));
+    expect(
+      Array.from(
+        historicalDocument.querySelectorAll('.sbs-inline-change--format')
+      ).map((node) => node.textContent)
+    ).toContain('something');
+    expect(
+      currentDocument.querySelector(
+        'strong > .sbs-inline-change--format'
+      ).textContent
+    ).toBe('something');
+  });
+
+  test('renders the shared highlights in the actual Inline comparison panel', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const version = (number, value) => ({
+      number,
+      authorName: 'User',
+      createdAt: '2026-07-19T00:00:00.000Z',
+      body: { value },
+    });
+
+    act(() => {
+      ReactDOM.render(
+        <ComparisonPanel
+          pageId="123"
+          pageTitle="Page"
+          baseUrl=""
+          attachmentsByFilename={{}}
+          selectedVersion={version(2, '<p>A have do something</p>')}
+          currentVersion={version(
+            3,
+            '<p>A and B do <strong>something</strong></p>'
+          )}
+          recoveryChoices={{
+            comparisonKey: '2:3',
+            blockChoices: new Map(),
+            chooseBlock: jest.fn(),
+            undoChoice: jest.fn(),
+          }}
+        />,
+        container
+      );
+    });
+
+    expect(
+      Array.from(
+        container.querySelectorAll('.sbs-inline-change--format')
+      ).map((node) => node.textContent)
+    ).toEqual(['something', 'something']);
+    expect(
+      Array.from(
+        container.querySelectorAll(
+          '.dh-github-diff-part--added .sbs-inline-change--current'
+        )
+      ).map((node) => node.textContent.trim())
+    ).toEqual(expect.arrayContaining(['and', 'B']));
+
+    act(() => {
+      ReactDOM.unmountComponentAtNode(container);
+    });
+    container.remove();
+  });
+});
+
 describe('Draft Preview spacer recovery', () => {
   const oldStorage = '<p>before</p><p>old text</p><p>after</p>';
   const currentStorage = [
@@ -401,6 +495,39 @@ describe('large table write-back controls', () => {
     expect(doc.querySelectorAll('table')).toHaveLength(1);
     expect(doc.querySelectorAll('.dh-table-cell-diff--modified')).toHaveLength(2);
     expect(doc.querySelectorAll('td')).toHaveLength(4);
+  });
+
+  test('separates formatting changes from added text inside an Inline table cell', () => {
+    const diff = buildRichTextDiffHtml(
+      '<table><tbody><tr><td>Data safety</td></tr></tbody></table>',
+      '<table><tbody><tr><td><strong>Data safety</strong> - and test</td></tr></tbody></table>',
+      '',
+      {}
+    );
+    const display = buildDiffDisplayRows(diff.blocks);
+    const parts = getGitHubStyleDiffParts(display.selectableRows[0].blocks);
+    const doc = new DOMParser().parseFromString(parts[0].html, 'text/html');
+    const previousCellValue = doc.querySelector(
+      '.dh-table-cell-version--previous .dh-table-cell-version__value'
+    );
+    const currentCellValue = doc.querySelector(
+      '.dh-table-cell-version--current .dh-table-cell-version__value'
+    );
+
+    expect(previousCellValue.querySelector(
+      '.sbs-inline-change--format'
+    ).textContent).toBe('Data safety');
+    expect(currentCellValue.querySelector(
+      'strong > .sbs-inline-change--format'
+    ).textContent).toBe('Data safety');
+    expect(
+      Array.from(
+        currentCellValue.querySelectorAll('.sbs-inline-change--current')
+      ).map((node) => node.textContent).join('').replace(/\s+/g, ' ').trim()
+    ).toBe('- and test');
+    expect(
+      previousCellValue.querySelector('.sbs-inline-change--historical')
+    ).toBeNull();
   });
 
   test('keeps whole-table recovery controls visible above a cell-level diff', () => {
