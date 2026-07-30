@@ -23,6 +23,12 @@ import {
   getDiffBlockHtml,
   getGitHubStyleDiffParts,
 } from './recoveryDiffDisplay';
+import {
+  expandCellScopedSelectableRows,
+  getCellScopedTableDiff,
+  logicalTableCellMap,
+  tableCellChoiceKey,
+} from '../tableCellRecovery';
 
 export { buildDiffDisplayRows } from '../diffDisplay';
 export { buildRecoveryPreviewHtml } from '../useRecoveryWorkflow';
@@ -32,10 +38,24 @@ export {
   RecoveryPreviewModal,
 };
 
-export function getChangeChoiceActionConfig(diffParts, isActive) {
+export function getChangeChoiceActionConfig(
+  diffParts,
+  isActive,
+  usesCellScopedTableChoices = false,
+  usesStandardChangeActions = false
+) {
   const isTableLevelDiff = (diffParts || []).some(
     (part) => part.type === 'table-cell-level'
   );
+
+  if (usesCellScopedTableChoices || usesStandardChangeActions) {
+    return {
+      position: 'after',
+      visible: usesStandardChangeActions ? isActive : false,
+      currentLabel: 'Keep current change',
+      oldLabel: 'Restore old content',
+    };
+  }
 
   return {
     // Large tables can extend well beyond the viewport. Their write-back
@@ -46,6 +66,285 @@ export function getChangeChoiceActionConfig(diffParts, isActive) {
     currentLabel: isTableLevelDiff ? 'Keep current table' : 'Keep current change',
     oldLabel: isTableLevelDiff ? 'Restore old table' : 'Restore old content',
   };
+}
+
+function appendTableCellChoiceButton(doc, container, action, label, primary = false) {
+  const button = doc.createElement('button');
+  button.setAttribute('type', 'button');
+  button.setAttribute('data-dh-table-cell-action', action);
+  button.className = `dh-choice-action${
+    primary ? ' dh-choice-action--current' : ''
+  }`;
+  button.textContent = label;
+  container.appendChild(button);
+}
+
+/**
+ * Remove comparison-only inline wrappers after a table-cell choice is made.
+ *
+ * The selected cell must look like ordinary rendered content. In particular,
+ * restoring the historical value must not leave the line-through that was
+ * useful while comparing the two versions. Unwrapping these spans instead of
+ * replacing their contents preserves genuine Confluence markup such as
+ * strong, emphasis, links, inline code, and the cell's background colour.
+ */
+function removeResolvedTableCellDiffMarkup(root) {
+  let comparisonMarker = root.querySelector('.sbs-inline-change');
+
+  while (comparisonMarker) {
+    const parent = comparisonMarker.parentNode;
+    while (comparisonMarker.firstChild) {
+      parent.insertBefore(comparisonMarker.firstChild, comparisonMarker);
+    }
+    parent.removeChild(comparisonMarker);
+    comparisonMarker = root.querySelector('.sbs-inline-change');
+  }
+}
+
+/**
+ * Decorate only the cells already identified as changed by the table diff.
+ * This is a UI transformation over the existing comparison HTML; it does not
+ * re-run or alter table matching.
+ */
+export function buildInteractiveTableCellDiffHtml({
+  html,
+  tableDiff,
+  tableChoiceKey,
+  blockChoices,
+  activeCellKey,
+  popoverPlacement,
+}) {
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const table = doc.body.querySelector('table');
+  if (!table || !tableDiff) return html || '';
+
+  const cells = logicalTableCellMap(table);
+  (tableDiff.changedCells || []).forEach((cellChange) => {
+    const coordinate = `${cellChange.rowIndex}:${cellChange.colIndex}`;
+    const cell = cells.get(coordinate);
+    if (!cell) return;
+
+    const choiceKey = tableCellChoiceKey(
+      tableChoiceKey,
+      cellChange.rowIndex,
+      cellChange.colIndex
+    );
+    const choice = blockChoices.get(choiceKey) || '';
+    const isActive = activeCellKey === choiceKey;
+
+    cell.classList.add('dh-table-cell-diff--interactive');
+    if (isActive && !choice) {
+      cell.classList.add('dh-table-cell-diff--choice-active');
+    }
+    cell.setAttribute('data-dh-table-cell-choice-key', choiceKey);
+    cell.setAttribute(
+      'aria-label',
+      `Changed table cell, row ${cellChange.rowIndex + 1}, column ${
+        cellChange.colIndex + 1
+      }`
+    );
+
+    if (choice) {
+      cell.classList.add(
+        'dh-table-cell-diff--resolved',
+        `dh-table-cell-diff--resolved-${choice}`
+      );
+      cell.setAttribute('data-dh-table-cell-resolved', 'true');
+      const selectedVersion = cell.querySelector(
+        choice === 'old'
+          ? '.dh-table-cell-version--previous'
+          : '.dh-table-cell-version--current'
+      );
+      if (selectedVersion) {
+        const selectedClone = selectedVersion.cloneNode(true);
+        removeResolvedTableCellDiffMarkup(selectedClone);
+        const selectedBackground = selectedClone.getAttribute(
+          'data-dh-bg-color'
+        );
+        if (selectedBackground) {
+          // Move the selected background to the physical table cell. A child
+          // block only paints its content height, while the TD/TH background
+          // always fills the complete row height.
+          cell.setAttribute('data-dh-bg-color', selectedBackground);
+          selectedClone.removeAttribute('data-dh-bg-color');
+        }
+        selectedClone.classList.add(
+          'dh-table-cell-version--selected',
+          `dh-table-cell-version--selected-${choice}`
+        );
+        cell.replaceChildren(selectedClone);
+      }
+
+      const status = doc.createElement('div');
+      status.className = `dh-table-cell-choice__status dh-table-cell-choice__status--${choice}`;
+      appendTableCellChoiceButton(doc, status, 'undo', 'Undo');
+      cell.appendChild(status);
+    } else {
+      cell.setAttribute('tabindex', '0');
+    }
+
+    if (isActive && !choice) {
+      const actions = doc.createElement('div');
+      const placement =
+        popoverPlacement && popoverPlacement.choiceKey === choiceKey
+          ? popoverPlacement
+          : {
+              horizontal: 'rightward',
+              vertical: 'below',
+              stacked: false,
+            };
+      actions.className = [
+        'dh-table-cell-choice__actions',
+        `dh-table-cell-choice__actions--${placement.horizontal}`,
+        `dh-table-cell-choice__actions--${placement.vertical}`,
+        placement.stacked
+          ? 'dh-table-cell-choice__actions--stacked'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      appendTableCellChoiceButton(
+        doc,
+        actions,
+        'current',
+        'Keep current change',
+        true
+      );
+      appendTableCellChoiceButton(
+        doc,
+        actions,
+        'old',
+        'Restore old content'
+      );
+      cell.appendChild(actions);
+    }
+  });
+
+  return table.outerHTML;
+}
+
+export function getTableCellPopoverPlacement(
+  cellBounds,
+  surfaceBounds,
+  viewportHeight =
+    typeof window !== 'undefined' ? window.innerHeight : 0
+) {
+  const preferredWidth = 310;
+  const preferredHeight = 54;
+  const safeCell = cellBounds || {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  };
+  const safeSurface = surfaceBounds || {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  };
+  const rightwardSpace = Math.max(0, safeSurface.right - safeCell.left);
+  const leftwardSpace = Math.max(0, safeCell.right - safeSurface.left);
+  const horizontal =
+    rightwardSpace >= preferredWidth || rightwardSpace >= leftwardSpace
+      ? 'rightward'
+      : 'leftward';
+  const availableHorizontalSpace = Math.max(rightwardSpace, leftwardSpace);
+  const roomBelow =
+    Math.max(0, Math.min(viewportHeight || safeSurface.bottom, safeSurface.bottom) -
+      safeCell.bottom) >= preferredHeight;
+
+  return {
+    horizontal,
+    vertical: roomBelow ? 'below' : 'above',
+    stacked: availableHorizontalSpace < preferredWidth,
+  };
+}
+
+function CellScopedTableDiff({
+  html,
+  tableDiff,
+  tableChoiceKey,
+  blockChoices,
+  activeCellKey,
+  setActiveBlockKey,
+  onChoose,
+  onUndo,
+}) {
+  const [popoverPlacement, setPopoverPlacement] = useState(null);
+  const interactiveHtml = useMemo(
+    () =>
+      buildInteractiveTableCellDiffHtml({
+        html,
+        tableDiff,
+        tableChoiceKey,
+        blockChoices,
+        activeCellKey,
+        popoverPlacement,
+      }),
+    [
+      activeCellKey,
+      blockChoices,
+      html,
+      popoverPlacement,
+      tableChoiceKey,
+      tableDiff,
+    ]
+  );
+
+  const activateCell = (cell, surface) => {
+    const choiceKey = cell.getAttribute('data-dh-table-cell-choice-key');
+    const willOpen = activeCellKey !== choiceKey;
+    if (willOpen) {
+      setPopoverPlacement({
+        choiceKey,
+        ...getTableCellPopoverPlacement(
+          cell.getBoundingClientRect(),
+          surface.getBoundingClientRect()
+        ),
+      });
+    }
+    setActiveBlockKey(willOpen ? choiceKey : null);
+  };
+
+  const handleClick = (event) => {
+    event.stopPropagation();
+    const actionButton = event.target.closest('[data-dh-table-cell-action]');
+    const cell = event.target.closest('[data-dh-table-cell-choice-key]');
+    if (!cell || !event.currentTarget.contains(cell)) return;
+
+    const choiceKey = cell.getAttribute('data-dh-table-cell-choice-key');
+    if (actionButton && cell.contains(actionButton)) {
+      const action = actionButton.getAttribute('data-dh-table-cell-action');
+      if (action === 'undo') onUndo(choiceKey);
+      if (action === 'current' || action === 'old') onChoose(choiceKey, action);
+      return;
+    }
+
+    if (cell.getAttribute('data-dh-table-cell-resolved') === 'true') return;
+    activateCell(cell, event.currentTarget);
+  };
+
+  const handleKeyDown = (event) => {
+    const cell = event.target.closest('[data-dh-table-cell-choice-key]');
+    if (!cell || !event.currentTarget.contains(cell)) return;
+    if (event.target.closest('[data-dh-table-cell-action]')) return;
+    if (cell.getAttribute('data-dh-table-cell-resolved') === 'true') return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    activateCell(cell, event.currentTarget);
+  };
+
+  return (
+    <div
+      className="dh-table-cell-choice-surface"
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      dangerouslySetInnerHTML={{ __html: interactiveHtml }}
+    />
+  );
 }
 
 function getLayoutWrapperProps(block, useCurrent = true) {
@@ -330,7 +629,26 @@ function DiffDisplayRows({
 
     const isActive = activeBlockKey === key;
     const diffParts = getGitHubStyleDiffParts(row.blocks);
-    const actionConfig = getChangeChoiceActionConfig(diffParts, isActive);
+    const cellScopedTableDiff = getCellScopedTableDiff(row.blocks);
+    const rowBlocks = row.blocks
+      .map(({ block }) => block)
+      .filter(Boolean);
+    const sharedTableDiff = rowBlocks[0] && rowBlocks[0].tableDiff;
+    const hasTerminalTableStructureChange = Boolean(
+      sharedTableDiff &&
+        sharedTableDiff.mode === 'cell_level' &&
+        sharedTableDiff.structureChange !== 'same' &&
+        rowBlocks.every(
+          (block) =>
+            block.nodeType === 'table' && block.tableDiff === sharedTableDiff
+        )
+    );
+    const actionConfig = getChangeChoiceActionConfig(
+      diffParts,
+      isActive,
+      Boolean(cellScopedTableDiff),
+      hasTerminalTableStructureChange
+    );
     const actionControls = actionConfig.visible ? (
       <div
         className={`dh-choice-diff-module__actions dh-choice-diff-module__actions--${actionConfig.position}`}
@@ -355,23 +673,32 @@ function DiffDisplayRows({
 
     return (
       <div
-        aria-expanded={isActive}
+        aria-expanded={cellScopedTableDiff ? undefined : isActive}
         className={`dh-choice-diff-module${
-          isActive ? ' dh-choice-diff-module--active' : ''
+          isActive && !cellScopedTableDiff ? ' dh-choice-diff-module--active' : ''
         }`}
         key={key}
-        onClick={() =>
-          setActiveBlockKey((previous) => (previous === key ? null : key))
+        onClick={
+          cellScopedTableDiff
+            ? undefined
+            : () =>
+                setActiveBlockKey((previous) => (previous === key ? null : key))
         }
-        onKeyDown={(event) => {
-          if (event.target !== event.currentTarget) return;
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            setActiveBlockKey((previous) => (previous === key ? null : key));
-          }
-        }}
-        role="button"
-        tabIndex={0}
+        onKeyDown={
+          cellScopedTableDiff
+            ? undefined
+            : (event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  setActiveBlockKey((previous) =>
+                    previous === key ? null : key
+                  );
+                }
+              }
+        }
+        role={cellScopedTableDiff ? undefined : 'button'}
+        tabIndex={cellScopedTableDiff ? undefined : 0}
       >
         {actionConfig.position === 'before' ? actionControls : null}
 
@@ -385,10 +712,25 @@ function DiffDisplayRows({
                 {part.type === 'added' ? '+' : '-'}
               </span>
             ) : null}
-            <div
-              className="dh-github-diff-part__content"
-              dangerouslySetInnerHTML={{ __html: part.html }}
-            />
+            {cellScopedTableDiff && part.type === 'table-cell-level' ? (
+              <div className="dh-github-diff-part__content">
+                <CellScopedTableDiff
+                  html={part.html}
+                  tableDiff={cellScopedTableDiff}
+                  tableChoiceKey={key}
+                  blockChoices={blockChoices}
+                  activeCellKey={activeBlockKey}
+                  setActiveBlockKey={setActiveBlockKey}
+                  onChoose={onChoose}
+                  onUndo={onUndo}
+                />
+              </div>
+            ) : (
+              <div
+                className="dh-github-diff-part__content"
+                dangerouslySetInnerHTML={{ __html: part.html }}
+              />
+            )}
           </div>
         ))}
 
@@ -615,7 +957,14 @@ function ComparisonPanelContent({
     () => buildDiffDisplayRows(richDiff.blocks || []),
     [richDiff.blocks]
   );
-  const selectableBlocks = diffDisplay.selectableRows;
+  const recoveryDisplay = useMemo(
+    () => ({
+      ...diffDisplay,
+      selectableRows: expandCellScopedSelectableRows(diffDisplay.selectableRows),
+    }),
+    [diffDisplay]
+  );
+  const selectableBlocks = recoveryDisplay.selectableRows;
 
   const createVersionDifferenceNotes = useCallback((draft) => {
     try {
@@ -647,7 +996,7 @@ function ComparisonPanelContent({
 
   const recovery = useRecoveryWorkflow({
     blocks: richDiff.blocks || [],
-    display: diffDisplay,
+    display: recoveryDisplay,
     pageId,
     selectedVersion,
     currentVersion,

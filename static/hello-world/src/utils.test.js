@@ -1215,16 +1215,19 @@ describe('Sprint 2 diff classification and display requirements', () => {
     expect(result.blocks[0].tableDiff.comparisonHtml).toContain(
       'dh-table-cell-diff--modified'
     );
+    expect(result.blocks[0].tableDiff.comparisonHtml).toContain(
+      'dh-table-cell-versions'
+    );
     expect(result.blocks[0].tableDiff.comparisonHtml).not.toContain(
       'dh-table-cell-version__marker'
     );
     expect(result.blocks[0].tableDiff.comparisonHtml).toContain('Old');
     expect(result.blocks[0].tableDiff.comparisonHtml).toContain('New');
     expect(result.blocks[0].tableDiff.comparisonHtml).toContain(
-      'dh-table-cell-version--previous" data-dh-bg-color="light-blue"'
+      'dh-table-cell-version--previous" data-dh-bg-color="#e9f2ff"'
     );
     expect(result.blocks[0].tableDiff.comparisonHtml).toContain(
-      'dh-table-cell-version--current" data-dh-bg-color="light-red"'
+      'dh-table-cell-version--current" data-dh-bg-color="#ffedeb"'
     );
     expect(
       (result.blocks[0].tableDiff.comparisonHtml.match(/<table\b/g) || [])
@@ -1232,7 +1235,38 @@ describe('Sprint 2 diff classification and display requirements', () => {
     expect(
       (result.blocks[0].tableDiff.comparisonHtml.match(/>Field</g) || [])
     ).toHaveLength(1);
-    expect(result.blocks[1].renderedHtml).toContain('data-dh-bg-color="light-green"');
+    expect(result.blocks[1].renderedHtml).toContain('data-dh-bg-color="#dcfff1"');
+  });
+
+  test('wraps empty and populated table-cell versions in one full-height container', () => {
+    const result = buildRichTextDiffHtml(
+      '<table><tbody><tr><td>Stable</td><td></td></tr></tbody></table>',
+      '<table><tbody><tr><td>Stable</td><td>1</td></tr></tbody></table>',
+      '',
+      {}
+    );
+    const tableDiff = result.blocks[0].tableDiff;
+    const doc = new DOMParser().parseFromString(
+      tableDiff.comparisonHtml,
+      'text/html'
+    );
+    const changedCell = doc.querySelector('.dh-table-cell-diff--modified');
+    const versions = changedCell.querySelector('.dh-table-cell-versions');
+
+    expect(tableDiff.structureChange).toBe('same');
+    expect(versions).not.toBeNull();
+    expect(versions.parentElement).toBe(changedCell);
+    expect(
+      versions.querySelectorAll(':scope > .dh-table-cell-version')
+    ).toHaveLength(2);
+    expect(
+      versions
+        .querySelector('.dh-table-cell-version--previous')
+        .textContent.trim()
+    ).toBe('');
+    expect(
+      versions.querySelector('.dh-table-cell-version--current').textContent
+    ).toBe('1');
   });
 
   test('two changed table cells produce source-specific table renderings', () => {
@@ -1606,7 +1640,7 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect(rendered).toContain('data-dh-node-type="decision"');
     expect(rendered).toContain('colspan="2"');
     expect(rendered).toContain('rowspan="2"');
-    expect(rendered).toContain('data-dh-bg-color="light-blue"');
+    expect(rendered).toContain('data-dh-bg-color="#deebff"');
     expect(text).toContain('Panel body');
     expect(text).toContain('PASS');
     expect(text).toContain('Ship renderer');
@@ -1760,9 +1794,9 @@ describe('prepareConfluenceHtml manual renderer', () => {
 
     expect(rendered).toContain('data-dh-text-color="dark-red"');
     expect(rendered).toContain('data-dh-bg-color="light-blue"');
-    expect(rendered).toContain('data-dh-bg-color="light-green"');
-    expect(rendered).toContain('data-dh-bg-color="light-red"');
-    expect(rendered).toContain('data-dh-bg-color="medium-gray"');
+    expect(rendered).toContain('data-dh-bg-color="#dcfff1"');
+    expect(rendered).toContain('data-dh-bg-color="#ffedeb"');
+    expect(rendered).toContain('data-dh-bg-color="#b3bac5"');
     expect(rendered).toContain('data-dh-bg-color="light-yellow"');
     expect(rendered).toContain('data-dh-border-color="dark-orange"');
     expect(rendered).toContain('data-dh-text-color="dark-magenta"');
@@ -1788,9 +1822,57 @@ describe('prepareConfluenceHtml manual renderer', () => {
 
     expect(rendered).toContain('rowspan="2"');
     expect(rendered).toContain('colspan="2"');
-    expect(rendered).toContain('data-dh-bg-color="light-yellow"');
-    expect(rendered).toContain('data-dh-bg-color="light-blue"');
-    expect(rendered).not.toContain('style="background:');
+    expect(rendered).toContain('data-dh-bg-color="#f8e6a0"');
+    expect(rendered).toContain('data-dh-bg-color="#e9f2ff"');
+  });
+
+  test('preserves every observed Confluence table palette shade exactly', () => {
+    const colours = [
+      '#b3f5ff',
+      '#c6edfb',
+      '#ffffff',
+      '#deebff',
+      '#e6fcff',
+      '#e3fcef',
+      '#fffae6',
+      '#ffebe6',
+      '#eae6ff',
+      '#f4f5f7',
+      '#b3d4ff',
+      '#abf5d1',
+      '#fff0b3',
+      '#ffbdad',
+      '#c0b6f2',
+      '#4c9aff',
+      '#79e2f2',
+      '#57d9a3',
+      '#ffc400',
+      '#ff8f73',
+      '#998dd9',
+      '#b3bac5',
+    ];
+    const html = [
+      '<table><tbody><tr>',
+      ...colours.map(
+        (colour, index) =>
+          `<td data-highlight-colour="${colour}">Cell ${index + 1}</td>`
+      ),
+      '</tr></tbody></table>',
+    ].join('');
+
+    const rendered = prepareConfluenceHtml(html, '');
+    const doc = new DOMParser().parseFromString(rendered, 'text/html');
+    const cells = Array.from(doc.querySelectorAll('td'));
+
+    expect(cells).toHaveLength(colours.length);
+    expect(
+      cells.map((cell) => cell.getAttribute('data-dh-bg-color'))
+    ).toEqual(colours);
+    cells.forEach((cell) => {
+      expect(cell.getAttribute('style') || '').not.toContain(
+        'background-color'
+      );
+    });
   });
 
   test('preserves text alignment and indentation from storage attributes and ADF metadata', () => {

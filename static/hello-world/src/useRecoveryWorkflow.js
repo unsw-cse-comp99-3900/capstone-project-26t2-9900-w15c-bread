@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer } from 'react';
 import { blockSelectionKey } from './diffDisplay';
 import { buildRecoveryStorageHtml } from './recoveryStorage';
+import { buildCellScopedTableChoiceRun } from './tableCellRecovery';
 
 const idleWriteBack = () => ({ status: 'idle', error: '', page: null });
 
@@ -200,13 +201,30 @@ export function buildRecoveryPreviewHtml(
   blockChoices = new Map(),
   blockChoiceKeys = new Map()
 ) {
-  return (blocks || [])
-    .map((block, index) => {
-      const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
-      const useCurrent = (blockChoices.get(choiceKey) || 'current') !== 'old';
-      return getBlockRenderedPreviewHtml(block, useCurrent);
-    })
-    .join('');
+  const safeBlocks = blocks || [];
+  const html = [];
+
+  for (let index = 0; index < safeBlocks.length; index++) {
+    const tableCellRun = buildCellScopedTableChoiceRun({
+      blocks: safeBlocks,
+      index,
+      blockChoices,
+      blockChoiceKeys,
+      storageFormat: false,
+    });
+    if (tableCellRun) {
+      html.push(tableCellRun.html);
+      index += tableCellRun.consumed - 1;
+      continue;
+    }
+
+    const block = safeBlocks[index];
+    const choiceKey = blockChoiceKeys.get(index) || blockSelectionKey(index);
+    const useCurrent = (blockChoices.get(choiceKey) || 'current') !== 'old';
+    html.push(getBlockRenderedPreviewHtml(block, useCurrent));
+  }
+
+  return html.join('');
 }
 
 export default function useRecoveryWorkflow({

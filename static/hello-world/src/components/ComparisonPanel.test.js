@@ -4,11 +4,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react-dom/test-utils';
 import { buildRichTextDiffHtml } from '../utils';
 import { buildRecoveryStorageHtml } from '../recoveryStorage';
+import { tableCellChoiceKey } from '../tableCellRecovery';
 import ComparisonPanel, {
+  buildInteractiveTableCellDiffHtml,
   buildDiffDisplayRows,
   buildDraftDifferenceNotes,
   getChangeChoiceActionConfig,
   getGitHubStyleDiffParts,
+  getTableCellPopoverPlacement,
   RecoveryPreviewModal,
 } from './ComparisonPanel';
 
@@ -542,6 +545,341 @@ describe('large table write-back controls', () => {
       currentLabel: 'Keep current table',
       oldLabel: 'Restore old table',
     });
+  });
+
+  test('keeps same-structure table controls hidden until a changed cell is clicked', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const chooseBlock = jest.fn();
+    const onSelectableKeysChange = jest.fn();
+    const version = (number, value) => ({
+      number,
+      authorName: 'User',
+      createdAt: '2026-07-19T00:00:00.000Z',
+      body: { value },
+    });
+    const oldTable = [
+      '<table><tbody>',
+      '<tr><td>Old A</td><td>Stable</td></tr>',
+      '<tr><td>Old B</td><td>Stable</td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const currentTable = [
+      '<table><tbody>',
+      '<tr><td>New A</td><td>Stable</td></tr>',
+      '<tr><td>New B</td><td>Stable</td></tr>',
+      '</tbody></table>',
+    ].join('');
+
+    act(() => {
+      ReactDOM.render(
+        <ComparisonPanel
+          pageId="123"
+          pageTitle="Page"
+          baseUrl=""
+          attachmentsByFilename={{}}
+          selectedVersion={version(2, oldTable)}
+          currentVersion={version(3, currentTable)}
+          recoveryChoices={{
+            comparisonKey: '2:3',
+            blockChoices: new Map(),
+            chooseBlock,
+            undoChoice: jest.fn(),
+          }}
+          onSelectableKeysChange={onSelectableKeysChange}
+        />,
+        container
+      );
+    });
+
+    expect(
+      Array.from(container.querySelectorAll('button')).filter(
+        (button) => button.textContent === 'Keep current change'
+      )
+    ).toHaveLength(0);
+    expect(onSelectableKeysChange).toHaveBeenLastCalledWith([
+      expect.stringContaining('::table-cell::0:0'),
+      expect.stringContaining('::table-cell::1:0'),
+    ]);
+
+    const changedCells = container.querySelectorAll(
+      '[data-dh-table-cell-choice-key]'
+    );
+    expect(changedCells).toHaveLength(2);
+
+    act(() => changedCells[0].click());
+    expect(
+      container.querySelectorAll('.dh-table-cell-choice__actions')
+    ).toHaveLength(1);
+    expect(
+      container
+        .querySelectorAll('[data-dh-table-cell-choice-key]')[0]
+        .querySelector('.dh-table-cell-choice__actions')
+    ).not.toBeNull();
+
+    act(() =>
+      container.querySelectorAll('[data-dh-table-cell-choice-key]')[1].click()
+    );
+    const activeActions = container.querySelector(
+      '.dh-table-cell-choice__actions'
+    );
+    expect(activeActions.closest('[data-dh-table-cell-choice-key]')).toBe(
+      container.querySelectorAll('[data-dh-table-cell-choice-key]')[1]
+    );
+
+    const restore = Array.from(activeActions.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Restore old content'
+    );
+    act(() => restore.click());
+    expect(chooseBlock).toHaveBeenCalledWith(
+      expect.stringContaining('::table-cell::1:0'),
+      'old'
+    );
+
+    act(() => {
+      ReactDOM.unmountComponentAtNode(container);
+    });
+    container.remove();
+  });
+
+  test('suppresses whole-table actions only for same-structure table changes', () => {
+    expect(
+      getChangeChoiceActionConfig(
+        [{ type: 'table-cell-level', html: '<table></table>' }],
+        false,
+        true
+      )
+    ).toEqual({
+      position: 'after',
+      visible: false,
+      currentLabel: 'Keep current change',
+      oldLabel: 'Restore old content',
+    });
+  });
+
+  test('keeps terminal row and column table actions collapsed below the block', () => {
+    expect(
+      getChangeChoiceActionConfig(
+        [{ type: 'table-cell-level', html: '<table></table>' }],
+        false,
+        false,
+        true
+      )
+    ).toEqual({
+      position: 'after',
+      visible: false,
+      currentLabel: 'Keep current change',
+      oldLabel: 'Restore old content',
+    });
+    expect(
+      getChangeChoiceActionConfig(
+        [{ type: 'table-cell-level', html: '<table></table>' }],
+        true,
+        false,
+        true
+      )
+    ).toMatchObject({
+      position: 'after',
+      visible: true,
+      currentLabel: 'Keep current change',
+      oldLabel: 'Restore old content',
+    });
+  });
+
+  test('opens terminal-row recovery actions at the bottom only after the table block is clicked', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const oldTable = [
+      '<table><tbody>',
+      '<tr><td>Stable field</td><td>Stable value</td></tr>',
+      '<tr><td>Removed field</td><td>Removed value</td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const currentTable =
+      '<table><tbody><tr><td>Stable field</td><td>Stable value</td></tr></tbody></table>';
+    const version = (number, value) => ({
+      number,
+      authorName: 'User',
+      createdAt: '2026-07-19T00:00:00.000Z',
+      body: { value },
+    });
+
+    act(() => {
+      ReactDOM.render(
+        <ComparisonPanel
+          pageId="123"
+          pageTitle="Page"
+          baseUrl=""
+          attachmentsByFilename={{}}
+          selectedVersion={version(2, oldTable)}
+          currentVersion={version(3, currentTable)}
+          recoveryChoices={{
+            comparisonKey: '2:3',
+            blockChoices: new Map(),
+            chooseBlock: jest.fn(),
+            undoChoice: jest.fn(),
+          }}
+        />,
+        container
+      );
+    });
+
+    const module = container.querySelector('.dh-choice-diff-module');
+    expect(module).not.toBeNull();
+    expect(module.querySelector('.dh-choice-diff-module__actions')).toBeNull();
+    expect(container.textContent).not.toContain('Keep current table');
+
+    act(() => module.click());
+    const actions = module.querySelector(
+      '.dh-choice-diff-module__actions--after'
+    );
+    expect(actions).not.toBeNull();
+    expect(actions).toBe(module.lastElementChild);
+    expect(
+      Array.from(actions.querySelectorAll('button')).map(
+        (button) => button.textContent
+      )
+    ).toEqual(['Keep current change', 'Restore old content']);
+
+    act(() => {
+      ReactDOM.unmountComponentAtNode(container);
+    });
+    container.remove();
+  });
+
+  test('places a cell action popover toward available space without widening the table', () => {
+    const surface = { top: 0, right: 1000, bottom: 600, left: 0 };
+
+    expect(
+      getTableCellPopoverPlacement(
+        { top: 100, right: 980, bottom: 140, left: 900 },
+        surface,
+        700
+      )
+    ).toMatchObject({
+      horizontal: 'leftward',
+      vertical: 'below',
+      stacked: false,
+    });
+    expect(
+      getTableCellPopoverPlacement(
+        { top: 100, right: 80, bottom: 140, left: 20 },
+        surface,
+        700
+      )
+    ).toMatchObject({
+      horizontal: 'rightward',
+      vertical: 'below',
+      stacked: false,
+    });
+    expect(
+      getTableCellPopoverPlacement(
+        { top: 540, right: 130, bottom: 590, left: 110 },
+        { top: 0, right: 240, bottom: 600, left: 0 },
+        600
+      )
+    ).toEqual({
+      horizontal: 'rightward',
+      vertical: 'above',
+      stacked: true,
+    });
+  });
+
+  test('renders a resolved cell with only Undo and keeps its full-cell background', () => {
+    const oldTable =
+      '<table><tbody><tr><td data-highlight-colour="#deebff"><strong>Old value</strong></td></tr></tbody></table>';
+    const currentTable =
+      '<table><tbody><tr><td data-highlight-colour="#ffebe6"><strong>New value</strong></td></tr></tbody></table>';
+    const diff = buildRichTextDiffHtml(oldTable, currentTable, '', {});
+    const display = buildDiffDisplayRows(diff.blocks);
+    const row = display.selectableRows[0];
+    const parts = getGitHubStyleDiffParts(row.blocks);
+    const tableDiff = row.blocks[0].block.tableDiff;
+    const choiceKey = tableCellChoiceKey(row.key, 0, 0);
+    const html = buildInteractiveTableCellDiffHtml({
+      html: parts[0].html,
+      tableDiff,
+      tableChoiceKey: row.key,
+      blockChoices: new Map([[choiceKey, 'old']]),
+      // Even a stale active key must not reopen actions for a resolved cell.
+      activeCellKey: choiceKey,
+      popoverPlacement: null,
+    });
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const cell = doc.querySelector('[data-dh-table-cell-choice-key]');
+
+    expect(cell.getAttribute('data-dh-table-cell-resolved')).toBe('true');
+    expect(cell.hasAttribute('tabindex')).toBe(false);
+    expect(cell.getAttribute('data-dh-bg-color')).toBe('#deebff');
+    expect(cell.textContent.trim()).toBe('Old valueUndo');
+    expect(cell.textContent).not.toContain('Old content restored');
+    expect(cell.querySelector('.dh-table-cell-choice__actions')).toBeNull();
+    expect(cell.querySelector('.sbs-inline-change')).toBeNull();
+    expect(
+      cell.querySelector('.dh-table-cell-version--selected strong').textContent
+    ).toBe('Old value');
+    expect(
+      cell.querySelector('.dh-table-cell-version--selected')
+        .hasAttribute('data-dh-bg-color')
+    ).toBe(false);
+  });
+
+  test('does not reopen choice actions when a resolved cell is clicked', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const oldTable =
+      '<table><tbody><tr><td>Value before change</td></tr></tbody></table>';
+    const currentTable =
+      '<table><tbody><tr><td>Value after change</td></tr></tbody></table>';
+    const diff = buildRichTextDiffHtml(oldTable, currentTable, '', {});
+    const display = buildDiffDisplayRows(diff.blocks);
+    const row = display.selectableRows[0];
+    const choiceKey = tableCellChoiceKey(row.key, 0, 0);
+    const undoChoice = jest.fn();
+    const version = (number, value) => ({
+      number,
+      authorName: 'User',
+      createdAt: '2026-07-19T00:00:00.000Z',
+      body: { value },
+    });
+
+    act(() => {
+      ReactDOM.render(
+        <ComparisonPanel
+          pageId="123"
+          pageTitle="Page"
+          baseUrl=""
+          attachmentsByFilename={{}}
+          selectedVersion={version(2, oldTable)}
+          currentVersion={version(3, currentTable)}
+          recoveryChoices={{
+            comparisonKey: '2:3',
+            blockChoices: new Map([[choiceKey, 'current']]),
+            chooseBlock: jest.fn(),
+            undoChoice,
+          }}
+        />,
+        container
+      );
+    });
+
+    const cell = container.querySelector('[data-dh-table-cell-resolved="true"]');
+    expect(cell).not.toBeNull();
+    act(() => cell.click());
+    expect(container.querySelector('.dh-table-cell-choice__actions')).toBeNull();
+    expect(
+      Array.from(cell.querySelectorAll('button')).map(
+        (button) => button.textContent
+      )
+    ).toEqual(['Undo']);
+
+    act(() => cell.querySelector('button').click());
+    expect(undoChoice).toHaveBeenCalledWith(choiceKey);
+
+    act(() => {
+      ReactDOM.unmountComponentAtNode(container);
+    });
+    container.remove();
   });
 
   test('keeps ordinary change controls collapsed until the row is active', () => {

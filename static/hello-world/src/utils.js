@@ -729,6 +729,19 @@ function applySafeColorDataAttribute(node, attrName, value) {
   return true;
 }
 
+function applySafeTableCellBackgroundColor(node, value) {
+  const exactColor = normaliseCssColor(value);
+  if (!exactColor) return false;
+
+  // Table palettes contain several shades of the same colour. Keeping only a
+  // broad key such as `light-blue` makes #deebff and #b3d4ff indistinguishable
+  // and also drops newer palette values that are not in HEX_COLOR_KEYS.
+  // Preserve the validated CSS colour itself for table cells; other renderer
+  // elements continue to use the existing semantic colour categories.
+  node.setAttribute('data-dh-bg-color', exactColor.toLowerCase());
+  return true;
+}
+
 function styleDeclarationsWithoutColor(styleText) {
   return safeStyleDeclarations(styleText).filter((declaration) => {
     const property = declaration.split(':')[0].trim().toLowerCase();
@@ -736,7 +749,11 @@ function styleDeclarationsWithoutColor(styleText) {
   });
 }
 
-function applyColorDeclarationsFromStyle(node, styleText) {
+function applyColorDeclarationsFromStyle(
+  node,
+  styleText,
+  preserveExactTableCellBackground = false
+) {
   String(styleText || '')
     .split(';')
     .map((part) => part.trim())
@@ -751,7 +768,11 @@ function applyColorDeclarationsFromStyle(node, styleText) {
       if (property === 'color') {
         applySafeColorDataAttribute(node, 'data-dh-text-color', value);
       } else if (property === 'background' || property === 'background-color') {
-        applySafeColorDataAttribute(node, 'data-dh-bg-color', value);
+        if (preserveExactTableCellBackground) {
+          applySafeTableCellBackgroundColor(node, value);
+        } else {
+          applySafeColorDataAttribute(node, 'data-dh-bg-color', value);
+        }
       } else if (property === 'border-color') {
         applySafeColorDataAttribute(node, 'data-dh-border-color', value);
       }
@@ -3068,11 +3089,15 @@ export function prepareConfluenceHtml(
           isTableCell ||
           node.tagName === 'MARK' ||
           /background|highlight|mark|bg/i.test(originalClassName);
-        applySafeColorDataAttribute(
-          node,
-          shouldTreatAsBackground ? 'data-dh-bg-color' : 'data-dh-text-color',
-          value
-        );
+        if (isTableCell && shouldTreatAsBackground) {
+          applySafeTableCellBackgroundColor(node, value);
+        } else {
+          applySafeColorDataAttribute(
+            node,
+            shouldTreatAsBackground ? 'data-dh-bg-color' : 'data-dh-text-color',
+            value
+          );
+        }
         node.removeAttribute(attr.name);
         return;
       }
@@ -3090,7 +3115,11 @@ export function prepareConfluenceHtml(
         ].includes(name)
       ) {
         if (isTableCell || name !== 'bgcolor') {
-          applySafeColorDataAttribute(node, 'data-dh-bg-color', value);
+          if (isTableCell) {
+            applySafeTableCellBackgroundColor(node, value);
+          } else {
+            applySafeColorDataAttribute(node, 'data-dh-bg-color', value);
+          }
         }
         node.removeAttribute(attr.name);
         return;
@@ -3118,7 +3147,7 @@ export function prepareConfluenceHtml(
       }
 
       if (name === 'style') {
-        applyColorDeclarationsFromStyle(node, value);
+        applyColorDeclarationsFromStyle(node, value, isTableCell);
         applyTextLayoutDeclarationsFromStyle(node, value);
         const safeStyle = styleDeclarationsWithoutColor(value).join('; ');
         if (safeStyle) {
@@ -3155,6 +3184,15 @@ export function prepareConfluenceHtml(
         }
       }
     });
+
+    if (node.tagName === 'TD' || node.tagName === 'TH') {
+      const exactBackgroundColor = normaliseCssColor(
+        node.getAttribute('data-dh-bg-color')
+      );
+      if (exactBackgroundColor) {
+        node.setAttribute('data-dh-bg-color', exactBackgroundColor.toLowerCase());
+      }
+    }
 
     if (node.tagName === 'A') {
       node.setAttribute('target', '_blank');
@@ -5612,13 +5650,18 @@ function findRenderedTableCell(table, cellMeta) {
   ] || null;
 }
 
+function renderedTableCellBackgroundAttributes(value) {
+  const exactColor = normaliseCssColor(value);
+  if (!exactColor) return '';
+
+  return ` data-dh-bg-color="${escapeAttr(exactColor.toLowerCase())}"`;
+}
+
 function renderChangedTableCell(cell, oldCell, currentCell) {
-  const oldBackgroundAttr = oldCell.backgroundColor
-    ? ` data-dh-bg-color="${escapeAttr(oldCell.backgroundColor)}"`
-    : '';
-  const currentBackgroundAttr = currentCell.backgroundColor
-    ? ` data-dh-bg-color="${escapeAttr(currentCell.backgroundColor)}"`
-    : '';
+  const oldBackgroundAttr =
+    renderedTableCellBackgroundAttributes(oldCell.backgroundColor);
+  const currentBackgroundAttr =
+    renderedTableCellBackgroundAttributes(currentCell.backgroundColor);
   // Inline tables render both versions inside one physical cell. Decorate the
   // two values before inserting them so word additions remain green/red while
   // unchanged text whose visual formatting changed receives the same yellow
@@ -5633,12 +5676,25 @@ function renderChangedTableCell(cell, oldCell, currentCell) {
   // current-value region so the previous-value region can independently show
   // the old cell background instead of inheriting the current one.
   cell.removeAttribute('data-dh-bg-color');
+  const outerCellStyle = safeStyleDeclarations(
+    cell.getAttribute('style') || ''
+  ).filter((declaration) => {
+    const property = declaration.split(':')[0].trim().toLowerCase();
+    return property !== 'background' && property !== 'background-color';
+  });
+  if (outerCellStyle.length) {
+    cell.setAttribute('style', outerCellStyle.join('; '));
+  } else {
+    cell.removeAttribute('style');
+  }
   cell.innerHTML = [
+    '<div class="dh-table-cell-versions">',
     `<div class="dh-table-cell-version dh-table-cell-version--previous"${oldBackgroundAttr}>`,
     `<div class="dh-table-cell-version__value">${comparison.historicalHtml || '&nbsp;'}</div>`,
     '</div>',
     `<div class="dh-table-cell-version dh-table-cell-version--current"${currentBackgroundAttr}>`,
     `<div class="dh-table-cell-version__value">${comparison.currentHtml || '&nbsp;'}</div>`,
+    '</div>',
     '</div>',
   ].join('');
 }
