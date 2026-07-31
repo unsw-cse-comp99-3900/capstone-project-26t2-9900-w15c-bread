@@ -1,0 +1,127 @@
+.dh-user-guide-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(9, 30, 66, 0.64);
+  backdrop-filter: blur(3px);
+}
+
+.dh-user-guide {
+  width: min(1040px, 100%);
+  max-height: min(900px, calc(100vh - 56px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #c7d1e0;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #172b4d;
+  box-shadow: 0 24px 70px rgba(9, 30, 66, 0.35);
+}
+
+.dh-user-guide__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 26px;
+  border-bottom: 1px solid #dfe1e6;
+  background: linear-gradient(135deg, #f7f9ff 0%, #ffffff 70%);
+}
+
+.dh-user-guide__header h2,
+.dh-user-guide__header p,
+.dh-user-guide__section h3,
+.dh-user-guide__section p {
+  margin-top: 0;
+}
+
+.dh-user-guide__header-actions,
+.dh-user-guide__languages {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dh-user-guide__languages {
+  padding: 3px;
+  border-radius: 8px;
+  background: #ebecf0;
+}
+
+.dh-user-guide__languages button,
+.dh-user-guide__header-actions > button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #42526e;
+  cursor: pointer;
+}
+
+.dh-user-guide__languages button.is-active {
+  border-color: #b3d4ff;
+  background: #ffffff;
+  color: #0052cc;
+  box-shadow: 0 1px 3px rgba(9, 30, 66, 0.16);
+}
+
+.dh-user-guide__body {
+  overflow-y: auto;
+  padding: 8px 26px 30px;
+  scroll-behavior: smooth;
+}
+
+.dh-user-guide__section {
+  padding: 24px 0;
+  border-bottom: 1px solid #ebecf0;
+  line-height: 1.65;
+}
+
+.dh-user-guide__figure {
+  margin: 20px 0 4px;
+}
+
+.dh-user-guide__image-frame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #c7d1e0;
+  border-radius: 12px;
+  background: #f4f5f7;
+  box-shadow: 0 8px 24px rgba(9, 30, 66, 0.14);
+}
+
+.dh-user-guide__image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.dh-user-guide__image-badge {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  left: 12px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(9, 30, 66, 0.86);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dh-user-guide__figure figcaption {
+  margin-top: 8px;
+  color: #6b778c;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .dh-user-guide-backdrop { padding: 10px; }
+  .dh-user-guide { max-height: calc(100vh - 20px); border-radius: 10px; }
+  .dh-user-guide__header { flex-direction: column; padding: 18px; }
+  .dh-user-guide__header-actions { width: 100%; justify-content: space-between; }
+  .dh-user-guide__body { padding: 4px 18px 22px; }
+}

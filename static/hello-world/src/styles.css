@@ -67,6 +67,36 @@ body {
   font-size: 14px;
   cursor: pointer;
 }
+
+.dh-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dh-help-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #b3d4ff;
+  border-radius: 50%;
+  background: #deebff;
+  color: #0052cc;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(9, 30, 66, 0.12);
+}
+
+.dh-help-button:hover,
+.dh-help-button:focus-visible {
+  border-color: #0052cc;
+  background: #b3d4ff;
+  outline: 2px solid #4c9aff;
+  outline-offset: 2px;
+}
+
 .dh-close:hover {
   background: #f4f5f7;
 }
