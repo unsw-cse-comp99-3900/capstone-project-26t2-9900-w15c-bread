@@ -1238,6 +1238,31 @@ describe('Sprint 2 diff classification and display requirements', () => {
     expect(result.blocks[1].renderedHtml).toContain('data-dh-bg-color="#dcfff1"');
   });
 
+  test('classifies a middle-column removal plus trailing insertion as net-zero structure', () => {
+    const oldTable = [
+      '<table><tbody>',
+      '<tr><th>Dimension</th><th>Assessment</th><th>test</th><th></th><th>Evidence</th><th>Status</th></tr>',
+      '<tr><td>Functional</td><td>Ready</td><td></td><td></td><td>Regression evidence</td><td>PASS</td></tr>',
+      '<tr><td>Reliability</td><td>Stable</td><td></td><td></td><td>Soak evidence</td><td>PASS</td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const currentTable = [
+      '<table><tbody>',
+      '<tr><th>Dimension</th><th>Assessment</th><th>test</th><th>Evidence</th><th>Status</th><th></th></tr>',
+      '<tr><td>Functional</td><td>Ready</td><td></td><td>Regression evidence</td><td>PASS</td><td></td></tr>',
+      '<tr><td>Reliability</td><td>Stable</td><td></td><td>Soak evidence</td><td>PASS</td><td></td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const result = buildRichTextDiffHtml(oldTable, currentTable, '', {});
+    const tableDiff = result.blocks[0].tableDiff;
+
+    expect(tableDiff.mode).toBe('cell_level');
+    expect(tableDiff.structureChange).toBe('net_zero_structure');
+    expect(tableDiff.displayComparison).not.toBeNull();
+    expect(tableDiff.displayComparison.alignment.columns.historicalOnly).toEqual([3]);
+    expect(tableDiff.displayComparison.alignment.columns.currentOnly).toEqual([5]);
+  });
+
   test('wraps empty and populated table-cell versions in one full-height container', () => {
     const result = buildRichTextDiffHtml(
       '<table><tbody><tr><td>Stable</td><td></td></tr></tbody></table>',

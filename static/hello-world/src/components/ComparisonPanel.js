@@ -707,7 +707,7 @@ function DiffDisplayRows({
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
             key={`${key}-${part.type}-${partIndex}`}
           >
-            {!['table-cell-level', 'context'].includes(part.type) ? (
+            {!['table-cell-level', 'table-structure-display', 'context'].includes(part.type) ? (
               <span className="dh-github-diff-part__marker">
                 {part.type === 'added' ? '+' : '-'}
               </span>

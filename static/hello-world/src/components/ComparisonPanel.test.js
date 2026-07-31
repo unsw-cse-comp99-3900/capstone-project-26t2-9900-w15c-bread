@@ -4,7 +4,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react-dom/test-utils';
 import { buildRichTextDiffHtml } from '../utils';
 import { buildRecoveryStorageHtml } from '../recoveryStorage';
-import { tableCellChoiceKey } from '../tableCellRecovery';
+import {
+  getCellScopedTableDiff,
+  tableCellChoiceKey,
+} from '../tableCellRecovery';
 import ComparisonPanel, {
   buildInteractiveTableCellDiffHtml,
   buildDiffDisplayRows,
@@ -482,6 +485,72 @@ describe('Draft Preview ordered-list break recovery', () => {
 });
 
 describe('large table write-back controls', () => {
+  test('keeps net-zero column structure changes on whole-table recovery', () => {
+    const historicalTable = [
+      '<table><tbody>',
+      '<tr><td>Dimension</td><td>Assessment</td><td>test</td><td></td><td>Evidence</td><td>Status</td></tr>',
+      '<tr><td>Functional</td><td>Ready</td><td></td><td></td><td>Regression</td><td>PASS</td></tr>',
+      '<tr><td>Reliability</td><td>Stable</td><td></td><td></td><td>Soak</td><td>PASS</td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const currentTable = [
+      '<table><tbody>',
+      '<tr><td>Dimension</td><td>Assessment</td><td>test</td><td>Evidence</td><td>Status</td><td></td></tr>',
+      '<tr><td>Functional</td><td>Ready</td><td></td><td>Regression</td><td>PASS</td><td></td></tr>',
+      '<tr><td>Reliability</td><td>Stable</td><td></td><td>Soak</td><td>PASS</td><td></td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(historicalTable, currentTable, '', {});
+    const display = buildDiffDisplayRows(diff.blocks);
+    const row = display.selectableRows[0];
+    const parts = getGitHubStyleDiffParts(row.blocks);
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('table-structure-display');
+    expect(getCellScopedTableDiff(row.blocks)).toBeNull();
+    expect(diff.blocks[0].tableDiff.structureChange).toBe(
+      'net_zero_structure'
+    );
+  });
+
+  test('uses a read-only structure display while retaining whole-table actions', () => {
+    const historicalTable = [
+      '<table><tbody>',
+      '<tr><td>H1</td><td>H2</td><td>H3</td></tr>',
+      '<tr><td>A1</td><td>A2</td><td>A3</td></tr>',
+      '<tr><td>C1</td><td>C2</td><td>C3</td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const currentTable = [
+      '<table><tbody>',
+      '<tr><td>H1</td><td>XH</td><td>H2</td><td>H3</td></tr>',
+      '<tr><td>A1</td><td>AX</td><td>A2</td><td>A3</td></tr>',
+      '<tr><td>B1</td><td>BX</td><td>B2</td><td>B3</td></tr>',
+      '<tr><td>C1</td><td>CX</td><td>C2</td><td>C3</td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(
+      historicalTable,
+      currentTable,
+      '',
+      {}
+    );
+    const display = buildDiffDisplayRows(diff.blocks);
+    const parts = getGitHubStyleDiffParts(display.selectableRows[0].blocks);
+    const config = getChangeChoiceActionConfig(parts, true, false, false);
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('table-structure-display');
+    expect((parts[0].html.match(/<table\b/g) || [])).toHaveLength(1);
+    expect(parts[0].html).toContain('dh-table-structure-diff--added');
+    expect(config).toEqual({
+      position: 'after',
+      visible: true,
+      currentLabel: 'Keep current change',
+      oldLabel: 'Restore old content',
+    });
+  });
+
   test('renders two changed cells inside one Inline comparison table', () => {
     const diff = buildRichTextDiffHtml(
       '<table><tbody><tr><td>A</td><td>Old one</td></tr><tr><td>B</td><td>Old two</td></tr></tbody></table>',

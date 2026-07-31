@@ -1,4 +1,5 @@
 import { buildRichSideBySideInlineHtml } from './richInlineDiff';
+import { buildStructureAwareTableDisplay } from './tableStructureDisplay';
 
 // Small formatting helpers for the timeline.
 
@@ -6068,6 +6069,18 @@ function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
     compatibility
   );
   if (!comparison) return null;
+  // Equal dimensions can still hide a structural edit, such as removing a
+  // middle column and adding a different column at the right edge. The shared
+  // display matcher returns a value only when stable shifted anchors prove
+  // that net-zero structure change; ordinary cell edits still return null.
+  const displayComparison = buildStructureAwareTableDisplay(
+    oldBlock.renderedHtml || oldBlock.html,
+    currentBlock.renderedHtml || currentBlock.html
+  );
+  const structureChange =
+    compatibility.kind === 'same' && displayComparison
+      ? 'net_zero_structure'
+      : compatibility.kind;
 
   return {
     type: 'modified',
@@ -6085,7 +6098,8 @@ function buildCellLevelTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
     inline: [],
     tableDiff: {
       mode: 'cell_level',
-      structureChange: compatibility.kind,
+      structureChange,
+      displayComparison,
       ...comparison,
       rows: Math.max(oldRows.length, currentRows.length),
       columns: Math.max(
@@ -6114,9 +6128,18 @@ function buildTableReplacementBlocks(oldBlock, currentBlock) {
     );
 
     if (comparison) {
+      const displayComparison = buildStructureAwareTableDisplay(
+        oldBlock.renderedHtml || oldBlock.html,
+        currentBlock.renderedHtml || currentBlock.html
+      );
+      const structureChange =
+        compatibility.kind === 'same' && displayComparison
+          ? 'net_zero_structure'
+          : compatibility.kind;
       removedBlock.tableDiff = {
         mode: 'cell_level',
-        structureChange: compatibility.kind,
+        structureChange,
+        displayComparison,
         ...comparison,
         rows: Math.max(oldRows.length, currentRows.length),
         columns: Math.max(
@@ -6129,6 +6152,10 @@ function buildTableReplacementBlocks(oldBlock, currentBlock) {
     }
   }
 
+  const displayComparison = buildStructureAwareTableDisplay(
+    oldBlock.renderedHtml || oldBlock.html,
+    currentBlock.renderedHtml || currentBlock.html
+  );
   removedBlock.tableDiff = {
     mode: 'structure',
     reason: 'table logical grid could not be mapped reliably',
@@ -6136,12 +6163,17 @@ function buildTableReplacementBlocks(oldBlock, currentBlock) {
     currentRows: currentRows.length,
     oldCells: countTableCells(oldRows),
     currentCells: countTableCells(currentRows),
+    displayComparison,
   };
   addedBlock.tableDiff = removedBlock.tableDiff;
   return [removedBlock, addedBlock];
 }
 
 function buildSideBySideTableDiff(oldBlock, currentBlock, oldRows, currentRows) {
+  const displayComparison = buildStructureAwareTableDisplay(
+    oldBlock.renderedHtml || oldBlock.html,
+    currentBlock.renderedHtml || currentBlock.html
+  );
   return {
     type: 'modified',
     tag: currentBlock.tag,
@@ -6172,6 +6204,7 @@ function buildSideBySideTableDiff(oldBlock, currentBlock, oldRows, currentRows) 
       currentRows: currentRows.length,
       oldCells: countTableCells(oldRows),
       currentCells: countTableCells(currentRows),
+      displayComparison,
     },
     added: 1,
     removed: 1,

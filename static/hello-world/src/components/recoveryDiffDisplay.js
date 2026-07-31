@@ -139,11 +139,28 @@ export function getGitHubStyleDiffParts(blockOrBlocks) {
         tableBlocks.every((block) => block.nodeType === 'table') &&
         sharedTableDiff &&
         sharedTableDiff.mode === 'cell_level' &&
+        !sharedTableDiff.displayComparison &&
         sharedTableDiff.comparisonHtml &&
         tableBlocks[1].tableDiff === sharedTableDiff
     );
     if (isCellLevelTablePair) {
       return [{ type: 'table-cell-level', html: sharedTableDiff.comparisonHtml }];
+    }
+    const isStructureDisplayTablePair = Boolean(
+      tableBlocks.length === 2 &&
+        tableBlocks[0].type === 'removed' &&
+        tableBlocks[1].type === 'added' &&
+        tableBlocks.every((block) => block.nodeType === 'table') &&
+        sharedTableDiff &&
+        sharedTableDiff.displayComparison &&
+        sharedTableDiff.displayComparison.inlineComparisonHtml &&
+        tableBlocks[1].tableDiff === sharedTableDiff
+    );
+    if (isStructureDisplayTablePair) {
+      return [{
+        type: 'table-structure-display',
+        html: sharedTableDiff.displayComparison.inlineComparisonHtml,
+      }];
     }
     const sharedCodeDiff = tableBlocks[0] && tableBlocks[0].codeDiff;
     const isLineAwareCodePair = Boolean(
@@ -203,9 +220,21 @@ export function getGitHubStyleDiffParts(blockOrBlocks) {
     block.nodeType === 'table' &&
     block.tableDiff &&
     block.tableDiff.mode === 'cell_level' &&
+    !block.tableDiff.displayComparison &&
     block.tableDiff.comparisonHtml
   ) {
     return [{ type: 'table-cell-level', html: block.tableDiff.comparisonHtml }];
+  }
+  if (
+    block.nodeType === 'table' &&
+    block.tableDiff &&
+    block.tableDiff.displayComparison &&
+    block.tableDiff.displayComparison.inlineComparisonHtml
+  ) {
+    return [{
+      type: 'table-structure-display',
+      html: block.tableDiff.displayComparison.inlineComparisonHtml,
+    }];
   }
   if (
     block.nodeType === 'code_block' &&
@@ -302,7 +331,7 @@ export function VersionDifferenceNotesRows({ rows, limited }) {
             className={`dh-github-diff-part dh-github-diff-part--${part.type}`}
             key={`${row.key}-${part.type}-${partIndex}`}
           >
-            {!['table-cell-level', 'context'].includes(part.type) ? (
+            {!['table-cell-level', 'table-structure-display', 'context'].includes(part.type) ? (
               <span className="dh-github-diff-part__marker">
                 {part.type === 'added' ? '+' : '-'}
               </span>

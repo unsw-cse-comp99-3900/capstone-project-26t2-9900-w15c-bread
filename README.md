@@ -58,6 +58,16 @@ static/hello-world/src/utils.js
   Storage-format renderer, sanitizer, semantic block extraction, signatures,
   LCS diff, layout handling and table comparison.
 
+static/hello-world/src/tableStructureDisplay.js
+  Shared read-only two-dimensional table structure matcher used by Inline and
+  Side-by-side comparison.
+
+static/hello-world/src/components/splitDiffModel.js
+  Builds Side-by-side rows and source-specific rich/table diff presentation.
+
+static/hello-world/src/tableCellRecovery.js
+  Cell-scoped table choices for tables whose logical structure is unchanged.
+
 static/hello-world/src/recoveryStorage.js
   Reconstructs valid Confluence Storage from whole-block choices.
 
@@ -66,7 +76,11 @@ static/hello-world/src/styles.css
 
 static/hello-world/src/utils.test.js
 static/hello-world/src/recoveryStorage.test.js
-  Renderer, diff and Storage reconstruction regression tests.
+static/hello-world/src/tableStructureDisplay.test.js
+static/hello-world/src/components/splitDiffModel.test.js
+static/hello-world/src/components/ComparisonPanel.test.js
+  Renderer, diff presentation, table alignment, recovery controls and Storage
+  reconstruction regression tests.
 ```
 
 ## Forge Configuration
@@ -264,9 +278,10 @@ shows a limited-comparison warning.
   Macros, media, links, mentions, and other empty-looking rich nodes remain
   untouched. Inline `<br>` breaks inside non-empty text (commonly produced by
   Shift+Enter) remain part of their containing paragraph.
-- Recovery remains block-level. Table cells are not independently staged.
-  Compatible layout sections additionally expose one atomic column-width
-  choice, separate from their child-content choices.
+- Tables whose logical structure is unchanged expose an independent choice for
+  each modified cell. Any row/column structure change retains one atomic
+  whole-table choice. Compatible layout sections additionally expose one atomic
+  column-width choice, separate from their child-content choices.
 
 Unresolved changes display red/green outer borders and `-`/`+` gutters without
 red/green fills, so original content backgrounds remain visible. Clicking a
@@ -279,25 +294,47 @@ Table matching uses logical grid coordinates rather than raw `<td>` indexes.
 `rowspan` and `colspan` occupy all of their logical slots, preventing later cells
 from shifting during matching.
 
-When mapping is reliable, the comparison UI renders one table:
+When the logical table structure is unchanged:
 
 - unchanged cells appear once;
 - a modified cell contains previous and current regions with red and green
-  borders, preserving each version's own cell background;
-- a complete row appended/removed at the bottom or a complete column
-  appended/removed on the right is outlined as one structural region;
-- simultaneous terminal row/column changes are rendered as one L-shaped region;
-- opposite terminal changes use a neutral synthetic corner where neither
-  source table has a real cell; and
-- structural row/column regions omit `-`/`+` markers so narrow cells are not
-  widened or covered.
+  borders, preserving each version's own content and background;
+- clicking a modified cell reveals its own **Keep current change** and
+  **Restore old content** actions; and
+- choosing a cell replaces only that cell's recoverable Storage fragment.
 
-The app falls back to complete old/current table rows when correspondence is
-ambiguous, including middle row/column insertion, span changes, duplicate
-logical coordinates, or other incompatible grid geometry.
+For row or column structure changes, Inline and Side-by-side comparison share
+the same conservative two-dimensional display alignment:
 
-Cell-level display does not change recovery granularity. The underlying old and
-current complete table blocks still share one Keep/Restore choice.
+- complete rows and columns can be matched when inserted or removed at the
+  beginning, middle or end of a regular rectangular table;
+- simultaneous row and column changes use one mapping, including add/add,
+  remove/remove, add/remove and remove/add combinations;
+- same-direction intersections are marked once as one union region;
+- opposite-direction intersections use a neutral synthetic corner where
+  neither source table contains a real cell;
+- Inline renders one composite table, while Side-by-side retains separate
+  historical/current tables using the same row and column pairs;
+- structural regions use red/green outlines without `-`/`+` gutters, so narrow
+  or coloured cells are not widened, covered or recoloured; and
+- these structure changes remain one whole-table Keep/Restore decision. The
+  richer alignment changes display granularity only, not recovery granularity.
+
+Equal row and column counts are not automatically treated as equal structure.
+For example, deleting an empty middle column and adding an empty column at the
+right is classified as `net_zero_structure`. Exact, meaningful neighbouring
+columns such as `Evidence` and `Status` act as shifted anchors, so they remain
+neutral and appear once. An all-empty row or column is deliberately not used as
+an identity anchor because identical empty regions may represent different
+logical positions. Ordinary same-position cell content/style changes have no
+shifted anchor and therefore remain cell-level changes.
+
+The structural display matcher is confidence-gated. Ambiguous/duplicate
+anchors, uncertain reorderings, structural changes involving merged cells, or
+other grid geometry that cannot be reconstructed safely fall back to the
+existing complete historical/current table comparison. Compatible tables whose
+`rowspan` and `colspan` geometry is unchanged continue to use the logical-grid
+cell matcher.
 
 ## Confluence Layouts
 
@@ -391,11 +428,11 @@ cd static/hello-world
 npm.cmd run build
 ```
 
-Last verified on 2026-07-15:
+Last verified on 2026-07-31:
 
 ```text
-Test Suites: 2 passed, 2 total
-Tests:       114 passed, 114 total
+Test Suites: 14 passed, 14 total
+Tests:       244 passed, 244 total
 Production build: compiled successfully
 ```
 

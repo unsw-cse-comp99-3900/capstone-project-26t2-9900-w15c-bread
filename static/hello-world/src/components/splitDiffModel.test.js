@@ -100,6 +100,134 @@ test('uses source-specific table HTML for a cell-level split row', () => {
 });
 
 test.each([
+  {
+    name: 'one middle column',
+    currentHeader:
+      '<th>Dimension</th><th>Current assessment</th><th>test</th><th>Evidence / remaining action</th><th>Status</th>',
+    currentFirstRow:
+      '<td>Functional readiness</td><td>Flows pass</td><td></td><td>Regression complete</td><td>PASS</td>',
+    currentSecondRow:
+      '<td>Reliability</td><td>Load sustained</td><td></td><td>Latency accepted</td><td>PASS</td>',
+    expectedAddedCells: ['test', '', ''],
+  },
+  {
+    name: 'a middle column and a populated right column',
+    currentHeader:
+      '<th>Dimension</th><th>Current assessment</th><th>test</th><th>Evidence / remaining action</th><th>Status</th><th>qwer</th>',
+    currentFirstRow:
+      '<td>Functional readiness</td><td>Flows pass</td><td></td><td>Regression complete</td><td>PASS</td><td>asd</td>',
+    currentSecondRow:
+      '<td>Reliability</td><td>Load sustained</td><td></td><td>Latency accepted</td><td>PASS</td><td>zxc</td>',
+    expectedAddedCells: ['test', 'qwer', '', 'asd', '', 'zxc'],
+  },
+])(
+  'keeps neighbouring table text neutral for $name',
+  ({
+    currentHeader,
+    currentFirstRow,
+    currentSecondRow,
+    expectedAddedCells,
+  }) => {
+    const historicalTable = [
+      '<table><thead><tr>',
+      '<th>Dimension</th><th>Current assessment</th>',
+      '<th>Evidence / remaining action</th><th>Status</th>',
+      '</tr></thead><tbody>',
+      '<tr><td>Functional readiness</td><td>Flows pass</td>',
+      '<td>Regression complete</td><td>PASS</td></tr>',
+      '<tr><td>Reliability</td><td>Load sustained</td>',
+      '<td>Latency accepted</td><td>PASS</td></tr>',
+      '</tbody></table>',
+    ].join('');
+    const currentTable = [
+      '<table><thead><tr>',
+      currentHeader,
+      '</tr></thead><tbody><tr>',
+      currentFirstRow,
+      '</tr><tr>',
+      currentSecondRow,
+      '</tr></tbody></table>',
+    ].join('');
+    const diff = buildRichTextDiffHtml(
+      historicalTable,
+      currentTable,
+      '',
+      {}
+    );
+    const row = buildFullDocumentSplitRows(diff.blocks)[0];
+    const historicalHtml = getSplitRowSideHtml(row, 'historical');
+    const currentHtml = getSplitRowSideHtml(row, 'current');
+    const historicalDocument = new DOMParser().parseFromString(
+      historicalHtml,
+      'text/html'
+    );
+    const currentDocument = new DOMParser().parseFromString(
+      currentHtml,
+      'text/html'
+    );
+    const addedCellText = Array.from(
+      currentDocument.querySelectorAll(
+        '.dh-table-structure-diff--added'
+      )
+    ).map((cell) => cell.textContent.trim());
+
+    expect(['side_by_side', 'structure']).toContain(
+      diff.blocks[0].tableDiff.mode
+    );
+    expect(historicalHtml).not.toContain('sbs-inline-change');
+    expect(currentHtml).not.toContain('sbs-inline-change');
+    expect(
+      historicalDocument.querySelectorAll(
+        '.dh-table-structure-diff--removed'
+      )
+    ).toHaveLength(0);
+    expect(addedCellText).toEqual(expectedAddedCells);
+    expect(
+      currentDocument
+        .querySelector('th:nth-child(2)')
+        .classList.contains('dh-table-structure-diff--added')
+    ).toBe(false);
+    expect(
+      currentDocument
+        .querySelector('th:nth-last-child(2)')
+        .classList.contains('dh-table-structure-diff--added')
+    ).toBe(false);
+  }
+);
+
+test('marks a safely aligned middle row without highlighting neighbouring text', () => {
+  const historicalTable = [
+    '<table><tbody>',
+    '<tr><td>Alpha</td><td>Stable A</td></tr>',
+    '<tr><td>Charlie</td><td>Stable C</td></tr>',
+    '</tbody></table>',
+  ].join('');
+  const currentTable = [
+    '<table><tbody>',
+    '<tr><td>Alpha</td><td>Stable A</td></tr>',
+    '<tr><td>Bravo</td><td>Inserted B</td></tr>',
+    '<tr><td>Charlie</td><td>Stable C</td></tr>',
+    '</tbody></table>',
+  ].join('');
+  const diff = buildRichTextDiffHtml(historicalTable, currentTable, '', {});
+  const row = buildFullDocumentSplitRows(diff.blocks)[0];
+  const historicalHtml = getSplitRowSideHtml(row, 'historical');
+  const currentHtml = getSplitRowSideHtml(row, 'current');
+  const currentDocument = new DOMParser().parseFromString(
+    currentHtml,
+    'text/html'
+  );
+
+  expect(historicalHtml).not.toContain('sbs-inline-change');
+  expect(currentHtml).not.toContain('sbs-inline-change');
+  expect(
+    Array.from(
+      currentDocument.querySelectorAll('.dh-table-structure-diff--added')
+    ).map((cell) => cell.textContent.trim())
+  ).toEqual(['Bravo', 'Inserted B']);
+});
+
+test.each([
   [
     'added',
     '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>',
@@ -351,6 +479,51 @@ test('keeps table inline highlights inside the cells whose values changed', () =
       currentDocument.querySelectorAll('.sbs-inline-change--current')
     ).map((node) => node.textContent)
   ).toEqual(['25000', '25000']);
+});
+
+test('aligns a removed middle empty column and an added trailing empty column', () => {
+  const historicalTable = [
+    '<table><tbody>',
+    '<tr><th>Dimension</th><th>Assessment</th><th>test</th><th></th><th>Evidence</th><th>Status</th></tr>',
+    '<tr><td>Functional</td><td>Ready</td><td></td><td></td><td>Regression evidence</td><td>PASS</td></tr>',
+    '<tr><td>Reliability</td><td>Stable</td><td></td><td></td><td>Soak evidence</td><td>PASS</td></tr>',
+    '</tbody></table>',
+  ].join('');
+  const currentTable = [
+    '<table><tbody>',
+    '<tr><th>Dimension</th><th>Assessment</th><th>test</th><th>Evidence</th><th>Status</th><th></th></tr>',
+    '<tr><td>Functional</td><td>Ready</td><td></td><td>Regression evidence</td><td>PASS</td><td></td></tr>',
+    '<tr><td>Reliability</td><td>Stable</td><td></td><td>Soak evidence</td><td>PASS</td><td></td></tr>',
+    '</tbody></table>',
+  ].join('');
+  const diff = buildRichTextDiffHtml(
+    historicalTable,
+    currentTable,
+    '',
+    {}
+  );
+  const row = buildFullDocumentSplitRows(diff.blocks)[0];
+  const historical = getSplitRowSideHtml(row, 'historical');
+  const current = getSplitRowSideHtml(row, 'current');
+  const historicalDocument = new DOMParser().parseFromString(
+    historical,
+    'text/html'
+  );
+  const currentDocument = new DOMParser().parseFromString(
+    current,
+    'text/html'
+  );
+
+  expect(
+    historicalDocument.querySelectorAll('.dh-table-structure-diff--removed')
+  ).toHaveLength(3);
+  expect(
+    currentDocument.querySelectorAll('.dh-table-structure-diff--added')
+  ).toHaveLength(3);
+  expect(historical).not.toContain('sbs-inline-change');
+  expect(current).not.toContain('sbs-inline-change');
+  expect(historicalDocument.body.textContent.match(/Evidence/g)).toHaveLength(1);
+  expect(currentDocument.body.textContent.match(/Evidence/g)).toHaveLength(1);
 });
 
 test('highlights formatting-only changes while retaining each source format', () => {

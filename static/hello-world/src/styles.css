@@ -2196,7 +2196,8 @@ body {
   border: 2px solid var(--dh-red);
 }
 
-.dh-github-diff-part--table-cell-level {
+.dh-github-diff-part--table-cell-level,
+.dh-github-diff-part--table-structure-display {
   display: block;
   border: 0;
   background: #fff;
@@ -2255,7 +2256,8 @@ body {
   background: #ffe380;
 }
 
-.dh-github-diff-part--table-cell-level .dh-github-diff-part__content {
+.dh-github-diff-part--table-cell-level .dh-github-diff-part__content,
+.dh-github-diff-part--table-structure-display .dh-github-diff-part__content {
   padding: 0;
   overflow-x: auto;
 }
