@@ -5,6 +5,7 @@ import {
   normaliseStorageHtmlForParsing,
 } from './utils';
 import { blockSelectionKey } from './diffDisplay';
+import { buildCellScopedTableChoiceRun } from './tableCellRecovery';
 
 const UNSUPPORTED_MISSING_RAW_ERROR =
   'Recovered content is missing raw Confluence storage for an unsupported block, so write-back is disabled to avoid data loss.';
@@ -650,6 +651,27 @@ export function buildRecoveryStorageHtml(
 
   for (let index = 0; index < safeBlocks.length; index++) {
     const block = safeBlocks[index];
+
+    // Same-structure tables can expose independent cell choices in the Inline
+    // comparison UI. Rebuild one complete table from the current Storage and
+    // copy only explicitly restored old cells into it. The ordinary whole-block
+    // path below remains untouched for structural table changes.
+    const tableCellRun = buildCellScopedTableChoiceRun({
+      blocks: safeBlocks,
+      index,
+      blockChoices,
+      blockChoiceKeys,
+      storageFormat: true,
+    });
+    if (tableCellRun) {
+      if (!String(tableCellRun.html || '').trim()) {
+        return { html: '', error: MISSING_STORAGE_ERROR };
+      }
+      storageParts.push(tableCellRun.html);
+      index += tableCellRun.consumed - 1;
+      continue;
+    }
+
     const useCurrent = getBlockChoice(index, blockChoices, blockChoiceKeys) !== 'old';
     const error = validateSelectedBlock(block, useCurrent);
     if (error) return { html: '', error };
