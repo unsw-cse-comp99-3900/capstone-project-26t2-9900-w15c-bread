@@ -5,6 +5,7 @@ import ComparisonWorkspaceToolbar from './components/ComparisonWorkspaceToolbar'
 import ComparisonErrorBoundary from './components/ComparisonErrorBoundary';
 import VersionCommentModal from './components/VersionCommentModal';
 import SideBySideDiffView from './components/SideBySideDiffView';
+import UserGuideModal from './components/UserGuideModal';
 import { useRecoveryChoices } from './useRecoveryWorkflow';
 import { mockData } from './mockData';
 import './styles.css';
@@ -40,6 +41,7 @@ function App() {
   const [diffSummariesByVersion, setDiffSummariesByVersion] = useState({});
   const [viewMode, setViewMode] = useState('inline');
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [userGuideOpen, setUserGuideOpen] = useState(false);
   const [selectableContext, setSelectableContext] = useState({
     comparisonKey: '',
     keys: [],
@@ -217,9 +219,20 @@ function App() {
           <h1 className="dh-title">Dynamic History</h1>
           {data && data.pageTitle ? <span className="dh-subtitle">{data.pageTitle}</span> : null}
         </div>
-        <button className="dh-close" onClick={handleClose}>
-          Close
-        </button>
+        <div className="dh-header__actions">
+          <button
+            aria-label="Open user guide"
+            className="dh-help-button"
+            onClick={() => setUserGuideOpen(true)}
+            title="Open user guide"
+            type="button"
+          >
+            !
+          </button>
+          <button className="dh-close" onClick={handleClose} type="button">
+            Close
+          </button>
+        </div>
       </header>
 
       {usingMock && (
@@ -313,6 +326,7 @@ function App() {
           versions={versions}
         />
       ) : null}
+      <UserGuideModal open={userGuideOpen} onClose={() => setUserGuideOpen(false)} />
     </div>
   );
 }
