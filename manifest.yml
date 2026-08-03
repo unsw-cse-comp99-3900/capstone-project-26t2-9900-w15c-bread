@@ -12,7 +12,7 @@ modules:
 
 resources:
   - key: main
-    path: static/hello-world/build
+    path: static/confluence-dynamic-history/build
 
 permissions:
   scopes:
