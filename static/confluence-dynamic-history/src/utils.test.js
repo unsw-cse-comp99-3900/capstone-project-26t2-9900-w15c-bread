@@ -1988,9 +1988,11 @@ describe('prepareConfluenceHtml manual renderer', () => {
   test('renders ADF extension panels and keeps status lozenge labels', () => {
     const html = [
       '<ac:adf-extension><ac:adf-attribute key="extensionKey">com.atlassian.confluence.macro.core:panel</ac:adf-attribute><ac:adf-attribute key="parameters">{"panelType":"note","title":"Note"}</ac:adf-attribute><p>Note 面板：用于测试备注面板类型与正文变化。</p></ac:adf-extension>',
-      '<ac:structured-macro ac:name="status"><ac:parameter ac:name="title">NEUTRAL</ac:parameter><ac:parameter ac:name="colour">Neutral</ac:parameter></ac:structured-macro>',
+      '<ac:structured-macro ac:name="status"><ac:parameter ac:name="title">NEUTRAL</ac:parameter></ac:structured-macro>',
       '<ac:structured-macro ac:name="status"><ac:parameter ac:name="title">PURPLE</ac:parameter><ac:parameter ac:name="colour">Purple</ac:parameter></ac:structured-macro>',
-      '<ac:structured-macro ac:name="status"><ac:parameter ac:name="title">BLUE</ac:parameter></ac:structured-macro>',
+      '<ac:structured-macro ac:name="status"><ac:parameter ac:name="title">BLUE</ac:parameter><ac:parameter ac:name="colour">Blue</ac:parameter></ac:structured-macro>',
+      '<ac:structured-macro ac:name="status"><ac:parameter ac:name="title">A</ac:parameter></ac:structured-macro>',
+      '<ac:structured-macro ac:name="status"><ac:parameter ac:name="title">YES</ac:parameter></ac:structured-macro>',
       '<ac:adf-node type="extension"><ac:adf-attribute key="extensionKey">com.atlassian.confluence.macro.core:status</ac:adf-attribute><ac:adf-attribute key="parameters">{"text":"GREEN","color":"Green"}</ac:adf-attribute></ac:adf-node>',
     ].join('');
 
@@ -2000,13 +2002,15 @@ describe('prepareConfluenceHtml manual renderer', () => {
     expect(rendered).toContain('data-dh-node-type="panel"');
     expect(rendered).toContain('data-dh-panel-type="note"');
     expect(rendered).not.toContain('Unsupported Confluence block');
-    expect(rendered).toContain('data-dh-status-color="gray"');
+    expect((rendered.match(/data-dh-status-color="gray"/g) || [])).toHaveLength(3);
     expect(rendered).toContain('data-dh-status-color="purple"');
     expect(rendered).toContain('data-dh-status-color="blue"');
     expect(rendered).toContain('data-dh-status-color="green"');
     expect(text).toContain('NEUTRAL');
     expect(text).toContain('PURPLE');
     expect(text).toContain('BLUE');
+    expect(text).toContain('A');
+    expect(text).toContain('YES');
     expect(text).toContain('GREEN');
     expect(text).not.toContain('STATUS');
   });

@@ -327,8 +327,8 @@ def build_technical_doc():
     )
     add_table(doc, ["层", "文件", "职责"], [
         ("输入/后端", "src/index.js", "读取历史版本与 Current Storage；附件、用户；写回前并发版本校验。"),
-        ("核心渲染与 diff", "static/hello-world/src/utils.js", "Storage → 安全预览；语义块；签名；LCS；空行、表格、布局和代码特殊逻辑。"),
-        ("显示模型", "static/hello-world/src/diffDisplay.js", "变化运行配对、choice key、modified 显示分类、布局嵌套。"),
+        ("核心渲染与 diff", "static/confluence-dynamic-history/src/utils.js", "Storage → 安全预览；语义块；签名；LCS；空行、表格、布局和代码特殊逻辑。"),
+        ("显示模型", "static/confluence-dynamic-history/src/diffDisplay.js", "变化运行配对、choice key、modified 显示分类、布局嵌套。"),
         ("Inline 视图", "components/ComparisonPanel.js", "生成 richDiff、展示 Summary、连接恢复工作流。"),
         ("Side-by-side", "components/splitDiffModel.js / SideBySideDiffView.js", "完整文档双栏投影、对齐、占位、方向选择。"),
         ("恢复", "recoveryStorage.js / useRecoveryWorkflow.js", "从 choice 重建原始 Storage、预览、确认写回。"),

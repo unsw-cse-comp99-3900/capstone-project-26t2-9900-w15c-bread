@@ -153,8 +153,8 @@ def add_code_refs_table(document):
 
     rows = [
         ["README.md", "对整体 diff 流程、返回结构和近期增强做总说明。"],
-        ["static/hello-world/src/utils.js", "算法主实现：预处理、块级比对、行内 diff、代码块 diff、表格 diff。"],
-        ["static/hello-world/src/components/ComparisonPanel.js", "消费 summary，展示变更计数、limited 提示和兜底错误预览。"],
+        ["static/confluence-dynamic-history/src/utils.js", "算法主实现：预处理、块级比对、行内 diff、代码块 diff、表格 diff。"],
+        ["static/confluence-dynamic-history/src/components/ComparisonPanel.js", "消费 summary，展示变更计数、limited 提示和兜底错误预览。"],
         ["src/index.js", "从 Confluence 拉取版本、附件和作者信息，为前端 diff 提供输入。"],
     ]
 

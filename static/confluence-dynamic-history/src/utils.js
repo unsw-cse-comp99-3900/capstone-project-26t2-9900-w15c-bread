@@ -1230,7 +1230,12 @@ function normaliseStatusColor(color) {
 
 function renderStatus(text, color) {
   const initialText = cleanMacroDisplayText(text) || cleanUserFacingName(text);
-  const normalisedColor = normaliseStatusColor(color) || normaliseStatusColor(initialText);
+  // Confluence omits the colour value for neutral status labels in some
+  // Storage/ADF representations. Treat that absence as the neutral grey
+  // appearance. The visible label is user content and must never be used as a
+  // colour hint: labels such as "A" and "YES" can still be neutral, while a
+  // label such as "GREEN" is not necessarily configured with a green colour.
+  const normalisedColor = normaliseStatusColor(color) || 'gray';
   const statusText =
     initialText && initialText.toLowerCase() !== 'status'
       ? initialText
@@ -3232,9 +3237,15 @@ export function prepareConfluenceHtml(
     // Preserve normal custom labels, but replace generic labels with the color
     // name so the regression page displays NEUTRAL/PURPLE/BLUE/... as expected.
     if (node.tagName === 'SPAN' && /\b(status|lozenge)\b/i.test(originalClassName)) {
-      const statusColor = normaliseStatusColor(node.getAttribute('data-dh-status-color'));
+      // Legacy status spans may carry no class for Confluence's neutral
+      // appearance. Keep explicit class-derived colours, but consistently map
+      // the missing colour to grey instead of inheriting the renderer's blue
+      // fallback.
+      const statusColor =
+        normaliseStatusColor(node.getAttribute('data-dh-status-color')) || 'gray';
       const currentText = cleanMacroDisplayText(node.textContent);
       node.setAttribute('data-dh-node-type', 'status');
+      node.setAttribute('data-dh-status-color', statusColor);
 
       if (statusColor && (!currentText || /^status$/i.test(currentText))) {
         node.textContent = /\bneutral\b/i.test(originalClassName) ? 'NEUTRAL' : statusColor.toUpperCase();
