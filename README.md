@@ -376,8 +376,4 @@ changes require deployment and, when scopes change, an installation upgrade.
 ## Documentation
 
 - [Bilingual user guide](docs/user-guide-content.md)
-- [Historical rebuild notes](README_FIX_DRAFT_PREVIEW_REBUILD.md)
 
-The historical rebuild notes are retained for traceability and may describe
-earlier UI behavior. This README and the current automated tests are the
-authoritative references for the final implementation.
