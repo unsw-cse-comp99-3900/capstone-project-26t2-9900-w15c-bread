@@ -2279,7 +2279,7 @@ function renderAdfExtension(match) {
     return renderPanelBlock(panelType, title, body);
   }
 
-  return createRawFallbackHtml(match, {
+  return createUnsupportedFallbackHtml({
     type: 'Extension',
     name: titleCaseStorageName(extractAdfAttribute(match, ['extensionTitle', 'title'])),
   });
@@ -2300,20 +2300,20 @@ function titleCaseStorageName(value) {
     .join(' ');
 }
 
-function createRawFallbackHtml(rawMarkup, options = {}) {
+function createUnsupportedFallbackHtml(options = {}) {
   const type = cleanUserFacingName(options.type) || 'Unsupported Confluence block';
   const name = cleanUserFacingName(options.name);
   const label = name ? `${type}: ${name}` : type;
 
+  // Unsupported Storage nodes can contain macro parameters, internal IDs,
+  // URLs, tokens, or other customer data. The original Storage HTML remains
+  // on the diff block for lossless recovery, but the display fallback must
+  // never copy any of that raw markup into user-facing rendered HTML.
   return [
     '<div data-dh-node-type="unsupported" data-dh-support-level="raw">',
     '<p><strong>Unsupported Confluence block</strong></p>',
     `<p>Type: ${escapeHtml(label)}</p>`,
     '<p>This block cannot be fully rendered by this app. Original data is preserved.</p>',
-    '<details data-dh-raw-inspector="true">',
-    '<summary>View raw data</summary>',
-    `<pre>${escapeHtml(rawMarkup)}</pre>`,
-    '</details>',
     '</div>',
   ].join('');
 }
@@ -2345,7 +2345,7 @@ function expandConfluenceTaskLists(html) {
     }
 
     if (!taskItems.length) {
-      return createRawFallbackHtml(listMarkup, { type: 'Task list' });
+      return createUnsupportedFallbackHtml({ type: 'Task list' });
     }
 
     return `<ul data-dh-node-type="task_list">${taskItems.join('')}</ul>`;
@@ -2585,7 +2585,7 @@ function expandKnownStructuredMacros(html) {
         ].join('');
       }
 
-      return createRawFallbackHtml(macroMarkup, {
+      return createUnsupportedFallbackHtml({
         type: 'Structured macro',
         name: titleCaseStorageName(name),
       });
@@ -3266,9 +3266,9 @@ function visibleTextContent(node) {
 
   const clone = node.cloneNode(true);
 
-  // The raw inspector is deliberately visible to a developer on demand, but it
-  // must not affect normal diff text or leak internal identifiers into the
-  // user-facing preview.
+  // Ignore legacy inspector markup that may be present in previously generated
+  // preview HTML, as well as internal task markers. New unsupported-block
+  // fallbacks never emit raw inspectors because their content may be sensitive.
   Array.from(clone.querySelectorAll('[data-dh-raw-inspector], [data-dh-task-marker]')).forEach(
     (internalNode) => internalNode.remove()
   );

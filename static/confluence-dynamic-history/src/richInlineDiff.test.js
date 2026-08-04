@@ -104,3 +104,61 @@ test('does not decorate a source text-highlight background-only change', () => {
     '<mark data-dh-bg-color="green">workflows</mark>'
   );
 });
+
+test('does not highlight the first word of the next block when text is appended', () => {
+  const result = buildRichSideBySideInlineHtml(
+    [
+      '<p><strong>System version:</strong> 1.0</p>',
+      '<p><strong>Last</strong> reviewed: 3 August 2026</p>',
+    ].join(''),
+    [
+      '<p><strong>System version:</strong> 1.0!</p>',
+      '<p><strong>Last</strong> reviewed: 3 August 2026</p>',
+    ].join('')
+  );
+  const historicalDocument = new DOMParser().parseFromString(
+    result.historicalHtml,
+    'text/html'
+  );
+  const currentDocument = new DOMParser().parseFromString(
+    result.currentHtml,
+    'text/html'
+  );
+
+  expect(
+    Array.from(
+      historicalDocument.querySelectorAll('.sbs-inline-change--historical')
+    ).map((node) => node.textContent)
+  ).toEqual([]);
+  expect(
+    Array.from(
+      currentDocument.querySelectorAll('.sbs-inline-change--current')
+    ).map((node) => node.textContent)
+  ).toEqual(['!']);
+  expect(
+    historicalDocument.querySelectorAll('p')[1].querySelector('strong').innerHTML
+  ).toBe('Last');
+  expect(
+    currentDocument.querySelectorAll('p')[1].querySelector('strong').innerHTML
+  ).toBe('Last');
+});
+
+test('treats an explicit line break as a word boundary for inline diffing', () => {
+  const result = buildRichSideBySideInlineHtml(
+    '<p>Release 1.0<br><strong>Last</strong> reviewed</p>',
+    '<p>Release 1.0-ready<br><strong>Last</strong> reviewed</p>'
+  );
+  const currentDocument = new DOMParser().parseFromString(
+    result.currentHtml,
+    'text/html'
+  );
+
+  expect(
+    Array.from(
+      currentDocument.querySelectorAll('.sbs-inline-change--current')
+    ).map((node) => node.textContent)
+  ).toEqual(['-ready']);
+  expect(
+    currentDocument.querySelector('strong').innerHTML
+  ).toBe('Last');
+});

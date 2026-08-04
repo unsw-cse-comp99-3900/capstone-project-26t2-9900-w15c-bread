@@ -2021,17 +2021,6 @@ body {
   margin-bottom: 6px;
 }
 
-.dh-rich-page [data-dh-raw-inspector='true'] {
-  margin-top: 8px;
-}
-
-.dh-rich-page [data-dh-raw-inspector='true'] summary {
-  color: var(--dh-blue);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .dh-rich-page pre {
   position: relative;
   overflow-x: auto;
