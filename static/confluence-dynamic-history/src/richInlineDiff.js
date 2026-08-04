@@ -2,6 +2,50 @@ function tokenizeInlineText(text) {
   return String(text || '').match(/[\u3400-\u9fff]|\s+|[A-Za-z0-9_]+|[^\s]/g) || [];
 }
 
+// DOM textContent deliberately omits the visual separator between block-level
+// elements. For example, `<p>Version 1.0</p><p>Last reviewed</p>` becomes
+// `Version 1.0Last reviewed`. The tokenizer then treats `0Last` as one word,
+// so changing the version can incorrectly highlight `Last` on the next line.
+// These elements start or end a distinct text flow and therefore need a
+// virtual newline in the comparison model. The newline exists only in the
+// model: source HTML and recovery content remain untouched.
+const INLINE_TEXT_BOUNDARY_TAGS = new Set([
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'dd',
+  'div',
+  'dl',
+  'dt',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+]);
+
 function appendPart(parts, type, text) {
   const previous = parts[parts.length - 1];
   if (previous && previous.type === type) previous.text += text;
@@ -277,24 +321,57 @@ function collectTextState(root) {
   const nodes = [];
   const semanticFormats = [];
   const visualFormats = [];
-  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textParts = [];
   let offset = 0;
-  let node = walker.nextNode();
-  while (node) {
+
+  const appendBoundary = () => {
+    // Repeated nested block boundaries should behave as one separator. This
+    // also avoids adding a leading boundary before the first visible text.
+    if (!offset || textParts[textParts.length - 1] === '\n') return;
+    textParts.push('\n');
+    semanticFormats.push('');
+    visualFormats.push('');
+    offset++;
+  };
+
+  const appendTextNode = (node) => {
     const value = node.nodeValue || '';
     const signatures = elementInlineSignatures(node.parentElement, root);
     nodes.push({ node, start: offset, end: offset + value.length });
+    textParts.push(value);
     for (let index = 0; index < value.length; index++) {
       semanticFormats.push(signatures.semantic);
       visualFormats.push(signatures.visual);
     }
     offset += value.length;
-    node = walker.nextNode();
-  }
+  };
+
+  const visit = (node) => {
+    if (node.nodeType === 3) {
+      appendTextNode(node);
+      return;
+    }
+    if (node.nodeType !== 1) return;
+
+    const tagName = node.tagName.toLowerCase();
+    if (tagName === 'br') {
+      appendBoundary();
+      return;
+    }
+
+    const createsBoundary =
+      node !== root && INLINE_TEXT_BOUNDARY_TAGS.has(tagName);
+    if (createsBoundary) appendBoundary();
+    Array.from(node.childNodes || []).forEach(visit);
+    if (createsBoundary) appendBoundary();
+  };
+
+  Array.from(root.childNodes || []).forEach(visit);
+
   return {
     nodes,
     semanticFormats,
-    text: root.textContent || '',
+    text: textParts.join(''),
     visualFormats,
   };
 }

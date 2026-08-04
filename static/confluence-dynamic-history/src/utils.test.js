@@ -186,7 +186,7 @@ describe('type-specific diff safety', () => {
     expect(visiblePreviewText(result.blocks[0].renderedHtml)).toContain('Unsupported Confluence block');
   });
 
-  test('raw internal fields do not appear in normal preview text', () => {
+  test('raw internal fields do not appear anywhere in rendered preview HTML', () => {
     const result = buildRichTextDiffHtml(
       '',
       '<ac:structured-macro ac:name="jira-gadget" ac:macro-id="123e4567-e89b-12d3-a456-426614174000"><ac:parameter ac:name="url">https://example.atlassian.net/plugins/servlet/gadgets/ifr</ac:parameter></ac:structured-macro>',
@@ -194,11 +194,13 @@ describe('type-specific diff safety', () => {
       {}
     );
 
-    const normalText = visiblePreviewText(result.blocks[0].renderedHtml);
-    expect(normalText).toContain('Unsupported Confluence block');
-    expect(normalText).not.toContain('123e4567-e89b-12d3-a456-426614174000');
-    expect(normalText).not.toContain('https://example.atlassian.net');
-    expect(normalText).not.toContain('macro-id');
+    const renderedHtml = result.blocks[0].renderedHtml;
+    expect(renderedHtml).toContain('Unsupported Confluence block');
+    expect(renderedHtml).not.toContain('data-dh-raw-inspector');
+    expect(renderedHtml).not.toContain('View raw data');
+    expect(renderedHtml).not.toContain('123e4567-e89b-12d3-a456-426614174000');
+    expect(renderedHtml).not.toContain('https://example.atlassian.net');
+    expect(renderedHtml).not.toContain('macro-id');
   });
 
   test('unsupported raw content is preserved for reconstruction', () => {
@@ -208,8 +210,11 @@ describe('type-specific diff safety', () => {
 
     expect(result.blocks[0].newHtml).toContain('ac:structured-macro');
     expect(result.blocks[0].newHtml).toContain('123e4567-e89b-12d3-a456-426614174000');
-    expect(result.blocks[0].renderedHtml).toContain('data-dh-raw-inspector');
-    expect(result.blocks[0].renderedHtml).toContain('&lt;ac:structured-macro');
+    expect(result.blocks[0].renderedHtml).not.toContain('data-dh-raw-inspector');
+    expect(result.blocks[0].renderedHtml).not.toContain('&lt;ac:structured-macro');
+    expect(result.blocks[0].renderedHtml).not.toContain(
+      '123e4567-e89b-12d3-a456-426614174000'
+    );
   });
 
   test('unsupported blocks ignore regenerated Confluence IDs and attribute order', () => {
