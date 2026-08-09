@@ -9,6 +9,20 @@ const MAX_COMMENT_LENGTH = 2000;
 const MAX_STORED_COMMENTS = 500;
 const MAX_COMMENT_PROPERTY_BYTES = 30_000;
 
+// Version pagination caps: at most MAX_VERSION_PAGES * VERSIONS_PAGE_SIZE = 1000 versions.
+const VERSIONS_PAGE_SIZE = 50;
+const MAX_VERSION_PAGES = 20;
+
+// Attachment pagination caps: at most MAX_ATTACHMENT_PAGES * ATTACHMENTS_PAGE_SIZE = 1000 attachments.
+const ATTACHMENTS_PAGE_SIZE = 100;
+const MAX_ATTACHMENT_PAGES = 10;
+
+// Reject unexpectedly large client payloads so the resolver invocation stays bounded.
+const MAX_WRITE_BODY_LENGTH = 2_000_000;
+
+// Truncate upstream REST error messages before surfacing them in the modal.
+const MAX_ERROR_MESSAGE_LENGTH = 1500;
+
 function normaliseCommentStore(value) {
   const comments = value && Array.isArray(value.comments) ? value.comments : [];
   const commentsByVersion = new Map();
@@ -115,11 +129,10 @@ async function fetchAllVersions(pageId) {
   let cursor = null;
   let baseUrl = '';
 
-  // Safety cap: 20 pages * 50 = up to 1000 versions.
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < MAX_VERSION_PAGES; i++) {
     const path = cursor
-      ? route`/wiki/api/v2/pages/${pageId}/versions?limit=50&sort=-modified-date&body-format=storage&cursor=${cursor}`
-      : route`/wiki/api/v2/pages/${pageId}/versions?limit=50&sort=-modified-date&body-format=storage`;
+      ? route`/wiki/api/v2/pages/${pageId}/versions?limit=${VERSIONS_PAGE_SIZE}&sort=-modified-date&body-format=storage&cursor=${cursor}`
+      : route`/wiki/api/v2/pages/${pageId}/versions?limit=${VERSIONS_PAGE_SIZE}&sort=-modified-date&body-format=storage`;
 
     const res = await api.asUser().requestConfluence(path, {
       headers: { Accept: 'application/json' },
@@ -153,11 +166,10 @@ async function fetchPageAttachments(pageId) {
   let cursor = null;
   let baseUrl = '';
 
-  // Safety cap: 10 pages * 100 = up to 1000 attachments.
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < MAX_ATTACHMENT_PAGES; i++) {
     const path = cursor
-      ? route`/wiki/api/v2/pages/${pageId}/attachments?limit=100&cursor=${cursor}`
-      : route`/wiki/api/v2/pages/${pageId}/attachments?limit=100`;
+      ? route`/wiki/api/v2/pages/${pageId}/attachments?limit=${ATTACHMENTS_PAGE_SIZE}&cursor=${cursor}`
+      : route`/wiki/api/v2/pages/${pageId}/attachments?limit=${ATTACHMENTS_PAGE_SIZE}`;
 
     const res = await api.asUser().requestConfluence(path, {
       headers: { Accept: 'application/json' },
@@ -291,8 +303,6 @@ resolver.define('getPageVersions', async (req) => {
     throw new Error('Unable to determine the current page id from context.');
   }
 
-  console.log('[getPageVersions] start, pageId =', pageId);
-
   // Current page metadata/body (best effort). We still fetch historical versions
   // below, but the latest version preview should use the dedicated page endpoint
   // so current-vs-current rendering does not depend on the versions listing
@@ -333,8 +343,6 @@ resolver.define('getPageVersions', async (req) => {
     (left, right) => Number(right.number || 0) - Number(left.number || 0)
   );
 
-  console.log('[getPageVersions] fetched', rawVersions.length, 'versions');
-
   const currentAccountId = req.context && req.context.accountId ? req.context.accountId : '';
   const authorIds = [
     ...new Set([
@@ -343,8 +351,6 @@ resolver.define('getPageVersions', async (req) => {
     ]),
   ];
   const authorMap = await resolveAuthorNames(authorIds);
-
-  console.log('[getPageVersions] resolved', Object.keys(authorMap).length, 'author names; returning');
 
   return {
     pageId,
@@ -459,97 +465,12 @@ resolver.define('addVersionComment', async (req) => {
   throw new Error('Unable to save version comment.');
 });
 
-resolver.define('createDraft', async (req) => {
-  const pageId = req.payload && req.payload.pageId;
-  const bodyValue = req.payload && req.payload.bodyValue;
-
-  if (!pageId) {
-    throw new Error('A source page id is required to create a draft.');
-  }
-
-  if (typeof bodyValue !== 'string') {
-    throw new Error('Draft content must be provided as a string.');
-  }
-
-  // Keep unexpectedly large client payloads from consuming the resolver
-  // invocation. Normal Confluence pages are well below this defensive limit.
-  if (bodyValue.length > 2_000_000) {
-    throw new Error('The generated draft is too large to create safely.');
-  }
-
-  // Resolve the space and parent on the server instead of trusting client
-  // supplied location data. asUser() also ensures Confluence applies the
-  // invoking user's own page-view and page-create permissions.
-  const pageRes = await api.asUser().requestConfluence(
-    route`/wiki/api/v2/pages/${pageId}`,
-    { headers: { Accept: 'application/json' } }
-  );
-
-  if (!pageRes.ok) {
-    throw new Error(`Unable to read the source page (${pageRes.status}): ${await pageRes.text()}`);
-  }
-
-  const sourcePage = await pageRes.json();
-  if (!sourcePage.spaceId) {
-    throw new Error('Unable to determine the source page space.');
-  }
-
-  const sourceTitle = sourcePage.title || 'Untitled page';
-  const titleSuffix = ' — Restored draft';
-  const draftTitle = `${sourceTitle.slice(0, Math.max(1, 255 - titleSuffix.length))}${titleSuffix}`;
-  const createPayload = {
-    spaceId: sourcePage.spaceId,
-    status: 'draft',
-    title: draftTitle,
-    body: {
-      representation: 'storage',
-      value: bodyValue,
-    },
-  };
-
-  // Create the draft beside the source page when it has a parent. Root pages
-  // remain at the root of the same space.
-  if (sourcePage.parentId) {
-    createPayload.parentId = sourcePage.parentId;
-  }
-
-  const createRes = await api.asUser().requestConfluence(route`/wiki/api/v2/pages`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(createPayload),
-  });
-
-  if (!createRes.ok) {
-    throw new Error(`Confluence draft API ${createRes.status}: ${await createRes.text()}`);
-  }
-
-  const draft = await createRes.json();
-  const baseUrl =
-    (draft._links && draft._links.base) ||
-    (sourcePage._links && sourcePage._links.base) ||
-    '';
-  const webUiPath = draft._links && draft._links.webui ? draft._links.webui : '';
-
-  return {
-    id: draft.id,
-    status: draft.status || 'draft',
-    title: draft.title || draftTitle,
-    url: webUiPath && baseUrl ? `${baseUrl}${webUiPath}` : webUiPath,
-  };
-});
-
 function getSafeWriteErrorMessage(error) {
   const message = error && error.message
     ? String(error.message)
     : 'Confluence could not write the recovered content.';
 
-  // Resolver errors are returned to the invoking user so a failed update is
-  // visible in the modal instead of looking like a successful no-op. Limit
-  // the message because upstream REST errors can occasionally be very large.
-  return message.slice(0, 1500);
+  return message.slice(0, MAX_ERROR_MESSAGE_LENGTH);
 }
 
 async function writeRecoveredPage(payload) {
@@ -569,9 +490,7 @@ async function writeRecoveredPage(payload) {
     throw new Error('Recovered content is empty, so the page was not updated.');
   }
 
-  // Keep unexpectedly large client payloads from consuming the resolver
-  // invocation. Normal Confluence pages are well below this defensive limit.
-  if (bodyValue.length > 2_000_000) {
+  if (bodyValue.length > MAX_WRITE_BODY_LENGTH) {
     throw new Error('The recovered content is too large to write safely.');
   }
 
@@ -627,13 +546,6 @@ async function writeRecoveredPage(payload) {
     updatePayload.parentId = currentPage.parentId;
   }
 
-  console.log(
-    '[writeRecoveredPage] updating page',
-    String(pageId),
-    `v${currentVersionNumber} -> v${currentVersionNumber + 1}`,
-    `storageChars=${bodyValue.length}`
-  );
-
   const updateRes = await api.asUser().requestConfluence(
     route`/wiki/api/v2/pages/${pageId}`,
     {
@@ -655,7 +567,6 @@ async function writeRecoveredPage(payload) {
     updatedPage.version && updatedPage.version.number
       ? updatedPage.version.number
       : currentVersionNumber + 1;
-  console.log('[writeRecoveredPage] update completed at version', updatedVersionNumber);
   const baseUrl =
     (updatedPage._links && updatedPage._links.base) ||
     (currentPage._links && currentPage._links.base) ||
