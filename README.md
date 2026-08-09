@@ -136,11 +136,6 @@ live page and confirms its expected version before updating it. If another user
 has edited the page since review began, publication is rejected instead of
 overwriting the newer edit.
 
-### `createDraft`
-
-This legacy resolver is retained for compatibility but is not called by the
-current frontend.
-
 ## Rendering Design
 
 Dynamic History uses a manual Confluence Storage renderer. It does not use the
@@ -273,7 +268,7 @@ page-version check.
 
 ### Prerequisites
 
-- Node.js and npm
+- Node.js 24.x and npm (matches `app.runtime.name: nodejs24.x` in `manifest.yml`)
 - Atlassian Forge CLI
 - A Forge developer account and Confluence test site for deployment
 
@@ -303,11 +298,12 @@ The localhost frontend uses `mockData.js` when the Forge bridge is unavailable.
 
 ### Run tests
 
-The frontend package intentionally invokes the installed React Scripts binary:
+The frontend `package.json` does not declare a `test` script, so invoke
+`react-scripts test` directly through `npx`:
 
 ```powershell
 cd static/confluence-dynamic-history
-node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --runInBand --no-cache
+npx react-scripts test --watchAll=false --runInBand --no-cache
 ```
 
 Latest verified result:
@@ -370,8 +366,6 @@ changes require deployment and, when scopes change, an installation upgrade.
 - Structural Confluence layout changes use whole-layout recovery.
 - Very large comparisons may use the limited-comparison fallback.
 - Localhost mode uses mock data and cannot publish to Confluence.
-- The legacy `createDraft` resolver remains in the backend but is not part of
-  the current user flow.
 
 ## Documentation
 

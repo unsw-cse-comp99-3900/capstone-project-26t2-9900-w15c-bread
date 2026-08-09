@@ -50,3 +50,9 @@ Thumbs.db
 
 
 /.forge/
+
+# Local Claude Code settings (contains local machine paths)
+/.claude/
+
+# UNSW course specification (do not redistribute)
+/COMP3900-COMP9900-*.pdf
